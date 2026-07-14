@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Video Summary Workspace</title>
+  <link rel="stylesheet" href="/static/app.css?v=workspace-4">
+</head>
+<body>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><path d="M4 5h4v14H4zM10 5h4v14h-4zM16 7h4v12h-4z"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="m4 8 8-4 8 4-8 4zM4 8v8l8 4 8-4V8M12 12v8"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="14" rx="2"/><path d="m17 10 4-2v8l-4-2z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h5"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1-2-4-2 1a7 7 0 0 0-2-1l-.3-2h-5L9 6a7 7 0 0 0-2 1L5 6l-2 4 2 1a7 7 0 0 0 0 2l-2 1 2 4 2-1a7 7 0 0 0 2 1l.5 2h5l.5-2a7 7 0 0 0 2-1l2 1 2-4-2-1a7 7 0 0 0 .1-1z"/></symbol>
+    <symbol id="i-collapse" viewBox="0 0 24 24"><path d="M14 5 7 12l7 7M20 5v14"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M18 9a7 7 0 0 0-12-2l-2 3M6 15a7 7 0 0 0 12 2l2-3"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 20h16"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h6M14 7h6M10 4v6M4 17h10M18 17h2M16 14v6"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="m11 7-5 5 5 5M6 12h9a4 4 0 0 1 0 8"/><text x="13" y="10">10</text></symbol>
+    <symbol id="i-forward" viewBox="0 0 24 24"><path d="m13 7 5 5-5 5M18 12H9a4 4 0 0 0 0 8"/><text x="3" y="10">10</text></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 2l3 3-3 3M4 11V8a3 3 0 0 1 3-3h13M7 22l-3-3 3-3m13-3v3a3 3 0 0 1-3 3H4"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h4l2-3h4l2 3h4v11H4z"/><circle cx="12" cy="13" r="3"/></symbol>
+    <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 13v7H4V6h7"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-warning" viewBox="0 0 24 24"><path d="m12 3 10 18H2zM12 9v5M12 18h.01"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m3 11 18-8-7 18-3-7zM11 14l4-4"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="m9 17 7-7a3 3 0 0 0-4-4l-8 8a5 5 0 0 0 7 7l9-9"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+  </svg>
+
+  <div id="app" class="app-shell" data-mobile-view="result">
+    <header class="workspace-header">
+      <div class="header-leading">
+        <button class="icon-button desktop-menu" id="toggleSidebar" aria-label="打开知识库"><svg><use href="#i-menu"/></svg></button>
+        <button class="icon-button mobile-menu" id="mobileMenu" aria-label="打开知识库"><svg><use href="#i-menu"/></svg></button>
+        <button class="new-summary" id="newSummary"><svg><use href="#i-plus"/></svg><span>新总结</span></button>
+        <span class="workspace-title" id="workspaceTitle">视频知识工作台</span>
+      </div>
+      <div class="mobile-tabs" role="tablist" aria-label="工作区视图">
+        <button role="tab" data-mobile-tab="result" aria-selected="true">摘要</button>
+        <button role="tab" data-mobile-tab="media" aria-selected="false">视频</button>
+        <button role="tab" data-mobile-tab="collaboration" aria-selected="false">协作</button>
+      </div>
+      <div class="header-actions">
+        <span class="model-badge" id="modelBadge">模型待选择</span>
+        <span class="privacy-badge" id="privacyBadge">本地</span>
+        <button class="settings-button" id="layoutSettings"><svg><use href="#i-box"/></svg><span>布局</span></button>
+        <button class="settings-button" id="summarySettings"><svg><use href="#i-sliders"/></svg><span>总结设置</span></button>
+      </div>
+    </header>
+
+    <aside class="sidebar" id="sidebar" aria-label="知识记录导航">
+      <div class="sidebar-top">
+        <strong>知识记录</strong>
+        <button class="icon-button sidebar-only-expanded" id="focusSearch" aria-label="搜索记录"><svg><use href="#i-search"/></svg></button>
+      </div>
+      <div class="search-wrap sidebar-only-expanded">
+        <svg><use href="#i-search"/></svg>
+        <input id="librarySearch" type="search" placeholder="搜索知识记录" aria-label="搜索知识记录">
+      </div>
+      <nav class="nav-groups">
+        <details open>
+          <summary><svg><use href="#i-library"/></svg><span>知 · 资源库</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
+          <div class="nav-items sidebar-only-expanded" id="resourceFilters">
+            <button class="active" data-filter="all">全部记录 <span id="countAll">0</span></button>
+            <button data-filter="video">视频 <span id="countVideo">0</span></button>
+            <button data-filter="processing">待处理 <span id="countProcessing">0</span></button>
+            <button data-filter="completed">已完成 <span id="countCompleted">0</span></button>
+          </div>
+        </details>
+        <details>
+          <summary><svg><use href="#i-box"/></svg><span>行 · 产出物</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
+          <div class="nav-items sidebar-only-expanded muted-nav">
+            <button disabled>行动建议 <span>0</span></button>
+            <button disabled>写作素材 <span>0</span></button>
+            <button disabled>项目关联 <span>0</span></button>
+          </div>
+        </details>
+      </nav>
+      <div class="record-heading sidebar-only-expanded"><span>知识记录</span><button class="icon-button small" id="refreshLibrary" aria-label="刷新记录"><svg><use href="#i-refresh"/></svg></button></div>
+      <div class="library-list" id="libraryList" aria-live="polite"></div>
+      <div class="sidebar-footer">
+        <div class="local-user"><span class="avatar">L</span><span class="sidebar-only-expanded"><strong>本地用户</strong><small>Private workspace</small></span></div>
+        <button class="icon-button" id="collapseSidebar" aria-label="关闭知识库"><svg><use href="#i-collapse"/></svg></button>
+      </div>
+    </aside>
+
+    <div class="workspace-grid" id="workspaceGrid">
+    <section class="result-pane workspace-module" id="resultPane" data-module="result">
+      <header class="result-header">
+        <div class="result-tabs" role="tablist">
+          <button class="active" role="tab" data-result-tab="summary" aria-selected="true">全文总结</button>
+          <button role="tab" data-result-tab="transcript" aria-selected="false">原文细读</button>
+        </div>
+        <div class="result-toolbar">
+          <div class="toolbar-left"><button class="quiet-button" id="chapterDirectory">章节 <span id="chapterCount">0</span></button></div>
+          <div class="toolbar-group">
+            <button class="icon-button small" id="copyResult" aria-label="复制当前内容"><svg><use href="#i-copy"/></svg></button>
+            <button class="icon-button small" id="downloadResult" aria-label="下载当前内容"><svg><use href="#i-download"/></svg></button>
+            <button class="icon-button small" id="exportResult" aria-label="导出 Markdown"><svg><use href="#i-external"/></svg></button>
+            <button class="icon-button small" disabled title="分享功能待开发" aria-label="分享功能待开发"><svg><use href="#i-globe"/></svg></button>
+          </div>
+        </div>
+        <div class="processing-status" id="processingStatus"><svg><use href="#i-check"/></svg><span>等待选择记录</span></div>
+      </header>
+
+      <div class="result-scroll" id="resultScroll">
+        <div id="summaryView" class="result-view"><div class="result-empty"><h2>知识结果</h2><p>处理完成后，摘要和章节会显示在这里。</p></div></div>
+        <div id="transcriptView" class="result-view hidden">
+          <div class="transcript-tools"><div class="search-wrap"><svg><use href="#i-search"/></svg><input id="transcriptSearch" type="search" placeholder="搜索分组字幕" aria-label="搜索分组字幕"></div><label class="switch-label"><input id="followPlayback" type="checkbox">跟随播放</label><button class="quiet-button" id="backToTop">回到顶部</button></div>
+          <div id="transcriptGroups"></div>
+        </div>
+      </div>
+      <footer class="result-footer"><button class="quiet-button" id="readTranscript">阅读全文</button><label class="switch-label"><input id="footerFollow" type="checkbox">跟随播放</label><span class="data-layer-label">AI 结果 · 源数据</span></footer>
+    </section>
+
+    <div class="pane-resizer" id="paneResizer" role="separator" aria-label="调整左侧与中间栏宽度" aria-orientation="vertical" tabindex="0"></div>
+
+    <main class="center-pane workspace-module" id="centerPane" data-module="media">
+      <div class="pane-toolbar center-toolbar">
+        <div class="toolbar-group">
+          <button class="icon-button" id="reloadKnowledge" aria-label="重新加载"><svg><use href="#i-refresh"/></svg></button>
+          <button class="icon-button" id="downloadSource" aria-label="下载当前笔记"><svg><use href="#i-download"/></svg></button>
+          <button class="icon-button" id="openExternal" aria-label="在原网站打开"><svg><use href="#i-globe"/></svg></button>
+        </div>
+        <div class="toolbar-group">
+          <span class="module-label">视频与时间轴</span>
+          <button class="icon-button" id="centerMore" disabled title="更多视频操作待开发" aria-label="更多视频操作待开发"><svg><use href="#i-more"/></svg></button>
+        </div>
+      </div>
+
+      <div class="center-scroll" id="centerScroll">
+        <section class="media-section" id="mediaSection">
+          <div class="media-surface empty-surface" id="mediaSurface">
+            <div class="media-empty"><svg><use href="#i-video"/></svg><p>选择一条知识记录</p></div>
+          </div>
+          <div class="media-controls" id="mediaControls">
+            <div class="control-group">
+              <button class="icon-button" data-media="back" aria-label="后退10秒"><svg><use href="#i-back"/></svg></button>
+              <button class="icon-button primary-control" data-media="play" aria-label="播放或暂停"><svg><use href="#i-play"/></svg></button>
+              <select id="playbackRate" aria-label="播放速度"><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option></select>
+              <button class="icon-button" data-media="forward" aria-label="前进10秒"><svg><use href="#i-forward"/></svg></button>
+              <button class="icon-button" data-media="repeat" aria-label="循环播放"><svg><use href="#i-repeat"/></svg></button>
+              <button class="icon-button" data-media="capture" disabled title="截图保存后端待开发" aria-label="截图保存待开发"><svg><use href="#i-camera"/></svg></button>
+              <button class="icon-button" data-media="fullscreen" aria-label="全屏"><svg><use href="#i-full"/></svg></button>
+            </div>
+            <div class="time-display"><span id="currentTime">00:00</span><span>/</span><span id="durationTime">00:00</span></div>
+          </div>
+          <div class="source-info" id="sourceInfo">
+            <h1>选择左侧记录，或创建新的处理任务</h1>
+            <p>来源信息会显示在这里。</p>
+          </div>
+        </section>
+
+        <section class="insight-pane" id="insightPane">
+          <header class="module-header"><div><strong>AI 高光片段</strong><span class="module-count" id="insightCount">0</span></div><span class="module-status" id="insightMode">字幕时间轴</span></header>
+          <div class="insight-content" id="insightContent"><div class="module-empty">没有 AI 高光时，这里显示可定位的字幕时间轴。</div></div>
+        </section>
+      </div>
+    </main>
+
+    <div class="pane-resizer" id="rightPaneResizer" role="separator" aria-label="调整中间栏与右侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
+
+    <section class="collaboration-pane workspace-module" id="collaborationPane" data-module="collaboration">
+      <section class="chat-pane" id="chatPane">
+        <header><div><strong>AI 对话</strong><span class="unavailable-dot" title="对话后端待接入"></span><span class="module-status">待接入</span></div><button class="icon-button small" id="expandChat" aria-label="展开对话"><svg><use href="#i-full"/></svg></button></header>
+        <div class="chat-history" id="chatHistory"><div class="chat-empty">可从左侧思考题发起提问。当前对话后端尚未接入。</div></div>
+        <div class="question-chips" id="questionChips"></div>
+        <div class="chat-composer">
+          <textarea id="chatInput" rows="3" placeholder="询问当前知识记录…" aria-label="聊天问题"></textarea>
+          <div class="composer-footer">
+            <div class="composer-tools"><button class="icon-button small" aria-label="添加附件待开发" title="附件功能待开发" disabled><svg><use href="#i-clip"/></svg></button><span class="model-label">上下文对话待接入</span></div>
+            <button class="send-button" id="sendChat" aria-label="发送问题"><svg><use href="#i-send"/></svg></button>
+          </div>
+        </div>
+      </section>
+
+      <section class="notes-pane" id="notesPane">
+        <header class="module-header"><div><strong>自写笔记</strong><span class="save-status" id="noteSaveStatus">本地草稿</span></div><div class="note-actions"><button class="quiet-button" id="insertTimestamp">插入时间戳</button><button class="quiet-button" id="captureNote" disabled title="截图后端待开发">插入当前截图</button></div></header>
+        <div class="note-toolbar" aria-label="笔记工具栏">
+          <button disabled title="富文本编辑待开发"><strong>B</strong></button><button disabled title="富文本编辑待开发"><em>I</em></button><button disabled title="富文本编辑待开发">列表</button><span></span><span class="obsidian-state" id="obsidianStatus">Obsidian 数据层 · 规划中</span>
+        </div>
+        <textarea id="noteEditor" placeholder="记录你的想法、判断和待办…" aria-label="自写笔记"></textarea>
+      </section>
+    </section>
+    </div>
+  </div>
+
+  <dialog id="newTaskDialog" class="task-dialog">
+    <form id="newTaskForm" method="dialog">
+      <header><div><span class="dialog-kicker">PROCESS</span><h2>新总结</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header>
+      <div class="source-tabs" role="tablist"><button type="button" class="active" data-source-type="url">公开视频链接</button><button type="button" data-source-type="file">本地文件路径</button></div>
+      <label class="field"><span id="taskSourceLabel">视频链接</span><input id="taskSource" name="source" required placeholder="https://www.bilibili.com/video/BV…"></label>
+      <div class="form-grid">
+        <label class="field"><span>分析模式</span><select id="taskMode"><option value="summary">summary</option><option value="tutorial">tutorial</option><option value="viral">viral</option><option value="close-reading">close-reading</option></select></label>
+        <label class="field"><span>摘要后端</span><select id="taskBackend"><option value="ollama">Ollama</option><option value="openai">OpenAI</option></select></label>
+        <label class="field"><span>字幕语言</span><select id="taskLanguage"><option value="">默认 zh</option><option value="zh">zh</option><option value="zh-Hans">zh-Hans</option><option value="en">en</option></select></label>
+        <label class="field"><span>字幕分组</span><select disabled><option>60秒（当前配置）</option></select></label>
+        <label class="field"><span>样本秒数</span><input id="taskSampleSeconds" type="number" min="1" placeholder="留空处理完整媒体"></label>
+        <label class="field"><span>导出</span><select id="taskExport"><option value="none">知识包</option><option value="obsidian">兼容 Obsidian</option></select></label>
+      </div>
+      <div class="toggle-list"><label><input id="taskPrivacy" type="checkbox">隐私模式</label><label><input id="taskFrames" type="checkbox" checked>生成关键帧</label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
+      <div class="runtime-info" id="taskRuntime" aria-live="polite">正在读取 Python 运行环境…</div>
+      <div class="task-progress hidden" id="taskProgress" aria-live="polite"><div><span id="taskStatusText">正在创建任务…</span><span id="taskPercent"></span></div><div class="progress-track"><span id="progressBar"></span></div><pre id="taskLogs"></pre></div>
+      <footer><button type="button" class="secondary-button" data-close-dialog>取消</button><button type="submit" class="primary-button" id="startTask">开始处理</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="settingsDialog" class="settings-dialog"><form method="dialog"><header><h2>总结设置</h2><button class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list"><label>分析模式<select id="settingsMode"><option>summary</option><option>tutorial</option><option>viral</option><option>close-reading</option></select></label><label>字幕分组<select disabled><option>60秒</option></select></label><label class="switch-label"><input id="settingsFrames" type="checkbox" checked>生成关键帧</label><label class="switch-label"><input id="settingsPrivacy" type="checkbox">隐私模式</label><div class="runtime-info" id="settingsRuntime">正在读取 Python 运行环境…</div></div><footer><button class="primary-button" value="close">完成</button></footer></form></dialog>
+  <dialog id="layoutDialog" class="settings-dialog"><form method="dialog"><header><h2>工作台布局</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list layout-settings"><p>设置三个工作区从左到右的位置，修改后立即生效。</p><label>左栏<select id="layoutPosition1"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label><label>中栏<select id="layoutPosition2"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label><label>右栏<select id="layoutPosition3"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label></div><footer><button type="button" class="secondary-button" id="resetLayout">恢复默认</button><button class="primary-button" value="close">完成</button></footer></form></dialog>
+  <dialog id="imageDialog" class="image-dialog"><button class="icon-button image-close" data-close-dialog aria-label="关闭预览"><svg><use href="#i-close"/></svg></button><img id="imagePreview" alt="关键帧预览"></dialog>
+  <div class="drawer-scrim" id="drawerScrim"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js?v=workspace-4" defer></script>
+</body>
+</html>

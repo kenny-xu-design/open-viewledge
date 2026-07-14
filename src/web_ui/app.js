@@ -1,0 +1,985 @@
+"use strict";
+
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const DEFAULT_MODULE_ORDER = ["result", "media", "collaboration"];
+const SETTINGS = {
+  moduleOrder: "vs.moduleOrder",
+  moduleWidths: "vs.moduleWidths",
+  activeResultTab: "vs.activeResultTab",
+  transcriptFollowMode: "vs.transcriptFollowMode",
+  playbackRate: "vs.playbackRate",
+  privacyMode: "vs.privacyMode",
+};
+
+const state = {
+  selectedKnowledgeId: "",
+  libraryItems: [],
+  activeResultTab: localStorage.getItem(SETTINGS.activeResultTab) || "summary",
+  activeSource: null,
+  currentTime: 0,
+  currentChapter: -1,
+  transcriptFollowMode: localStorage.getItem(SETTINGS.transcriptFollowMode) === "true",
+  moduleOrder: readModuleOrder(),
+  moduleWidths: readJsonSetting(SETTINGS.moduleWidths, {}),
+  privacyMode: localStorage.getItem(SETTINGS.privacyMode) === "true",
+  taskStatus: null,
+  chatHistory: [],
+  loading: false,
+  error: "",
+  filter: "all",
+  transcriptGroups: [],
+  transcriptLoadedFor: "",
+  scrollPositions: { summary: 0, transcript: 0 },
+  noteDrafts: {},
+};
+
+const knowledgeCache = new Map();
+let mediaController = null;
+let toastTimer = 0;
+let taskPoller = 0;
+let activeSourceType = "url";
+
+class MediaController {
+  load() {}
+  play() {}
+  pause() {}
+  seek() {}
+  getCurrentTime() { return 0; }
+  setPlaybackRate() {}
+  setLoop() {}
+  fullscreen() {}
+}
+
+class HtmlMediaController extends MediaController {
+  constructor(element) {
+    super();
+    this.element = element;
+  }
+  load() { this.element.load(); }
+  play() { return this.element.play(); }
+  pause() { this.element.pause(); }
+  seek(seconds) { this.element.currentTime = Math.max(0, Math.min(seconds, this.element.duration || seconds)); }
+  getCurrentTime() { return this.element.currentTime || 0; }
+  setPlaybackRate(rate) { this.element.playbackRate = rate; }
+  setLoop(value) { this.element.loop = value; }
+  fullscreen() { this.element.requestFullscreen?.(); }
+}
+
+class ExternalLinkController extends MediaController {
+  constructor(source) {
+    super();
+    this.source = source;
+  }
+  play() { showToast("在线视频预览未嵌入，请在原网站播放"); }
+  seek(seconds) {
+    const url = timestampLink(this.source?.canonical_url || this.source?.source_url || "", seconds);
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
+  }
+  getCurrentTime() { return state.currentTime; }
+  setPlaybackRate() {}
+  fullscreen() {}
+}
+
+document.addEventListener("DOMContentLoaded", init);
+
+async function init() {
+  applyPersistedLayout();
+  bindEvents();
+  loadRuntimeInfo();
+  setResultTab(state.activeResultTab, false);
+  $("#followPlayback").checked = state.transcriptFollowMode;
+  $("#footerFollow").checked = state.transcriptFollowMode;
+  $("#settingsPrivacy").checked = state.privacyMode;
+  $("#taskPrivacy").checked = state.privacyMode;
+  updatePrivacyBadge();
+  await refreshLibrary();
+}
+
+async function loadRuntimeInfo() {
+  try {
+    const runtime = await api("/api/runtime");
+    const text = `${runtime.inProjectVenv ? "项目虚拟环境" : "非项目虚拟环境"}\n${runtime.pythonExecutable}${runtime.warning ? `\n${runtime.warning}` : ""}`;
+    [$("#taskRuntime"), $("#settingsRuntime")].forEach((element) => {
+      element.textContent = text;
+      element.classList.toggle("warning", !runtime.inProjectVenv);
+    });
+  } catch (error) {
+    [$("#taskRuntime"), $("#settingsRuntime")].forEach((element) => {
+      element.textContent = `运行环境读取失败：${error.message}`;
+      element.classList.add("warning");
+    });
+  }
+}
+
+function applyPersistedLayout() {
+  applyModuleOrder();
+  Object.entries(state.moduleWidths).forEach(([module, width]) => {
+    const element = $(`[data-module="${module}"]`);
+    if (element && Number(width) > 0) element.style.flexBasis = `${Number(width)}px`;
+  });
+}
+
+function bindEvents() {
+  $("#newSummary").addEventListener("click", openNewTask);
+  $("#focusSearch").addEventListener("click", focusSidebarSearch);
+  $("#librarySearch").addEventListener("input", renderLibrary);
+  $("#refreshLibrary").addEventListener("click", refreshLibrary);
+  $("#reloadKnowledge").addEventListener("click", () => state.selectedKnowledgeId && loadKnowledge(state.selectedKnowledgeId, true));
+  $("#toggleSidebar").addEventListener("click", toggleSidebar);
+  $("#collapseSidebar").addEventListener("click", toggleSidebar);
+  $("#mobileMenu").addEventListener("click", () => $("#app").classList.add("drawer-open"));
+  $("#drawerScrim").addEventListener("click", closeDrawer);
+  $("#summarySettings").addEventListener("click", () => $("#settingsDialog").showModal());
+  $("#layoutSettings").addEventListener("click", openLayoutSettings);
+  $("#settingsPrivacy").addEventListener("change", (event) => setPrivacyMode(event.target.checked));
+  $("#taskPrivacy").addEventListener("change", (event) => setPrivacyMode(event.target.checked));
+  $("#openExternal").addEventListener("click", openOriginal);
+  $("#downloadSource").addEventListener("click", () => downloadFile("index.md"));
+  $("#copyResult").addEventListener("click", copyCurrentResult);
+  $("#downloadResult").addEventListener("click", () => downloadFile(state.activeResultTab === "summary" ? "index.md" : "transcript.grouped.md"));
+  $("#exportResult").addEventListener("click", () => downloadFile("export_note.md", "index.md"));
+  $("#chapterDirectory").addEventListener("click", () => $(".chapter", $("#summaryView"))?.scrollIntoView({ behavior: "smooth" }));
+  $("#readTranscript").addEventListener("click", () => setResultTab(state.activeResultTab === "summary" ? "transcript" : "summary"));
+  $("#backToTop").addEventListener("click", () => $("#resultScroll").scrollTo({ top: 0, behavior: "smooth" }));
+  $("#transcriptSearch").addEventListener("input", renderTranscriptGroups);
+  $("#sendChat").addEventListener("click", sendChat);
+  $("#chatInput").addEventListener("keydown", (event) => {
+    if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); sendChat(); }
+  });
+  $("#expandChat").addEventListener("click", () => { setMobileView("collaboration"); $("#chatPane").scrollIntoView({ behavior: "smooth", block: "start" }); });
+  $("#playbackRate").addEventListener("change", (event) => setPlaybackRate(Number(event.target.value)));
+  $("#followPlayback").addEventListener("change", (event) => setFollowMode(event.target.checked));
+  $("#footerFollow").addEventListener("change", (event) => setFollowMode(event.target.checked));
+  $("#resultScroll").addEventListener("scroll", () => state.scrollPositions[state.activeResultTab] = $("#resultScroll").scrollTop, { passive: true });
+
+  $$("[data-result-tab]").forEach((button) => button.addEventListener("click", () => setResultTab(button.dataset.resultTab)));
+  $$("[data-mobile-tab]").forEach((button) => button.addEventListener("click", () => setMobileView(button.dataset.mobileTab)));
+  $$("[data-media]").forEach((button) => button.addEventListener("click", () => handleMediaAction(button.dataset.media)));
+  $$("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
+  $$("[data-filter]").forEach((button) => button.addEventListener("click", () => setLibraryFilter(button.dataset.filter, button)));
+  $$("[data-source-type]").forEach((button) => button.addEventListener("click", () => setTaskSourceType(button.dataset.sourceType)));
+
+  $("#libraryList").addEventListener("click", (event) => {
+    const item = event.target.closest("[data-knowledge-id]");
+    if (item) loadKnowledge(item.dataset.knowledgeId);
+  });
+  $("#summaryView").addEventListener("click", handleResultClick);
+  $("#transcriptGroups").addEventListener("click", handleTranscriptClick);
+  $("#questionChips").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-question]");
+    if (button) focusChatQuestion(button.dataset.question);
+  });
+  $("#insightContent").addEventListener("click", (event) => {
+    const target = event.target.closest("[data-seek]");
+    if (target) seekTo(Number(target.dataset.seek));
+  });
+  $("#noteEditor").addEventListener("input", saveNoteDraft);
+  $("#insertTimestamp").addEventListener("click", insertNoteTimestamp);
+  $$('[id^="layoutPosition"]').forEach((select) => select.addEventListener("change", updateLayoutFromControls));
+  $("#resetLayout").addEventListener("click", resetWorkspaceLayout);
+  $("#newTaskForm").addEventListener("submit", submitTask);
+  $("#paneResizer").addEventListener("pointerdown", startResize);
+  $("#rightPaneResizer").addEventListener("pointerdown", startResize);
+  $$(".pane-resizer").forEach((resizer) => resizer.addEventListener("dblclick", resetModuleWidths));
+  document.addEventListener("keydown", handleKeyboard);
+  window.addEventListener("hashchange", selectFromHash);
+  window.addEventListener("resize", () => window.innerWidth >= 980 && closeDrawer());
+  window.addEventListener("beforeunload", () => clearInterval(taskPoller));
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
+  const type = response.headers.get("content-type") || "";
+  const data = type.includes("application/json") ? await response.json() : await response.text();
+  if (!response.ok) throw new Error(data?.error || `请求失败：${response.status}`);
+  return data;
+}
+
+async function refreshLibrary() {
+  const list = $("#libraryList");
+  list.innerHTML = '<div class="loading-list">正在读取知识记录…</div>';
+  try {
+    const data = await api("/api/library");
+    state.libraryItems = data.items || [];
+    updateLibraryCounts();
+    renderLibrary();
+    if (!state.selectedKnowledgeId && state.libraryItems.length) {
+      const hashId = decodeHashId();
+      const preferred = state.libraryItems.find((item) => item.id === hashId)
+        || state.libraryItems.find((item) => item.sourceType === "local_video" && item.status.startsWith("completed"))
+        || state.libraryItems[0];
+      await loadKnowledge(preferred.id);
+    }
+  } catch (error) {
+    list.innerHTML = `<div class="library-empty">记录加载失败<br>${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderLibrary() {
+  const query = $("#librarySearch").value.trim().toLowerCase();
+  const items = state.libraryItems.filter((item) => {
+    const searchMatch = !query || `${item.title} ${item.author} ${item.platform}`.toLowerCase().includes(query);
+    const status = item.status || "";
+    const filterMatch = state.filter === "all"
+      || (state.filter === "video" && ["local_video", "online_video"].includes(item.sourceType))
+      || (state.filter === "processing" && ["created", "running", "processing"].includes(status))
+      || (state.filter === "completed" && status.startsWith("completed"));
+    return searchMatch && filterMatch;
+  });
+  const list = $("#libraryList");
+  if (!items.length) {
+    list.innerHTML = '<div class="library-empty">暂无处理记录<br><button class="quiet-button" data-empty-new>新总结</button></div>';
+    $("[data-empty-new]", list)?.addEventListener("click", openNewTask);
+    return;
+  }
+  list.innerHTML = items.map((item) => `
+    <button class="library-item ${item.id === state.selectedKnowledgeId ? "active" : ""}" data-knowledge-id="${escapeAttr(item.id)}" aria-current="${item.id === state.selectedKnowledgeId ? "true" : "false"}">
+      <span class="record-icon"><svg><use href="#${item.sourceType === "web_page" ? "i-file" : "i-video"}"/></svg></span>
+      <span class="record-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(platformLabel(item.platform))} · ${formatRelativeDate(item.updatedAt)}</small></span>
+      <span class="record-state ${escapeAttr(item.status)}" aria-label="${escapeAttr(statusLabel(item.status))}"></span>
+    </button>`).join("");
+}
+
+function updateLibraryCounts() {
+  $("#countAll").textContent = state.libraryItems.length;
+  $("#countVideo").textContent = state.libraryItems.filter((item) => ["local_video", "online_video"].includes(item.sourceType)).length;
+  $("#countProcessing").textContent = state.libraryItems.filter((item) => ["created", "running", "processing"].includes(item.status)).length;
+  $("#countCompleted").textContent = state.libraryItems.filter((item) => (item.status || "").startsWith("completed")).length;
+}
+
+async function loadKnowledge(id, force = false) {
+  if (!id) return;
+  state.selectedKnowledgeId = id;
+  state.loading = true;
+  renderLibrary();
+  setLoadingState();
+  closeDrawer();
+  try {
+    let knowledge = force ? null : knowledgeCache.get(id);
+    if (!knowledge) {
+      const data = await api(`/api/library/${encodeURIComponent(id)}`);
+      knowledge = data.knowledge;
+      knowledgeCache.set(id, knowledge);
+    }
+    state.activeSource = knowledge;
+    state.currentTime = 0;
+    state.currentChapter = -1;
+    state.chatHistory = [];
+    if (state.transcriptLoadedFor !== id) {
+      state.transcriptGroups = [];
+      state.transcriptLoadedFor = "";
+    }
+    history.replaceState(null, "", `#/knowledge/${encodeURIComponent(id)}`);
+    renderKnowledge(knowledge);
+    if (state.activeResultTab === "transcript") await ensureTranscriptLoaded();
+  } catch (error) {
+    state.error = error.message;
+    renderLoadError(error.message);
+  } finally {
+    state.loading = false;
+  }
+}
+
+function renderKnowledge(knowledge) {
+  renderMedia(knowledge);
+  renderSourceInfo(knowledge);
+  renderStatus(knowledge.manifest || {});
+  renderSummary(knowledge);
+  renderInsightPanel(knowledge);
+  renderQuestionChips(knowledge.analysis?.thoughts || []);
+  renderNoteDraft();
+  $("#workspaceTitle").textContent = knowledge.source?.title || knowledge.id || "视频知识工作台";
+  const model = knowledge.manifest?.llm_model || knowledge.analysis?.model || "";
+  const provider = knowledge.manifest?.llm_provider || knowledge.analysis?.provider || "";
+  $("#modelBadge").textContent = model ? `${providerLabel(provider)} · ${model}` : "未运行 AI 分析";
+  $("#modelBadge").title = model ? `本知识包实际使用模型：${model}` : "当前知识包未记录分析模型";
+  $("#chapterCount").textContent = (knowledge.analysis?.chapters?.length || knowledge.timeline?.length || 0);
+  renderLibrary();
+}
+
+function renderMedia(knowledge) {
+  const surface = $("#mediaSurface");
+  const media = knowledge.media || {};
+  surface.className = "media-surface";
+  surface.innerHTML = "";
+  if (media.kind === "video" && media.available) {
+    const video = document.createElement("video");
+    video.src = media.url;
+    video.preload = "metadata";
+    video.playsInline = true;
+    video.addEventListener("timeupdate", throttle(handleTimeUpdate, 300));
+    video.addEventListener("loadedmetadata", updateTimeDisplay);
+    video.addEventListener("play", () => setPlayIcon(true));
+    video.addEventListener("pause", () => setPlayIcon(false));
+    surface.appendChild(video);
+    mediaController = new HtmlMediaController(video);
+  } else if (media.kind === "audio" && media.available) {
+    surface.innerHTML = '<div class="audio-surface"><svg><use href="#i-file"/></svg></div>';
+    const audio = document.createElement("audio");
+    audio.src = media.url;
+    audio.preload = "metadata";
+    audio.controls = true;
+    audio.addEventListener("timeupdate", throttle(handleTimeUpdate, 300));
+    audio.addEventListener("loadedmetadata", updateTimeDisplay);
+    $(".audio-surface", surface).appendChild(audio);
+    mediaController = new HtmlMediaController(audio);
+  } else if (media.externalUrl) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "external-media";
+    if (isSafeHttpUrl(media.thumbnail)) {
+      const image = document.createElement("img");
+      image.className = "media-poster";
+      image.alt = `${knowledge.source?.title || "在线视频"}封面`;
+      image.src = media.thumbnail;
+      image.referrerPolicy = "no-referrer";
+      wrapper.appendChild(image);
+    }
+    const button = document.createElement("button");
+    button.className = "external-open";
+    button.innerHTML = '<svg><use href="#i-external"/></svg><span>在原网站打开</span>';
+    button.addEventListener("click", openOriginal);
+    wrapper.appendChild(button);
+    surface.appendChild(wrapper);
+    mediaController = new ExternalLinkController(knowledge.source);
+  } else {
+    surface.className = "media-surface empty-surface";
+    surface.innerHTML = '<div class="media-empty"><svg><use href="#i-video"/></svg><p>当前记录没有可预览媒体</p></div>';
+    mediaController = new MediaController();
+  }
+  setPlaybackRate(Number(localStorage.getItem(SETTINGS.playbackRate)) || 1);
+  updateTimeDisplay();
+}
+
+function renderSourceInfo(knowledge) {
+  const source = knowledge.source || {};
+  const external = source.canonical_url || source.source_url || "";
+  const description = source.description || "";
+  $("#sourceInfo").innerHTML = `
+    <h1>${escapeHtml(source.title || knowledge.id)}</h1>
+    <div class="source-meta">
+      ${source.author ? `<span>${escapeHtml(source.author)}</span>` : ""}
+      <span>${escapeHtml(platformLabel(source.platform))}</span>
+      ${source.published_at ? `<span>${escapeHtml(formatPublished(source.published_at))}</span>` : ""}
+      ${source.duration != null ? `<span>${formatTime(source.duration)}</span>` : ""}
+      ${external && isSafeHttpUrl(external) ? `<a href="${escapeAttr(external)}" target="_blank" rel="noopener noreferrer">原链接</a>` : ""}
+    </div>
+    ${description ? `<details class="source-description"><summary>来源简介</summary><p>${escapeHtml(description)}</p></details>` : ""}`;
+}
+
+function renderStatus(manifest) {
+  const element = $("#processingStatus");
+  const status = manifest.status || "unknown";
+  let className = "";
+  if (status === "completed") className = "success";
+  else if (status === "completed_with_warnings") className = "warning";
+  else if (status === "failed") className = "error";
+  const errors = Array.isArray(manifest.errors) && manifest.errors.length ? ` · ${manifest.errors[0]}` : "";
+  element.className = `processing-status ${className}`;
+  element.innerHTML = `<svg><use href="#${className === "error" || className === "warning" ? "i-warning" : "i-check"}"/></svg><span>${escapeHtml(statusLabel(status))}${manifest.current_stage ? ` · ${escapeHtml(stageLabel(manifest.current_stage))}` : ""}${escapeHtml(errors)}</span>`;
+}
+
+function renderSummary(knowledge) {
+  const analysis = knowledge.analysis || {};
+  const timeline = Array.isArray(knowledge.timeline) ? knowledge.timeline : [];
+  const sections = [];
+  if (analysis.summary) sections.push(`<section class="result-section"><h2>摘要</h2><p>${escapeHtml(analysis.summary)}</p></section>`);
+  else sections.push('<div class="analysis-empty">分析尚未完成。字幕、时间轴和原文细读仍可正常查看。</div>');
+
+  if (Array.isArray(analysis.highlights) && analysis.highlights.length) {
+    sections.push(`<section class="result-section"><h2>亮点</h2><ul class="highlight-list">${analysis.highlights.map((item) => `
+      <li class="highlight-item"><span class="highlight-icon">${escapeHtml(item.icon || "◆")}</span><div class="highlight-copy"><strong>${escapeHtml(item.title || "亮点")}</strong>${item.explanation ? `<p>${escapeHtml(item.explanation)}</p>` : ""}<div class="tag-list">${(item.tags || []).map((tag) => `<button class="tag-button" data-tag="${escapeAttr(tag)}">#${escapeHtml(tag)}</button>`).join("")}</div></div></li>`).join("")}</ul></section>`);
+  }
+  if (Array.isArray(analysis.thoughts) && analysis.thoughts.length) {
+    sections.push(`<section class="result-section"><h2>思考</h2><ol class="thought-list">${analysis.thoughts.slice(0, 3).map((item) => `<li><button class="thought-button" data-question="${escapeAttr(item.question || "")}">${escapeHtml(item.question || "")}</button></li>`).join("")}</ol></section>`);
+  }
+
+  const chapters = Array.isArray(analysis.chapters) && analysis.chapters.length ? analysis.chapters : timeline;
+  if (chapters.length) {
+    sections.push(`<section class="result-section" id="chapterSection"><h2>视频章节总结</h2><div class="chapter-list">${chapters.map((chapter, index) => renderChapter(chapter, index, knowledge.id)).join("")}</div></section>`);
+  }
+  sections.push(`<section class="result-section"><h2>原文资料</h2><div class="source-entry"><button class="quiet-button" data-open-transcript>查看分组字幕</button>${knowledge.files?.["transcript.raw.jsonl"] ? '<button class="icon-button small" data-open-raw aria-label="打开逐句原始数据"><svg><use href="#i-file"/></svg></button>' : ""}</div></section>`);
+  $("#summaryView").innerHTML = sections.join("");
+}
+
+function renderInsightPanel(knowledge) {
+  const highlights = Array.isArray(knowledge.analysis?.highlights) ? knowledge.analysis.highlights : [];
+  const timeline = Array.isArray(knowledge.timeline) ? knowledge.timeline : [];
+  const source = highlights.length ? highlights : timeline;
+  const usingHighlights = highlights.length > 0;
+  $("#insightMode").textContent = usingHighlights ? "AI 结果" : "字幕时间轴";
+  $("#insightCount").textContent = source.length;
+  if (!source.length) {
+    $("#insightContent").innerHTML = '<div class="module-empty">当前知识包没有高光或时间轴数据。</div>';
+    return;
+  }
+  $("#insightContent").innerHTML = source.map((item, index) => {
+    const hasTime = item.start != null && Number.isFinite(Number(item.start));
+    const detail = usingHighlights ? item.explanation : item.summary;
+    const tags = usingHighlights ? (item.tags || []) : (item.keywords || []);
+    return `<article class="insight-item" data-insight-index="${index}">
+      <div class="insight-row">
+        <span class="insight-marker ${usingHighlights ? "ai" : "timeline"}"></span>
+        <strong>${escapeHtml(item.title || (usingHighlights ? `高光 ${index + 1}` : `片段 ${index + 1}`))}</strong>
+        ${hasTime ? `<button class="timestamp-button" data-seek="${Number(item.start)}">${formatTime(item.start)}</button>` : ""}
+      </div>
+      ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
+      ${tags.length ? `<div class="tag-list">${tags.slice(0, 5).map((tag) => `<span class="static-tag">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+    </article>`;
+  }).join("");
+}
+
+function renderChapter(chapter, index, knowledgeId) {
+  const start = Number(chapter.start || 0);
+  const framePath = chapter.frame_path || "";
+  const frameUrl = framePath ? `/api/library/${encodeURIComponent(knowledgeId)}/file/${framePath.split("/").map(encodeURIComponent).join("/")}` : "";
+  return `<article class="chapter" data-chapter-index="${index}" data-start="${start}" data-end="${Number(chapter.end || start)}">
+    <button class="chapter-header" data-toggle-chapter><span class="timestamp-button" data-seek="${start}">${formatTime(start)}</span><h3>${escapeHtml(chapter.title || `章节 ${index + 1}`)}</h3><svg class="chapter-toggle"><use href="#i-chevron"/></svg></button>
+    <div class="chapter-body">${frameUrl ? `<img class="chapter-frame" src="${frameUrl}" alt="${escapeAttr(chapter.title || "章节关键帧")}" loading="lazy" data-preview-image="${frameUrl}">` : ""}${chapter.summary ? `<p>${escapeHtml(chapter.summary)}</p>` : ""}</div>
+  </article>`;
+}
+
+async function ensureTranscriptLoaded() {
+  if (!state.selectedKnowledgeId || state.transcriptLoadedFor === state.selectedKnowledgeId) return;
+  $("#transcriptGroups").innerHTML = '<div class="loading-list">正在加载分组字幕…</div>';
+  try {
+    const data = await api(`/api/library/${encodeURIComponent(state.selectedKnowledgeId)}/transcript`);
+    state.transcriptGroups = data.groups || [];
+    state.transcriptLoadedFor = state.selectedKnowledgeId;
+    renderTranscriptGroups();
+  } catch (error) {
+    $("#transcriptGroups").innerHTML = `<div class="analysis-empty">分组字幕加载失败：${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderTranscriptGroups() {
+  const query = $("#transcriptSearch").value.trim().toLowerCase();
+  const groups = state.transcriptGroups.filter((group) => !query || `${group.title} ${group.text}`.toLowerCase().includes(query));
+  if (!groups.length) {
+    $("#transcriptGroups").innerHTML = '<div class="result-empty"><p>没有可显示的分组字幕。</p></div>';
+    return;
+  }
+  $("#transcriptGroups").innerHTML = groups.map((group) => `
+    <article class="transcript-group" data-group-index="${group.index}" data-start="${Number(group.start || 0)}" data-end="${Number(group.end || 0)}">
+      <header><button class="timestamp-button" data-seek="${Number(group.start || 0)}">${formatTime(group.start)}–${formatTime(group.end)}</button><h3>${escapeHtml(group.title || `片段 ${Number(group.index) + 1}`)}</h3><span class="transcript-actions"><button data-copy-group="${group.index}">复制</button></span></header>
+      <p>${escapeHtml(group.text || "")}</p>
+    </article>`).join("");
+}
+
+function renderQuestionChips(thoughts) {
+  const questions = (thoughts || []).map((item) => item.question).filter(Boolean).slice(0, 4);
+  $("#questionChips").innerHTML = questions.map((question) => `<button data-question="${escapeAttr(question)}">${escapeHtml(question)}</button>`).join("");
+}
+
+function setResultTab(tab, restoreScroll = true) {
+  const next = tab === "transcript" ? "transcript" : "summary";
+  state.scrollPositions[state.activeResultTab] = $("#resultScroll")?.scrollTop || 0;
+  state.activeResultTab = next;
+  localStorage.setItem(SETTINGS.activeResultTab, next);
+  $$("[data-result-tab]").forEach((button) => {
+    const active = button.dataset.resultTab === next;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  $("#summaryView").classList.toggle("hidden", next !== "summary");
+  $("#transcriptView").classList.toggle("hidden", next !== "transcript");
+  $("#readTranscript").textContent = next === "summary" ? "阅读全文" : "返回总结";
+  if (next === "transcript") ensureTranscriptLoaded();
+  if (restoreScroll) requestAnimationFrame(() => $("#resultScroll").scrollTop = state.scrollPositions[next] || 0);
+}
+
+function handleResultClick(event) {
+  const seek = event.target.closest("[data-seek]");
+  if (seek) { event.preventDefault(); event.stopPropagation(); seekTo(Number(seek.dataset.seek)); return; }
+  const toggle = event.target.closest("[data-toggle-chapter]");
+  if (toggle) { toggle.closest(".chapter").classList.toggle("collapsed"); return; }
+  const thought = event.target.closest("[data-question]");
+  if (thought) { focusChatQuestion(thought.dataset.question); return; }
+  const tag = event.target.closest("[data-tag]");
+  if (tag) { $("#librarySearch").value = tag.dataset.tag; renderLibrary(); focusSidebarSearch(); return; }
+  const image = event.target.closest("[data-preview-image]");
+  if (image) { $("#imagePreview").src = image.dataset.previewImage; $("#imageDialog").showModal(); return; }
+  if (event.target.closest("[data-open-transcript]")) setResultTab("transcript");
+  if (event.target.closest("[data-open-raw]")) openFile("transcript.raw.jsonl");
+}
+
+function handleTranscriptClick(event) {
+  const seek = event.target.closest("[data-seek]");
+  if (seek) { seekTo(Number(seek.dataset.seek)); return; }
+  const copy = event.target.closest("[data-copy-group]");
+  if (copy) {
+    const group = state.transcriptGroups.find((item) => String(item.index) === copy.dataset.copyGroup);
+    if (group) copyText(`${formatTime(group.start)}–${formatTime(group.end)} ${group.title}\n\n${group.text}`);
+  }
+}
+
+function handleMediaAction(action) {
+  if (!mediaController) return;
+  if (action === "play") togglePlay();
+  else if (action === "back") seekTo(Math.max(0, mediaController.getCurrentTime() - 10));
+  else if (action === "forward") seekTo(mediaController.getCurrentTime() + 10);
+  else if (action === "repeat") { const element = mediaController.element; if (element) { element.loop = !element.loop; showToast(element.loop ? "已开启循环" : "已关闭循环"); } }
+  else if (action === "capture") captureFrame();
+  else if (action === "fullscreen") mediaController.fullscreen();
+}
+
+function togglePlay() {
+  const element = mediaController?.element;
+  if (element?.paused) mediaController.play();
+  else if (element) mediaController.pause();
+  else mediaController?.play();
+}
+
+function seekTo(seconds) {
+  state.currentTime = Math.max(0, seconds || 0);
+  mediaController?.seek(state.currentTime);
+  updateActiveChapter();
+  setMobileView("media");
+  $("#mediaSection").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function handleTimeUpdate() {
+  state.currentTime = mediaController?.getCurrentTime() || 0;
+  updateTimeDisplay();
+  updateActiveChapter();
+}
+
+function updateTimeDisplay() {
+  $("#currentTime").textContent = formatTime(mediaController?.getCurrentTime() || state.currentTime || 0);
+  $("#durationTime").textContent = formatTime(mediaController?.element?.duration || state.activeSource?.source?.duration || 0);
+}
+
+function updateActiveChapter() {
+  const time = state.currentTime;
+  let active = -1;
+  const items = state.activeResultTab === "transcript" ? $$(".transcript-group") : $$(".chapter");
+  items.forEach((element, index) => {
+    const inside = time >= Number(element.dataset.start || 0) && time < Number(element.dataset.end || Infinity);
+    element.classList.toggle("active", inside);
+    if (inside) active = index;
+  });
+  if (active !== state.currentChapter) {
+    state.currentChapter = active;
+    if (state.transcriptFollowMode && active >= 0 && state.activeResultTab === "transcript") items[active]?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+function setPlaybackRate(rate) {
+  const value = Number.isFinite(rate) && rate > 0 ? rate : 1;
+  $("#playbackRate").value = String(value);
+  mediaController?.setPlaybackRate(value);
+  localStorage.setItem(SETTINGS.playbackRate, String(value));
+}
+
+function setPlayIcon(playing) {
+  const use = $("[data-media=play] use");
+  if (use) use.setAttribute("href", playing ? "#i-pause" : "#i-play");
+}
+
+async function captureFrame() {
+  if (!(mediaController instanceof HtmlMediaController) || mediaController.element.tagName !== "VIDEO") {
+    showToast("当前媒体不支持本地截图");
+    return;
+  }
+  try {
+    await api(`/api/library/${encodeURIComponent(state.selectedKnowledgeId)}/capture-frame`, { method: "POST", body: JSON.stringify({ time: mediaController.getCurrentTime() }) });
+  } catch (error) { showToast(error.message); }
+}
+
+async function sendChat() {
+  const input = $("#chatInput");
+  const question = input.value.trim();
+  if (!question || !state.selectedKnowledgeId) return;
+  state.chatHistory.push({ role: "user", content: question });
+  input.value = "";
+  renderChatHistory();
+  try {
+    const data = await api("/api/chat", { method: "POST", body: JSON.stringify({ knowledge_id: state.selectedKnowledgeId, question, history: state.chatHistory.slice(0, -1), privacy_mode: state.privacyMode }) });
+    state.chatHistory.push({ role: "assistant", content: data.answer || "" });
+  } catch (error) {
+    state.chatHistory.push({ role: "system", content: error.message || "上下文对话功能尚未接入" });
+  }
+  renderChatHistory();
+}
+
+function renderChatHistory() {
+  const root = $("#chatHistory");
+  root.innerHTML = state.chatHistory.length ? state.chatHistory.map((item) => `<div class="chat-message ${escapeAttr(item.role)}">${escapeHtml(item.content)}</div>`).join("") : '<div class="chat-empty">可从摘要中的思考题发起提问。当前对话后端尚未接入。</div>';
+  root.scrollTop = root.scrollHeight;
+}
+
+function focusChatQuestion(question) {
+  $("#chatInput").value = question || "";
+  setMobileView("collaboration");
+  $("#chatPane").scrollIntoView({ behavior: "smooth", block: "start" });
+  setTimeout(() => $("#chatInput").focus(), 200);
+}
+
+function openNewTask() {
+  $("#taskProgress").classList.add("hidden");
+  $("#newTaskForm").reset();
+  $("#taskFrames").checked = true;
+  $("#taskPrivacy").checked = state.privacyMode;
+  setTaskSourceType("url");
+  $("#newTaskDialog").showModal();
+}
+
+function setTaskSourceType(type) {
+  activeSourceType = type === "file" ? "file" : "url";
+  $$("[data-source-type]").forEach((button) => button.classList.toggle("active", button.dataset.sourceType === activeSourceType));
+  $("#taskSourceLabel").textContent = activeSourceType === "url" ? "视频链接" : "本地文件路径";
+  $("#taskSource").placeholder = activeSourceType === "url" ? "https://www.bilibili.com/video/BV…" : "E:\\Downloads_E\\video.mp4";
+}
+
+async function submitTask(event) {
+  event.preventDefault();
+  const payload = {
+    sourceType: activeSourceType,
+    source: $("#taskSource").value,
+    backend: $("#taskBackend").value,
+    mode: $("#taskMode").value,
+    lang: $("#taskLanguage").value,
+    export: $("#taskExport").value,
+    privacyMode: $("#taskPrivacy").checked,
+    noFrames: !$("#taskFrames").checked,
+    noSummary: $("#taskNoSummary").checked,
+    sampleSeconds: $("#taskSampleSeconds").value,
+  };
+  const button = $("#startTask");
+  button.disabled = true;
+  try {
+    const data = await api("/api/process", { method: "POST", body: JSON.stringify(payload) });
+    state.taskStatus = data.job;
+    $("#taskProgress").classList.remove("hidden");
+    pollTask(data.job.id);
+  } catch (error) {
+    showToast(error.message);
+    button.disabled = false;
+  }
+}
+
+function pollTask(jobId) {
+  clearInterval(taskPoller);
+  const update = async () => {
+    try {
+      const data = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
+      state.taskStatus = data.job;
+      renderTaskProgress(data.job);
+      if (["success", "failed"].includes(data.job.status)) {
+        clearInterval(taskPoller);
+        $("#startTask").disabled = false;
+        if (data.job.status === "success") {
+          await refreshLibrary();
+          const outputId = (data.job.outputDir || "").split("/").pop();
+          if (outputId) await loadKnowledge(outputId, true);
+          setTimeout(() => $("#newTaskDialog").close(), 700);
+        }
+      }
+    } catch (error) {
+      clearInterval(taskPoller);
+      showToast(error.message);
+    }
+  };
+  update();
+  taskPoller = setInterval(update, 1400);
+}
+
+function renderTaskProgress(job) {
+  const stageOrder = ["resolve_source", "collect_metadata", "acquire_transcript", "normalize_transcript", "group_transcript", "build_timeline", "extract_frames", "run_analysis", "export_knowledge_package"];
+  const logs = job.logs || [];
+  const latestStage = [...logs].reverse().find((line) => line.includes("阶段：")) || "";
+  const stage = latestStage.split("阶段：").pop();
+  const stageIndex = Math.max(0, stageOrder.indexOf(stage));
+  const percent = job.status === "success" ? 100 : job.status === "failed" ? 100 : Math.max(8, Math.round(((stageIndex + 1) / stageOrder.length) * 100));
+  $("#taskStatusText").textContent = job.status === "failed" ? (job.error || "处理失败") : job.status === "success" ? "处理完成" : stageLabel(stage || "queued");
+  $("#taskPercent").textContent = `${percent}%`;
+  $("#progressBar").style.width = `${percent}%`;
+  $("#taskLogs").textContent = logs.slice(-10).join("\n") || "等待任务日志…";
+}
+
+function toggleSidebar() {
+  $("#app").classList.toggle("drawer-open");
+}
+
+function closeDrawer() { $("#app").classList.remove("drawer-open"); }
+function focusSidebarSearch() { $("#app").classList.add("drawer-open"); setTimeout(() => $("#librarySearch").focus(), 80); }
+
+function startResize(event) {
+  if (window.innerWidth < 1180) return;
+  const resizer = event.currentTarget;
+  const dividerOrder = Number(resizer.style.order);
+  const modules = $$(".workspace-module").sort((a, b) => Number(a.style.order) - Number(b.style.order));
+  const left = [...modules].reverse().find((module) => Number(module.style.order) < dividerOrder);
+  const right = modules.find((module) => Number(module.style.order) > dividerOrder);
+  if (!left || !right) return;
+  const startX = event.clientX;
+  const leftWidth = left.getBoundingClientRect().width;
+  const rightWidth = right.getBoundingClientRect().width;
+  resizer.setPointerCapture(event.pointerId);
+  resizer.classList.add("dragging");
+  const move = (moveEvent) => {
+    const delta = moveEvent.clientX - startX;
+    const nextLeft = clamp(leftWidth + delta, 300, leftWidth + rightWidth - 300);
+    const nextRight = leftWidth + rightWidth - nextLeft;
+    left.style.flexBasis = `${nextLeft}px`;
+    right.style.flexBasis = `${nextRight}px`;
+    state.moduleWidths[left.dataset.module] = Math.round(nextLeft);
+    state.moduleWidths[right.dataset.module] = Math.round(nextRight);
+  };
+  const end = () => {
+    resizer.classList.remove("dragging");
+    resizer.removeEventListener("pointermove", move);
+    resizer.removeEventListener("pointerup", end);
+    localStorage.setItem(SETTINGS.moduleWidths, JSON.stringify(state.moduleWidths));
+  };
+  resizer.addEventListener("pointermove", move);
+  resizer.addEventListener("pointerup", end);
+}
+
+function resetModuleWidths() {
+  state.moduleWidths = {};
+  localStorage.removeItem(SETTINGS.moduleWidths);
+  $$(".workspace-module").forEach((module) => module.style.removeProperty("flex-basis"));
+}
+
+function setMobileView(view) {
+  const next = ["result", "media", "collaboration"].includes(view) ? view : "result";
+  $("#app").dataset.mobileView = next;
+  $$("[data-mobile-tab]").forEach((button) => button.setAttribute("aria-selected", String(button.dataset.mobileTab === next)));
+}
+
+function openLayoutSettings() {
+  syncLayoutControls();
+  $("#layoutDialog").showModal();
+}
+
+function syncLayoutControls() {
+  state.moduleOrder.forEach((module, index) => {
+    $(`#layoutPosition${index + 1}`).value = module;
+  });
+}
+
+function updateLayoutFromControls(event) {
+  const selects = [$("#layoutPosition1"), $("#layoutPosition2"), $("#layoutPosition3")];
+  const changedIndex = selects.indexOf(event.currentTarget);
+  const selected = event.currentTarget.value;
+  const duplicateIndex = selects.findIndex((select, index) => index !== changedIndex && select.value === selected);
+  if (duplicateIndex >= 0) selects[duplicateIndex].value = state.moduleOrder[changedIndex];
+  state.moduleOrder = selects.map((select) => select.value);
+  localStorage.setItem(SETTINGS.moduleOrder, JSON.stringify(state.moduleOrder));
+  applyModuleOrder();
+}
+
+function applyModuleOrder() {
+  const order = state.moduleOrder.length === 3 ? state.moduleOrder : [...DEFAULT_MODULE_ORDER];
+  order.forEach((module, index) => {
+    const element = $(`[data-module="${module}"]`);
+    if (element) element.style.order = String(index * 2);
+  });
+  $("#paneResizer").style.order = "1";
+  $("#rightPaneResizer").style.order = "3";
+}
+
+function resetWorkspaceLayout() {
+  state.moduleOrder = [...DEFAULT_MODULE_ORDER];
+  localStorage.setItem(SETTINGS.moduleOrder, JSON.stringify(state.moduleOrder));
+  resetModuleWidths();
+  applyModuleOrder();
+  syncLayoutControls();
+  showToast("已恢复默认三栏布局");
+}
+
+function readModuleOrder() {
+  const value = readJsonSetting(SETTINGS.moduleOrder, DEFAULT_MODULE_ORDER);
+  return Array.isArray(value) && value.length === 3 && new Set(value).size === 3 && value.every((item) => DEFAULT_MODULE_ORDER.includes(item))
+    ? value
+    : [...DEFAULT_MODULE_ORDER];
+}
+
+function readJsonSetting(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
+  catch { return fallback; }
+}
+
+function saveNoteDraft() {
+  if (!state.selectedKnowledgeId) return;
+  state.noteDrafts[state.selectedKnowledgeId] = $("#noteEditor").value;
+  $("#noteSaveStatus").textContent = "会话草稿 · 未同步";
+}
+
+function renderNoteDraft() {
+  $("#noteEditor").value = state.noteDrafts[state.selectedKnowledgeId] || "";
+  $("#noteSaveStatus").textContent = "会话草稿 · 未同步";
+}
+
+function insertNoteTimestamp() {
+  if (!state.selectedKnowledgeId) { showToast("请先选择知识记录"); return; }
+  const editor = $("#noteEditor");
+  const timestamp = `[${formatTime(mediaController?.getCurrentTime() || state.currentTime || 0)}] `;
+  editor.setRangeText(timestamp, editor.selectionStart, editor.selectionEnd, "end");
+  editor.focus();
+  saveNoteDraft();
+}
+
+function setFollowMode(value) {
+  state.transcriptFollowMode = value;
+  $("#followPlayback").checked = value;
+  $("#footerFollow").checked = value;
+  localStorage.setItem(SETTINGS.transcriptFollowMode, String(value));
+}
+
+function setPrivacyMode(value) {
+  state.privacyMode = value;
+  $("#settingsPrivacy").checked = value;
+  $("#taskPrivacy").checked = value;
+  localStorage.setItem(SETTINGS.privacyMode, String(value));
+  updatePrivacyBadge();
+}
+
+function updatePrivacyBadge() { $("#privacyBadge").textContent = state.privacyMode ? "隐私模式" : "本地"; }
+
+function setLibraryFilter(filter, button) {
+  state.filter = filter;
+  $$("[data-filter]").forEach((item) => item.classList.toggle("active", item === button));
+  renderLibrary();
+}
+
+function setLoadingState() {
+  $("#sourceInfo").innerHTML = '<h1>正在加载记录…</h1><p>请稍候</p>';
+  $("#summaryView").innerHTML = '<div class="result-empty"><p>正在读取知识包…</p></div>';
+  $("#processingStatus").className = "processing-status";
+  $("#processingStatus").innerHTML = '<svg><use href="#i-refresh"/></svg><span>加载中</span>';
+}
+
+function renderLoadError(message) {
+  $("#summaryView").innerHTML = `<div class="result-empty"><h2>记录加载失败</h2><p>${escapeHtml(message)}</p><button class="quiet-button" id="retryLoad">重试</button></div>`;
+  $("#retryLoad")?.addEventListener("click", () => loadKnowledge(state.selectedKnowledgeId, true));
+}
+
+function openOriginal() {
+  const url = state.activeSource?.media?.externalUrl;
+  if (isSafeHttpUrl(url)) window.open(url, "_blank", "noopener,noreferrer");
+  else showToast("当前记录没有外部链接");
+}
+
+function openFile(name) {
+  const url = state.activeSource?.files?.[name];
+  if (url) window.open(url, "_blank", "noopener,noreferrer");
+  else showToast(`${name} 不存在`);
+}
+
+function downloadFile(name, fallback = "") {
+  const url = state.activeSource?.files?.[name] || (fallback ? state.activeSource?.files?.[fallback] : "");
+  if (!url) { showToast(`${name} 不存在`); return; }
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+}
+
+async function copyCurrentResult() {
+  const name = state.activeResultTab === "summary" ? "index.md" : "transcript.grouped.md";
+  const url = state.activeSource?.files?.[name];
+  if (!url) { showToast(`${name} 不存在`); return; }
+  try { copyText(await (await fetch(url)).text()); } catch { showToast("复制失败"); }
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); showToast("已复制"); }
+  catch { showToast("浏览器未允许剪贴板访问"); }
+}
+
+function handleKeyboard(event) {
+  const editing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+  if (event.ctrlKey && event.key.toLowerCase() === "k") { event.preventDefault(); focusSidebarSearch(); return; }
+  if (event.key === "Escape") { closeDrawer(); $$("dialog[open]").forEach((dialog) => dialog.close()); return; }
+  if (editing) return;
+  if (event.code === "Space") { event.preventDefault(); togglePlay(); }
+  if (event.key === "ArrowLeft") { event.preventDefault(); seekTo(Math.max(0, (mediaController?.getCurrentTime() || 0) - 5)); }
+  if (event.key === "ArrowRight") { event.preventDefault(); seekTo((mediaController?.getCurrentTime() || 0) + 5); }
+}
+
+function selectFromHash() {
+  const id = decodeHashId();
+  if (id && id !== state.selectedKnowledgeId) loadKnowledge(id);
+}
+
+function decodeHashId() {
+  const match = location.hash.match(/^#\/knowledge\/(.+)$/);
+  if (!match) return "";
+  try { return decodeURIComponent(match[1]); } catch { return ""; }
+}
+
+function timestampLink(url, seconds) {
+  if (!isSafeHttpUrl(url)) return "";
+  const host = new URL(url).hostname.toLowerCase();
+  const separator = url.includes("?") ? "&" : "?";
+  if (host.includes("youtube.com") || host === "youtu.be") return `${url}${separator}t=${Math.floor(seconds)}s`;
+  if (host.includes("bilibili.com") || host === "b23.tv") return `${url}${separator}t=${Math.floor(seconds)}`;
+  return url;
+}
+
+function statusLabel(status) {
+  return ({ completed: "总结完成", completed_with_warnings: "部分完成", running: "处理中", processing: "处理中", created: "等待处理", failed: "处理失败", unknown: "状态未知" })[status] || status || "状态未知";
+}
+
+function stageLabel(stage) {
+  return ({ queued: "等待处理", resolve_source: "识别来源", collect_metadata: "读取来源信息", acquire_transcript: "获取字幕或转写", normalize_transcript: "标准化字幕", group_transcript: "字幕分组", build_timeline: "构建时间轴", extract_frames: "生成关键帧", run_analysis: "结构化分析", export_knowledge_package: "导出知识包" })[stage] || stage || "处理中";
+}
+
+function platformLabel(platform) {
+  const value = String(platform || "unknown").toLowerCase();
+  if (value.includes("bilibili")) return "B站";
+  if (value.includes("youtube")) return "YouTube";
+  if (value === "local" || value === "local_file") return "本地媒体";
+  return platform || "未知来源";
+}
+
+function providerLabel(provider) {
+  const value = String(provider || "").toLowerCase();
+  if (value.includes("ollama")) return "Ollama";
+  if (value.includes("openai")) return "OpenAI";
+  return provider || "AI";
+}
+
+function formatTime(value) {
+  const total = Math.max(0, Math.floor(Number(value) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  return hours ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}` : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatPublished(value) {
+  const text = String(value || "");
+  return /^\d{8}$/.test(text) ? `${text.slice(0,4)}-${text.slice(4,6)}-${text.slice(6,8)}` : text;
+}
+
+function formatRelativeDate(timestamp) {
+  const delta = Math.max(0, Date.now() - Number(timestamp) * 1000);
+  const days = Math.floor(delta / 86400000);
+  if (days === 0) return "今天";
+  if (days === 1) return "昨天";
+  if (days < 30) return `${days}天前`;
+  return new Date(Number(timestamp) * 1000).toLocaleDateString("zh-CN");
+}
+
+function isSafeHttpUrl(value) {
+  try { return ["http:", "https:"].includes(new URL(value).protocol); } catch { return false; }
+}
+
+function showToast(message) {
+  const toast = $("#toast");
+  toast.textContent = message;
+  toast.classList.add("visible");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("visible"), 2600);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]);
+}
+
+function escapeAttr(value) { return escapeHtml(value); }
+function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
+function throttle(fn, delay) { let last = 0; return (...args) => { const now = Date.now(); if (now - last >= delay) { last = now; fn(...args); } }; }

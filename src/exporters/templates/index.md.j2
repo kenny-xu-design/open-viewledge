@@ -1,0 +1,73 @@
+---
+title: "{{ source.title }}"
+type: video
+platform: "{{ source.platform }}"
+source: "{{ source.source_url }}"
+source_id: "{{ source.source_id }}"
+author: "{{ source.author }}"
+published: "{{ source.published_at }}"
+created: "{{ manifest.completed_at }}"
+duration: "{{ source.duration if source.duration is not none else '' }}"
+status: processed
+analysis_profile: "{{ analysis.analysis_profile or manifest.current_stage }}"
+privacy_mode: {{ manifest.privacy_mode | lower }}
+tags:
+  - 视频笔记
+---
+
+# {{ source.title }}
+
+{% if source.thumbnail %}
+![]({{ source.thumbnail }})
+{% endif %}
+
+## 来源信息
+
+| 项目 | 内容 |
+|---|---|
+| 作者 | {{ source.author or "未知" }} |
+{% if source.source_url %}| 来源 | [原视频]({{ source.source_url }}) |
+{% endif %}| 平台 | {{ source.platform }} |
+{% if source.published_at %}| 发布时间 | {{ source.published_at }} |
+{% endif %}{% if source.duration is not none %}| 视频时长 | {{ source.duration | timestamp }} |
+{% endif %}
+{% if analysis.summary %}
+## 摘要
+
+{{ analysis.summary }}
+{% endif %}
+{% if analysis.highlights %}
+## 亮点
+
+{% for item in analysis.highlights %}
+- **{{ item.title }}**：{{ item.explanation }}{% for tag in item.tags %} `#{{ tag }}`{% endfor %}
+{% endfor %}
+{% endif %}
+{% if analysis.thoughts %}
+## 思考
+
+{% for item in analysis.thoughts %}
+{{ loop.index }}. {{ item.question }}
+{% endfor %}
+{% endif %}
+{% if analysis.chapters or timeline %}
+## 视频章节总结
+
+{% for chapter in analysis.chapters %}
+### {% if chapter.source_link %}[{{ chapter.start | timestamp }}]({{ chapter.source_link }}) {% endif %}{{ chapter.title }}
+
+{% if chapter.frame_path %}![[{{ chapter.frame_path }}]]
+{% endif %}{{ chapter.summary }}
+
+{% else %}{% for chapter in timeline %}
+### {% if chapter.source_link %}[{{ chapter.start | timestamp }}]({{ chapter.source_link }}) {% endif %}{{ chapter.title }}
+
+{% if chapter.frame_path %}![[{{ chapter.frame_path }}]]
+{% endif %}{% endfor %}{% endfor %}
+{% endif %}
+## 原文资料
+
+- [[transcript.grouped|分组字幕]]
+- `transcript.raw.jsonl`
+- `timeline.json`
+

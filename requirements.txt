@@ -1,0 +1,8 @@
+yt-dlp>=2025.1.15
+faster-whisper>=1.1.0
+openai>=1.40.0
+python-dotenv>=1.0.1
+pydantic>=2.7.0
+typer>=0.12.3
+rich>=13.7.1
+Jinja2>=3.1.4
