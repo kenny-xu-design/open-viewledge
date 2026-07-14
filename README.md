@@ -4,6 +4,14 @@
 
 现在项目也包含一个 Codex Agent Skill：`.agents/skills/video-summary/SKILL.md`。Codex 可以调用现有 Python CLI 先生成 `transcript.md`，再根据 `prompts/summary_prompt.md` 生成 `summary.md`。
 
+## 当前基线状态
+
+当前版本保存为云端分析重构前基线，已具备本地视频与在线字幕处理、`faster-whisper` 本地转写、三栏 Web UI、时间轴和知识包输出，现有 68 项单元测试通过。
+
+尚未完成：云端 DeepSeek 分析、AI 上下文对话、自写笔记持久化、Obsidian 数据层和多模态分析。
+
+本地资源说明：`models/`、`output/` 和 `.env` 不纳入 Git；使用者需要自行安装依赖并准备本地模型。当前环境的 FFmpeg 尚未加入 `PATH`，这不影响代码基线，但在处理无字幕视频或本地媒体前必须先完成 FFmpeg 配置。
+
 ## 功能说明
 
 - B站、YouTube 和其他公开视频统一使用项目自己的 yt-dlp Source，不调用外部平台 CLI。

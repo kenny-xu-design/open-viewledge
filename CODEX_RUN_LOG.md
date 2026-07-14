@@ -20,7 +20,7 @@
   - CODEX_TASKS.md
   - CODEX_RUN_LOG.md
 - 测试命令：
-  - $env:PYTHONUTF8='1'; python C:\Users\26378\.codex\skills\.system\skill-creator\scripts\quick_validate.py .agents/skills/video-summary
+  - $env:PYTHONUTF8='1'; python %USERPROFILE%\.codex\skills\.system\skill-creator\scripts\quick_validate.py .agents/skills/video-summary
   - python -m unittest discover
   - python -m compileall src
   - python -m src.main --help
