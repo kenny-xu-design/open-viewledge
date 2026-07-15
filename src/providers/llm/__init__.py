@@ -1,4 +1,4 @@
-from .legacy_adapter import LegacyLLMProvider
+from .base import LLMProvider, LLMResponse
+from .deepseek import DeepSeekProvider
 
-__all__ = ["LegacyLLMProvider"]
-
+__all__ = ["DeepSeekProvider", "LLMProvider", "LLMResponse"]

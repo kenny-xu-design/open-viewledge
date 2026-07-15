@@ -87,6 +87,9 @@ class ChapterSummary(BaseModel):
 
 
 class AnalysisResult(BaseModel):
+    status: Literal["success", "failed", "skipped"] = "skipped"
+    error: str = ""
+    schema_version: str = "2"
     one_sentence_summary: str = ""
     summary: str = ""
     highlights: list[HighlightItem] = Field(default_factory=list)
@@ -98,6 +101,7 @@ class AnalysisResult(BaseModel):
     analysis_profile: str = "summary"
     provider: str = ""
     model: str = ""
+    usage: dict[str, int] = Field(default_factory=dict)
     generated_at: str = Field(default_factory=utc_now)
 
 

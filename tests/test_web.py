@@ -31,9 +31,8 @@ class WebCommandTests(unittest.TestCase):
             {
                 "sourceType": "url",
                 "source": "https://www.bilibili.com/video/BV123",
-                "backend": "ollama",
+                "backend": "deepseek",
                 "mode": "viral",
-                "privacyMode": True,
                 "export": "obsidian",
             },
             python_executable=python_executable,
@@ -48,10 +47,9 @@ class WebCommandTests(unittest.TestCase):
                 "--url",
                 "https://www.bilibili.com/video/BV123",
                 "--backend",
-                "ollama",
+                "deepseek",
                 "--mode",
                 "viral",
-                "--privacy-mode",
                 "--export",
                 "obsidian",
             ],
@@ -62,7 +60,7 @@ class WebCommandTests(unittest.TestCase):
             {
                 "sourceType": "url",
                 "source": "https://example.com/video",
-                "backend": "ollama",
+                "backend": "deepseek",
                 "mode": "summary",
             }
         )
@@ -83,7 +81,7 @@ class WebCommandTests(unittest.TestCase):
             {
                 "sourceType": "file",
                 "source": r"E:\Downloads_E\video.mp4",
-                "backend": "ollama",
+                "backend": "deepseek",
                 "mode": "summary",
                 "noSummary": True,
                 "lang": "zh",
@@ -102,7 +100,7 @@ class WebCommandTests(unittest.TestCase):
                 "--lang",
                 "zh",
                 "--backend",
-                "ollama",
+                "deepseek",
                 "--mode",
                 "summary",
                 "--no-summary",
@@ -114,7 +112,7 @@ class WebCommandTests(unittest.TestCase):
             {
                 "sourceType": "file",
                 "source": r' "E:\Downloads_E\video.mp4" ',
-                "backend": "ollama",
+                "backend": "deepseek",
                 "mode": "summary",
             },
             python_executable=r"C:\test\.venv\Scripts\python.exe",
@@ -128,7 +126,7 @@ class WebCommandTests(unittest.TestCase):
             {
                 "sourceType": "file",
                 "source": r"“E:\Downloads_E\video.mp4”",
-                "backend": "ollama",
+                "backend": "deepseek",
                 "mode": "summary",
             },
             python_executable=r"C:\test\.venv\Scripts\python.exe",
@@ -145,7 +143,7 @@ class WebCommandTests(unittest.TestCase):
             {
                 "sourceType": "file",
                 "source": r"E:\Downloads_E\video.mp4",
-                "backend": "ollama",
+                "backend": "deepseek",
                 "mode": "summary",
                 "sampleSeconds": "30",
             },
@@ -153,6 +151,13 @@ class WebCommandTests(unittest.TestCase):
         )
 
         self.assertEqual(command[-2:], ["--sample-seconds", "30"])
+
+    def test_rejects_retired_backend(self) -> None:
+        with self.assertRaisesRegex(ValueError, "只能是 deepseek"):
+            build_cli_command(
+                {"sourceType": "url", "source": "https://example.com/video", "backend": "ollama"},
+                python_executable=r"C:\test\.venv\Scripts\python.exe",
+            )
 
     def test_timestamp_conversion(self) -> None:
         self.assertEqual(_timestamp_seconds("01:30"), 90)

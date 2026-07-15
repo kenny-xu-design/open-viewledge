@@ -9,7 +9,6 @@ const SETTINGS = {
   activeResultTab: "vs.activeResultTab",
   transcriptFollowMode: "vs.transcriptFollowMode",
   playbackRate: "vs.playbackRate",
-  privacyMode: "vs.privacyMode",
 };
 
 const state = {
@@ -22,7 +21,6 @@ const state = {
   transcriptFollowMode: localStorage.getItem(SETTINGS.transcriptFollowMode) === "true",
   moduleOrder: readModuleOrder(),
   moduleWidths: readJsonSetting(SETTINGS.moduleWidths, {}),
-  privacyMode: localStorage.getItem(SETTINGS.privacyMode) === "true",
   taskStatus: null,
   chatHistory: [],
   loading: false,
@@ -90,9 +88,6 @@ async function init() {
   setResultTab(state.activeResultTab, false);
   $("#followPlayback").checked = state.transcriptFollowMode;
   $("#footerFollow").checked = state.transcriptFollowMode;
-  $("#settingsPrivacy").checked = state.privacyMode;
-  $("#taskPrivacy").checked = state.privacyMode;
-  updatePrivacyBadge();
   await refreshLibrary();
 }
 
@@ -132,8 +127,6 @@ function bindEvents() {
   $("#drawerScrim").addEventListener("click", closeDrawer);
   $("#summarySettings").addEventListener("click", () => $("#settingsDialog").showModal());
   $("#layoutSettings").addEventListener("click", openLayoutSettings);
-  $("#settingsPrivacy").addEventListener("change", (event) => setPrivacyMode(event.target.checked));
-  $("#taskPrivacy").addEventListener("change", (event) => setPrivacyMode(event.target.checked));
   $("#openExternal").addEventListener("click", openOriginal);
   $("#downloadSource").addEventListener("click", () => downloadFile("index.md"));
   $("#copyResult").addEventListener("click", copyCurrentResult);
@@ -384,7 +377,8 @@ function renderSummary(knowledge) {
   const timeline = Array.isArray(knowledge.timeline) ? knowledge.timeline : [];
   const sections = [];
   if (analysis.summary) sections.push(`<section class="result-section"><h2>摘要</h2><p>${escapeHtml(analysis.summary)}</p></section>`);
-  else sections.push('<div class="analysis-empty">分析尚未完成。字幕、时间轴和原文细读仍可正常查看。</div>');
+  else if (analysis.status === "failed") sections.push(`<div class="analysis-empty">AI 分析失败：${escapeHtml(analysis.error || "请检查 DeepSeek 配置后重试。")} 字幕和时间轴仍可正常查看。</div>`);
+  else sections.push('<div class="analysis-empty">AI 分析已跳过。字幕、时间轴和原文细读仍可正常查看。</div>');
 
   if (Array.isArray(analysis.highlights) && analysis.highlights.length) {
     sections.push(`<section class="result-section"><h2>亮点</h2><ul class="highlight-list">${analysis.highlights.map((item) => `
@@ -594,7 +588,7 @@ async function sendChat() {
   input.value = "";
   renderChatHistory();
   try {
-    const data = await api("/api/chat", { method: "POST", body: JSON.stringify({ knowledge_id: state.selectedKnowledgeId, question, history: state.chatHistory.slice(0, -1), privacy_mode: state.privacyMode }) });
+    const data = await api("/api/chat", { method: "POST", body: JSON.stringify({ knowledge_id: state.selectedKnowledgeId, question, history: state.chatHistory.slice(0, -1) }) });
     state.chatHistory.push({ role: "assistant", content: data.answer || "" });
   } catch (error) {
     state.chatHistory.push({ role: "system", content: error.message || "上下文对话功能尚未接入" });
@@ -619,7 +613,6 @@ function openNewTask() {
   $("#taskProgress").classList.add("hidden");
   $("#newTaskForm").reset();
   $("#taskFrames").checked = true;
-  $("#taskPrivacy").checked = state.privacyMode;
   setTaskSourceType("url");
   $("#newTaskDialog").showModal();
 }
@@ -640,7 +633,6 @@ async function submitTask(event) {
     mode: $("#taskMode").value,
     lang: $("#taskLanguage").value,
     export: $("#taskExport").value,
-    privacyMode: $("#taskPrivacy").checked,
     noFrames: !$("#taskFrames").checked,
     noSummary: $("#taskNoSummary").checked,
     sampleSeconds: $("#taskSampleSeconds").value,
@@ -828,16 +820,6 @@ function setFollowMode(value) {
   localStorage.setItem(SETTINGS.transcriptFollowMode, String(value));
 }
 
-function setPrivacyMode(value) {
-  state.privacyMode = value;
-  $("#settingsPrivacy").checked = value;
-  $("#taskPrivacy").checked = value;
-  localStorage.setItem(SETTINGS.privacyMode, String(value));
-  updatePrivacyBadge();
-}
-
-function updatePrivacyBadge() { $("#privacyBadge").textContent = state.privacyMode ? "隐私模式" : "本地"; }
-
 function setLibraryFilter(filter, button) {
   state.filter = filter;
   $$("[data-filter]").forEach((item) => item.classList.toggle("active", item === button));
@@ -937,8 +919,7 @@ function platformLabel(platform) {
 
 function providerLabel(provider) {
   const value = String(provider || "").toLowerCase();
-  if (value.includes("ollama")) return "Ollama";
-  if (value.includes("openai")) return "OpenAI";
+  if (value.includes("deepseek")) return "DeepSeek";
   return provider || "AI";
 }
 

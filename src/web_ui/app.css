@@ -143,7 +143,6 @@ button:disabled { color: var(--faint); cursor: not-allowed; }
 .settings-button, .icon-text-button, .quiet-button { height: 32px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); display: inline-flex; align-items: center; gap: 6px; padding: 0 9px; cursor: pointer; white-space: nowrap; }
 .settings-button:hover, .icon-text-button:hover, .quiet-button:hover:not(:disabled) { background: #f4f4f6; }
 .settings-button svg, .icon-text-button svg { width: 15px; }
-.privacy-badge { padding: 4px 8px; border-radius: 999px; color: var(--green); background: var(--green-soft); font-size: 12px; }
 
 .center-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .media-section { border-bottom: 1px solid var(--line); }
@@ -518,7 +517,7 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
 
 @media (max-width: 680px) {
   .workspace-header .new-summary { min-width: 36px; width: 36px; padding: 0; }
-  .workspace-header .new-summary span, .header-actions .privacy-badge { display: none; }
+  .workspace-header .new-summary span { display: none; }
   .mobile-tabs button { min-width: 58px; padding-inline: 8px; }
   .header-actions { gap: 2px; }
   .result-toolbar .toolbar-left { display: flex; }

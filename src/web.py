@@ -23,7 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = PROJECT_ROOT / "output"
 WEB_UI_ROOT = Path(__file__).resolve().parent / "web_ui"
 SUPPORTED_MODES = {"summary", "tutorial", "viral", "close-reading"}
-SUPPORTED_BACKENDS = {"ollama", "openai"}
+SUPPORTED_BACKENDS = {"deepseek"}
 SUPPORTED_EXPORTS = {"none", "obsidian"}
 LIBRARY_FILES = {
     "index.md",
@@ -65,13 +65,13 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
     if not source:
         raise ValueError("请填写视频链接或本地文件路径。")
 
-    backend = str(payload.get("backend") or "ollama")
+    backend = str(payload.get("backend") or "deepseek")
     mode = str(payload.get("mode") or "summary")
     export = str(payload.get("export") or "none")
     lang = str(payload.get("lang") or "").strip()
 
     if backend not in SUPPORTED_BACKENDS:
-        raise ValueError("backend 只能是 ollama 或 openai。")
+        raise ValueError("旧 AI 后端已停用，backend 只能是 deepseek。")
     if mode not in SUPPORTED_MODES:
         raise ValueError("mode 参数不合法。")
     if export not in SUPPORTED_EXPORTS:
@@ -82,8 +82,6 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
     if lang:
         command.extend(["--lang", lang])
     command.extend(["--backend", backend, "--mode", mode])
-    if payload.get("privacyMode"):
-        command.append("--privacy-mode")
     if payload.get("noFrames"):
         command.append("--no-frames")
     if export != "none":
@@ -266,6 +264,7 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
     source = dict(source)
     local_path = str(source.pop("local_path", "") or source.pop("source_path", "") or metadata.get("source_path") or "")
     analysis = _load_json_file(directory / "analysis.json")
+    analysis.pop("raw_response", None)
     timeline_payload = _load_json_file(directory / "timeline.json")
     timeline = timeline_payload.get("items", []) if isinstance(timeline_payload, dict) else []
     if not isinstance(timeline, list):
@@ -769,10 +768,9 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div class="grid-2">
           <div class="field">
-            <label>摘要后端</label>
-            <select id="backend">
-              <option value="ollama">Ollama</option>
-              <option value="openai">OpenAI</option>
+            <label>AI 分析</label>
+            <select id="backend" disabled>
+              <option value="deepseek">DeepSeek</option>
             </select>
           </div>
           <div class="field">
@@ -803,7 +801,6 @@ INDEX_HTML = r"""<!doctype html>
           </div>
         </div>
         <div class="checks">
-          <label><input id="privacyMode" type="checkbox"> 隐私模式</label>
           <label><input id="noFrames" type="checkbox"> 跳过关键帧</label>
           <label><input id="noSummary" type="checkbox"> 只生成 transcript，不调用 LLM</label>
         </div>
@@ -848,7 +845,6 @@ INDEX_HTML = r"""<!doctype html>
         mode: $("mode").value,
         lang: $("lang").value,
         export: $("exportMode").value,
-        privacyMode: $("privacyMode").checked,
         noFrames: $("noFrames").checked,
         noSummary: $("noSummary").checked
       };

@@ -10,7 +10,7 @@ created: "{{ manifest.completed_at }}"
 duration: "{{ source.duration if source.duration is not none else '' }}"
 status: processed
 analysis_profile: "{{ analysis.analysis_profile or manifest.current_stage }}"
-privacy_mode: {{ manifest.privacy_mode | lower }}
+analysis_status: "{{ analysis.status or 'skipped' }}"
 tags:
   - 视频笔记
 ---
@@ -70,4 +70,3 @@ tags:
 - [[transcript.grouped|分组字幕]]
 - `transcript.raw.jsonl`
 - `timeline.json`
-

@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 
 from src.domain.models import AnalysisResult, ProcessingManifest, SourceRecord, TranscriptGroup, TranscriptSegment
+from src.main import normalize_backend
+from src.utils import UserFacingError
 
 
 class DomainModelTests(unittest.TestCase):
@@ -18,8 +20,15 @@ class DomainModelTests(unittest.TestCase):
         result = AnalysisResult(summary="ok")
         self.assertEqual(result.highlights, [])
         self.assertEqual(result.thoughts, [])
+        self.assertEqual(result.status, "skipped")
+        self.assertEqual(result.schema_version, "2")
 
     def test_manifest_records_stage_status(self) -> None:
         manifest = ProcessingManifest(task_id="task", stage_status={"resolve_source": "completed"}, sample_seconds=30)
         self.assertEqual(manifest.stage_status["resolve_source"], "completed")
         self.assertEqual(manifest.sample_seconds, 30)
+
+    def test_only_deepseek_backend_is_active(self) -> None:
+        self.assertEqual(normalize_backend(None), "deepseek")
+        with self.assertRaisesRegex(UserFacingError, "已停用"):
+            normalize_backend("ollama")

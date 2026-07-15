@@ -16,7 +16,6 @@ class PipelineContext:
     config: AppConfig
     input_value: str
     output_dir: Path
-    privacy_mode: bool
     analysis_profile: str
     no_analysis: bool = False
     generate_frames: bool = True

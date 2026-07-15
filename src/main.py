@@ -62,6 +62,15 @@ def normalize_export(export: str | None) -> str:
     return normalized
 
 
+def normalize_backend(backend: str | None) -> str:
+    normalized = (backend or "deepseek").strip().lower()
+    if normalized != "deepseek":
+        raise UserFacingError(
+            f"后端 {backend} 已停用。当前仅支持 deepseek，请改用 --backend deepseek。"
+        )
+    return normalized
+
+
 def run_pipeline(
     url: Optional[str] = None,
     file: Optional[Path] = None,
@@ -72,7 +81,6 @@ def run_pipeline(
     export: str = "none",
     no_summary: bool = False,
     config: Path = Path("config.example.json"),
-    privacy_mode: bool = False,
     generate_frames: bool = True,
     sample_seconds: int | None = None,
 ) -> None:
@@ -90,8 +98,8 @@ def run_pipeline(
     language = lang or cfg.language
     if language != cfg.language:
         cfg = cfg.model_copy(update={"language": language})
-    summary_backend = backend or cfg.summary_backend
     try:
+        summary_backend = normalize_backend(backend or cfg.summary_backend)
         analysis_mode = normalize_mode(mode)
         export_mode = normalize_export(export)
         if analysis_mode not in IMPLEMENTED_MODES and not no_summary:
@@ -106,7 +114,6 @@ def run_pipeline(
         package = PipelineOrchestrator(
             cfg,
             backend=summary_backend,
-            privacy_mode=privacy_mode or cfg.privacy_mode,
             analysis_profile=analysis_mode,
             no_analysis=no_summary,
             generate_frames=generate_frames,
@@ -503,7 +510,7 @@ def _run_argparse() -> None:
     parser.add_argument("--url", help="公开视频链接，例如 B站 / YouTube。")
     parser.add_argument("--file", type=Path, help="本地视频文件路径。")
     parser.add_argument("--lang", help="字幕或转写语言，例如 zh / en。")
-    parser.add_argument("--backend", help="摘要后端：ollama 或 openai。")
+    parser.add_argument("--backend", help="AI 分析后端：仅支持 deepseek。")
     parser.add_argument(
         "--mode",
         choices=SUPPORTED_MODES,
@@ -513,7 +520,6 @@ def _run_argparse() -> None:
     parser.add_argument("--comments", action="store_true", help="已停用，仅为旧命令兼容保留。")
     parser.add_argument("--export", choices=SUPPORTED_EXPORTS, default="none", help="导出方式：none / obsidian。")
     parser.add_argument("--no-summary", action="store_true", help="只生成 transcript.md，不调用 LLM。")
-    parser.add_argument("--privacy-mode", action="store_true", help="隐私模式：禁止调用云端 Provider。")
     parser.add_argument("--no-frames", action="store_true", help="跳过关键帧生成。")
     parser.add_argument("--sample-seconds", type=int, help="仅处理开头指定秒数，用于快速链路验证。")
     parser.add_argument("--config", type=Path, default=Path("config.example.json"), help="配置文件路径。")
@@ -529,7 +535,6 @@ def _run_argparse() -> None:
             export=args.export,
             no_summary=args.no_summary,
             config=args.config,
-            privacy_mode=args.privacy_mode,
             generate_frames=not args.no_frames,
             sample_seconds=args.sample_seconds,
         )
@@ -543,7 +548,7 @@ if typer:
         url: Optional[str] = typer.Option(None, "--url", help="公开视频链接，例如 B站 / YouTube。"),
         file: Optional[Path] = typer.Option(None, "--file", help="本地视频文件路径。"),
         lang: Optional[str] = typer.Option(None, "--lang", help="字幕或转写语言，例如 zh / en。"),
-        backend: Optional[str] = typer.Option(None, "--backend", help="摘要后端：ollama 或 openai。"),
+        backend: Optional[str] = typer.Option(None, "--backend", help="AI 分析后端：仅支持 deepseek。"),
         mode: str = typer.Option(
             DEFAULT_MODE,
             "--mode",
@@ -553,12 +558,11 @@ if typer:
         export: str = typer.Option("none", "--export", help="导出方式：none / obsidian。"),
         no_summary: bool = typer.Option(False, "--no-summary", help="只生成 transcript.md，不调用 LLM。"),
         config: Path = typer.Option(Path("config.example.json"), "--config", help="配置文件路径。"),
-        privacy_mode: bool = typer.Option(False, "--privacy-mode", help="隐私模式：禁止调用云端 Provider。"),
         no_frames: bool = typer.Option(False, "--no-frames", help="跳过关键帧生成。"),
         sample_seconds: Optional[int] = typer.Option(None, "--sample-seconds", help="仅处理开头指定秒数，用于快速链路验证。"),
     ) -> None:
         try:
-            run_pipeline(url, file, lang, backend, mode, comments, export, no_summary, config, privacy_mode, not no_frames, sample_seconds)
+            run_pipeline(url, file, lang, backend, mode, comments, export, no_summary, config, not no_frames, sample_seconds)
         except ExitWithCode as exc:
             raise typer.Exit(code=exc.code) from exc
 

@@ -59,11 +59,16 @@ class WebUiContractTests(unittest.TestCase):
                 "vs.activeResultTab",
                 "vs.transcriptFollowMode",
                 "vs.playbackRate",
-                "vs.privacyMode",
             },
         )
         self.assertNotIn("vs.note", self.js)
         self.assertNotIn("vs.chat", self.js)
+
+    def test_deepseek_is_the_only_task_backend(self) -> None:
+        self.assertIn('id="taskBackend" type="hidden" value="deepseek"', self.html)
+        self.assertNotIn('value="ollama"', self.html)
+        self.assertNotIn('value="openai"', self.html)
+        self.assertNotIn("taskPrivacy", self.html)
 
     def test_unavailable_features_are_explicitly_disabled(self) -> None:
         self.assertRegex(self.html, r'data-media="capture"[^>]*disabled')

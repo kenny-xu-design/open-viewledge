@@ -6,9 +6,9 @@
 
 ## 当前基线状态
 
-当前版本保存为云端分析重构前基线，已具备本地视频与在线字幕处理、`faster-whisper` 本地转写、三栏 Web UI、时间轴和知识包输出，现有 68 项单元测试通过。
+当前版本已具备本地视频与在线字幕处理、`faster-whisper` 本地转写、三栏 Web UI、时间轴、知识包输出和 DeepSeek 结构化文本分析。
 
-尚未完成：云端 DeepSeek 分析、AI 上下文对话、自写笔记持久化、Obsidian 数据层和多模态分析。
+尚未完成：AI 上下文对话、自写笔记持久化、Obsidian 数据层和 Gemini 多模态分析。
 
 本地资源说明：`models/`、`output/` 和 `.env` 不纳入 Git；使用者需要自行安装依赖并准备本地模型。当前环境的 FFmpeg 尚未加入 `PATH`，这不影响代码基线，但在处理无字幕视频或本地媒体前必须先完成 FFmpeg 配置。
 
@@ -19,11 +19,10 @@
 - 输入本地 mp4 / mp3 / wav / m4a 等文件，使用 FFmpeg 提取音频后转写。
 - 有字幕时清洗 `.srt` / `.vtt` 并生成 `transcript.md`。
 - 无字幕时用 FFmpeg 提取 16kHz 单声道 wav，再用 `faster-whisper` 转写。
-- 可选调用 Ollama 或 OpenAI 生成中文结构化 `summary.md`、`chapter_summary.md`、`highlight_notes.md`、`tutorial_report.md`、`viral_analysis.md`、`close_reading.md`。
+- 使用 DeepSeek 生成结构化 `analysis.json` 及中文摘要、高光、章节和模式报告。
 - 评论功能已退出默认处理管线；`--comments`仅为旧命令兼容保留并会显示停用提示。
 - 使用`--sample-seconds 30`可仅处理媒体开头30秒，适合验证无字幕 ASR 链路。
-- 未配置 `OPENAI_API_KEY` 时，CLI 不会中断，会提示：“未检测到 OPENAI_API_KEY，已生成 transcript.md，暂未生成 summary.md。”
-- 通过 Codex Agent Skill 使用时，如果没有 `OPENAI_API_KEY`，Codex 会读取生成的 `transcript.md` 和 `prompts/summary_prompt.md`，直接写入 `summary.md`。
+- 未配置 `DEEPSEEK_API_KEY` 时，字幕仍会保留，`analysis.json` 会明确记录为失败状态。
 
 ## 安装 Python 依赖
 
@@ -91,11 +90,12 @@ cp .env.example .env
 如需让 CLI 自己生成 `summary.md`，在 `.env` 中填写：
 
 ```env
-OPENAI_API_KEY=
-OPENAI_BASE_URL=
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
 ```
 
-`OPENAI_BASE_URL` 可留空。不要把 API Key 写进代码或提交到仓库。
+模型和 Base URL 可按需覆盖。不要把 API Key 写进代码或提交到仓库。
 
 ## 完整使用流程
 
@@ -115,52 +115,43 @@ ffmpeg -version
 
 3. B站、YouTube 和通用 URL 均由项目的 yt-dlp Source 处理，无需额外平台 CLI。
 
-4. 如果使用 Ollama 本地摘要，请确认配置中的模型已安装并启动服务。
-
-```bash
-ollama list
-ollama serve
-```
+4. 在项目 `.env` 中配置 `DEEPSEEK_API_KEY`；只转写时可使用 `--no-summary` 跳过云端调用。
 
 5. 选择输入来源。
 
 B站：
 
 ```bash
-python -m src.main --url "B站链接" --backend ollama --mode summary
+python -m src.main --url "B站链接" --backend deepseek --mode summary
 ```
 
 YouTube / 其他公开视频：
 
 ```bash
-python -m src.main --url "YouTube链接" --backend ollama --mode tutorial
+python -m src.main --url "YouTube链接" --backend deepseek --mode tutorial
 ```
 
 本地文件：
 
 ```bash
-python -m src.main --file "input/test.mp4" --backend ollama --mode summary
+python -m src.main --file "input/test.mp4" --backend deepseek --mode summary
 ```
 
 6. 选择分析模式。
 
 ```bash
-python -m src.main --url "视频链接" --backend ollama --mode summary
-python -m src.main --url "视频链接" --backend ollama --mode tutorial
-python -m src.main --url "视频链接" --backend ollama --mode viral
-python -m src.main --url "视频链接" --backend ollama --mode close-reading
+python -m src.main --url "视频链接" --backend deepseek --mode summary
+python -m src.main --url "视频链接" --backend deepseek --mode tutorial
+python -m src.main --url "视频链接" --backend deepseek --mode viral
+python -m src.main --url "视频链接" --backend deepseek --mode close-reading
 ```
 
-7. 如需 B站评论区分析，增加 `--comments`。
-
-```bash
-python -m src.main --url "B站链接" --backend ollama --mode viral --comments
-```
+7. `--comments` 仅为旧命令兼容保留；评论区功能已停用。
 
 8. 如需 Obsidian 合并笔记，增加 `--export obsidian`。
 
 ```bash
-python -m src.main --url "视频链接" --backend ollama --mode tutorial --export obsidian
+python -m src.main --url "视频链接" --backend deepseek --mode tutorial --export obsidian
 ```
 
 9. 如只想生成 `metadata.json` 和 `transcript.md`，不调用 LLM：
@@ -178,40 +169,40 @@ python -m src.main --file "input/test.mp4" --no-summary
 python -m src.main --url "https://www.bilibili.com/video/BVxxxx"
 ```
 
-B站链接使用 Ollama 普通摘要：
+B站链接使用 DeepSeek 结构化分析：
 
 ```bash
-python -m src.main --url "B站链接" --backend ollama --mode summary
+python -m src.main --url "B站链接" --backend deepseek --mode summary
 ```
 
 B站教程解析：
 
 ```bash
-python -m src.main --url "B站链接" --backend ollama --mode tutorial
+python -m src.main --url "B站链接" --backend deepseek --mode tutorial
 ```
 
-B站爆款拆解并分析评论区：
+B站内容结构拆解：
 
 ```bash
-python -m src.main --url "B站链接" --backend ollama --mode viral --comments
+python -m src.main --url "B站链接" --backend deepseek --mode viral
 ```
 
 原文细读：
 
 ```bash
-python -m src.main --url "视频链接" --backend ollama --mode close-reading
+python -m src.main --url "视频链接" --backend deepseek --mode close-reading
 ```
 
 Obsidian 合并导出：
 
 ```bash
-python -m src.main --url "视频链接" --backend ollama --mode tutorial --export obsidian
+python -m src.main --url "视频链接" --backend deepseek --mode tutorial --export obsidian
 ```
 
 YouTube 或其他 yt-dlp 支持的平台：
 
 ```bash
-python -m src.main --url "YouTube链接" --backend ollama --mode tutorial
+python -m src.main --url "YouTube链接" --backend deepseek --mode tutorial
 ```
 
 指定语言：
@@ -220,10 +211,10 @@ python -m src.main --url "YouTube链接" --backend ollama --mode tutorial
 python -m src.main --url "视频链接" --lang zh
 ```
 
-指定摘要后端：
+显式指定 DeepSeek 后端：
 
 ```bash
-python -m src.main --url "视频链接" --backend openai
+python -m src.main --url "视频链接" --backend deepseek
 ```
 
 只生成转写，不调用 LLM：
@@ -243,7 +234,7 @@ python -m src.main --file "input/test.mp4"
 本地视频摘要：
 
 ```bash
-python -m src.main --file "input/test.mp4" --backend ollama --mode summary
+python -m src.main --file "input/test.mp4" --backend deepseek --mode summary
 ```
 
 只生成转写：
@@ -310,8 +301,8 @@ python -m src.main --file "input/test.mp4" --no-summary
 ```
 
 3. CLI 在 `output/` 下创建本次运行目录，并生成 `metadata.json` 与 `transcript.md`；
-4. 如果存在 `OPENAI_API_KEY`，可选择让 CLI 直接生成 `summary.md`；
-5. 如果没有 `OPENAI_API_KEY`，Codex 不调用 `summarizer.py`，而是读取本次输出目录中的 `transcript.md` 和 `prompts/summary_prompt.md`，由 Codex 直接写入 `summary.md`。
+4. 如果存在 `DEEPSEEK_API_KEY`，CLI 会生成结构化 `analysis.json` 和对应 Markdown；
+5. 如果没有 `DEEPSEEK_API_KEY`，字幕与时间轴仍会导出，分析状态记录为 `failed`。
 
 这样可以保证没有 API Key 时也能完成完整的 `transcript.md -> summary.md` 工作流。
 
@@ -387,7 +378,7 @@ src/sources/
 - 视频没有字幕：需要安装 FFmpeg，并安装 `faster-whisper` 依赖。
 - FFmpeg 未安装：按上文安装 FFmpeg，并确认 `ffmpeg -version` 可运行。
 - `faster-whisper` 转写失败：检查音频是否成功生成，或尝试更小的 Whisper 模型。
-- 缺少 `OPENAI_API_KEY`：CLI 仍会生成 `metadata.json` 和 `transcript.md`，但不会生成 `summary.md`；Codex Skill 可继续根据 transcript 写入 `summary.md`。
+- 缺少 `DEEPSEEK_API_KEY`：CLI 保留 transcript 和知识包，并在 `analysis.json` 与 manifest 中记录可操作的失败原因。
 - B站字幕获取失败：自动回退到 yt-dlp；如果仍无字幕，则进入 FFmpeg + faster-whisper 转写。
 - `--comments`：该参数已停用，仅为旧命令兼容保留。
 - 输出目录不存在：程序会自动创建 `output/`。

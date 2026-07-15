@@ -56,7 +56,6 @@
       </div>
       <div class="header-actions">
         <span class="model-badge" id="modelBadge">模型待选择</span>
-        <span class="privacy-badge" id="privacyBadge">本地</span>
         <button class="settings-button" id="layoutSettings"><svg><use href="#i-box"/></svg><span>布局</span></button>
         <button class="settings-button" id="summarySettings"><svg><use href="#i-sliders"/></svg><span>总结设置</span></button>
       </div>
@@ -206,20 +205,20 @@
       <label class="field"><span id="taskSourceLabel">视频链接</span><input id="taskSource" name="source" required placeholder="https://www.bilibili.com/video/BV…"></label>
       <div class="form-grid">
         <label class="field"><span>分析模式</span><select id="taskMode"><option value="summary">summary</option><option value="tutorial">tutorial</option><option value="viral">viral</option><option value="close-reading">close-reading</option></select></label>
-        <label class="field"><span>摘要后端</span><select id="taskBackend"><option value="ollama">Ollama</option><option value="openai">OpenAI</option></select></label>
+        <label class="field"><span>AI 分析</span><input value="DeepSeek" disabled><input id="taskBackend" type="hidden" value="deepseek"></label>
         <label class="field"><span>字幕语言</span><select id="taskLanguage"><option value="">默认 zh</option><option value="zh">zh</option><option value="zh-Hans">zh-Hans</option><option value="en">en</option></select></label>
         <label class="field"><span>字幕分组</span><select disabled><option>60秒（当前配置）</option></select></label>
         <label class="field"><span>样本秒数</span><input id="taskSampleSeconds" type="number" min="1" placeholder="留空处理完整媒体"></label>
         <label class="field"><span>导出</span><select id="taskExport"><option value="none">知识包</option><option value="obsidian">兼容 Obsidian</option></select></label>
       </div>
-      <div class="toggle-list"><label><input id="taskPrivacy" type="checkbox">隐私模式</label><label><input id="taskFrames" type="checkbox" checked>生成关键帧</label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
+      <div class="toggle-list"><label><input id="taskFrames" type="checkbox" checked>生成关键帧</label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
       <div class="runtime-info" id="taskRuntime" aria-live="polite">正在读取 Python 运行环境…</div>
       <div class="task-progress hidden" id="taskProgress" aria-live="polite"><div><span id="taskStatusText">正在创建任务…</span><span id="taskPercent"></span></div><div class="progress-track"><span id="progressBar"></span></div><pre id="taskLogs"></pre></div>
       <footer><button type="button" class="secondary-button" data-close-dialog>取消</button><button type="submit" class="primary-button" id="startTask">开始处理</button></footer>
     </form>
   </dialog>
 
-  <dialog id="settingsDialog" class="settings-dialog"><form method="dialog"><header><h2>总结设置</h2><button class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list"><label>分析模式<select id="settingsMode"><option>summary</option><option>tutorial</option><option>viral</option><option>close-reading</option></select></label><label>字幕分组<select disabled><option>60秒</option></select></label><label class="switch-label"><input id="settingsFrames" type="checkbox" checked>生成关键帧</label><label class="switch-label"><input id="settingsPrivacy" type="checkbox">隐私模式</label><div class="runtime-info" id="settingsRuntime">正在读取 Python 运行环境…</div></div><footer><button class="primary-button" value="close">完成</button></footer></form></dialog>
+  <dialog id="settingsDialog" class="settings-dialog"><form method="dialog"><header><h2>总结设置</h2><button class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list"><label>分析模式<select id="settingsMode"><option>summary</option><option>tutorial</option><option>viral</option><option>close-reading</option></select></label><label>字幕分组<select disabled><option>60秒</option></select></label><label class="switch-label"><input id="settingsFrames" type="checkbox" checked>生成关键帧</label><div class="runtime-info" id="settingsRuntime">正在读取 Python 运行环境…</div></div><footer><button class="primary-button" value="close">完成</button></footer></form></dialog>
   <dialog id="layoutDialog" class="settings-dialog"><form method="dialog"><header><h2>工作台布局</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list layout-settings"><p>设置三个工作区从左到右的位置，修改后立即生效。</p><label>左栏<select id="layoutPosition1"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label><label>中栏<select id="layoutPosition2"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label><label>右栏<select id="layoutPosition3"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label></div><footer><button type="button" class="secondary-button" id="resetLayout">恢复默认</button><button class="primary-button" value="close">完成</button></footer></form></dialog>
   <dialog id="imageDialog" class="image-dialog"><button class="icon-button image-close" data-close-dialog aria-label="关闭预览"><svg><use href="#i-close"/></svg></button><img id="imagePreview" alt="关键帧预览"></dialog>
   <div class="drawer-scrim" id="drawerScrim"></div>

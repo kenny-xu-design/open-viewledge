@@ -11,12 +11,10 @@ class AppConfig(BaseModel):
     output_dir: str = "output"
     whisper_model: str = "small"
     language: str = "zh"
-    summary_backend: str = "ollama"
-    ollama_model: str = "auto"
-    ollama_base_url: str = "http://localhost:11434"
-    openai_model: str = "gpt-4o-mini"
+    summary_backend: str = "deepseek"
+    deepseek_model: str = "deepseek-chat"
+    deepseek_base_url: str = "https://api.deepseek.com"
     keep_temp_files: bool = False
-    privacy_mode: bool = False
     generate_frames: bool = True
     transcript_group_seconds: int = 60
     transcript_group_max_segments: int = 12

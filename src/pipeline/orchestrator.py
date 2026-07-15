@@ -7,10 +7,10 @@ from pathlib import Path
 from ..analysis import AnalysisService
 from ..audio import extract_audio
 from ..config import AppConfig
-from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, ProcessingManifest, utc_now
+from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, ProcessingManifest, ProviderAttempt, utc_now
 from ..exporters import export_knowledge_package
 from ..providers.asr import LocalWhisperProvider
-from ..providers.llm import LegacyLLMProvider
+from ..providers.llm import DeepSeekProvider
 from ..sources import LocalMediaSource, YtdlpSource
 from ..timeline import build_timeline, extract_frames
 from ..transcripts import group_segments, parse_subtitle_file, read_jsonl, write_grouped_markdown, write_jsonl, write_legacy_transcript
@@ -26,7 +26,6 @@ class PipelineOrchestrator:
         config: AppConfig,
         *,
         backend: str | None = None,
-        privacy_mode: bool | None = None,
         analysis_profile: str = "summary",
         no_analysis: bool = False,
         generate_frames: bool | None = None,
@@ -36,7 +35,6 @@ class PipelineOrchestrator:
     ) -> None:
         self.config = config
         self.backend = backend or config.summary_backend
-        self.privacy_mode = config.privacy_mode if privacy_mode is None else privacy_mode
         self.analysis_profile = analysis_profile
         self.no_analysis = no_analysis
         self.generate_frames = config.generate_frames if generate_frames is None else generate_frames
@@ -51,13 +49,12 @@ class PipelineOrchestrator:
             config=self.config,
             input_value=input_value,
             output_dir=Path(self.config.output_dir),
-            privacy_mode=self.privacy_mode,
             analysis_profile=self.analysis_profile,
             no_analysis=self.no_analysis,
             generate_frames=self.generate_frames,
             sample_seconds=self.sample_seconds,
             log_callback=self.log_callback,
-            manifest=ProcessingManifest(task_id=task_id, privacy_mode=self.privacy_mode, sample_seconds=self.sample_seconds),
+            manifest=ProcessingManifest(task_id=task_id, privacy_mode=False, sample_seconds=self.sample_seconds),
         )
         try:
             self._stage(context, "resolve_source", lambda: setattr(context, "source", source_adapter.resolve(input_value)))
@@ -142,17 +139,52 @@ class PipelineOrchestrator:
 
             def analyze() -> None:
                 if self.no_analysis:
-                    context.analysis = AnalysisResult(analysis_profile=self.analysis_profile)
+                    context.analysis = AnalysisResult(status="skipped", analysis_profile=self.analysis_profile)
                     return
-                model = self.config.ollama_model if self.backend == "ollama" else self.config.openai_model
-                provider = LegacyLLMProvider(self.backend, model)
+                if self.backend != "deepseek":
+                    raise UserFacingError(
+                        f"后端 {self.backend} 已停用。当前仅支持 deepseek，请改用 --backend deepseek。"
+                    )
+                provider = DeepSeekProvider(
+                    base_url=self.config.deepseek_base_url,
+                    model_name=self.config.deepseek_model,
+                )
                 context.manifest.llm_provider = provider.name
+                context.manifest.llm_model = provider.model_name
+                attempt = ProviderAttempt(provider=provider.name, model=provider.model_name, stage="run_analysis")
                 if not provider.is_available():
-                    raise UserFacingError(f"LLM Provider 不可用：{provider.name} / {provider.model_name}")
+                    context.analysis = AnalysisResult(
+                        status="failed",
+                        error="未配置 DEEPSEEK_API_KEY。",
+                        analysis_profile=self.analysis_profile,
+                        provider=provider.name,
+                        model=provider.model_name,
+                    )
+                    attempt.finished_at = utc_now()
+                    attempt.error_type = "configuration"
+                    attempt.error_message = context.analysis.error
+                    context.manifest.provider_attempts.append(attempt)
+                    raise UserFacingError("未检测到 DEEPSEEK_API_KEY，请在项目 .env 中配置后重试。")
                 try:
                     context.analysis = AnalysisService(provider).analyze(context.groups, self.analysis_profile, context)
+                    context.manifest.llm_model = context.analysis.model or provider.model_name
+                    attempt.model = context.manifest.llm_model
+                    attempt.success = True
+                except Exception as exc:
+                    if context.analysis is None:
+                        context.analysis = AnalysisResult(
+                            status="failed",
+                            error=str(exc),
+                            analysis_profile=self.analysis_profile,
+                            provider=provider.name,
+                            model=provider.model_name,
+                        )
+                    attempt.error_type = type(exc).__name__
+                    attempt.error_message = str(exc)
+                    raise
                 finally:
-                    context.manifest.llm_model = provider.model_name
+                    attempt.finished_at = utc_now()
+                    context.manifest.provider_attempts.append(attempt)
                 _write_legacy_analysis_files(context)
 
             self._stage(context, "run_analysis", analyze, soft_fail=True)
@@ -216,8 +248,12 @@ class PipelineOrchestrator:
 
     @staticmethod
     def _save_manifest(context: PipelineContext) -> None:
-        if context.manifest and context.output_dir.exists() and context.output_dir.is_dir():
-            save_json(context.output_dir / "manifest.json", context.manifest.model_dump(mode="json"))
+        configured_root = Path(context.config.output_dir).resolve()
+        output_dir = context.output_dir.resolve()
+        if output_dir == configured_root:
+            return
+        if context.manifest and output_dir.exists() and output_dir.is_dir():
+            save_json(output_dir / "manifest.json", context.manifest.model_dump(mode="json"))
 
 
 def _package_name(title: str, source_id: str) -> str:
