@@ -11,11 +11,8 @@ except ImportError:
         return False
 
 from ...utils import UserFacingError
+from ...defaults import DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL
 from .base import LLMProvider, LLMResponse
-
-
-DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 
 
 class DeepSeekProvider(LLMProvider):

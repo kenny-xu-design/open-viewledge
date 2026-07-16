@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -64,13 +63,6 @@ def format_seconds(seconds: float | int | None) -> str:
     if hours:
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
-
-
-def require_executable(name: str, install_hint: str) -> str:
-    executable = shutil.which(name)
-    if not executable:
-        raise UserFacingError(f"未检测到 {name}。{install_hint}")
-    return executable
 
 
 def run_command(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:

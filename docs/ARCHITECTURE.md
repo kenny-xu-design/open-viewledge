@@ -95,6 +95,32 @@ models/faster-whisper-small/model.bin must exist
 
 The absolute local model directory is passed to `WhisperModel`. No implicit model download is allowed.
 
+### Runtime Tool Discovery
+
+`src/runtime_tools.py` is the shared FFmpeg and FFprobe discovery boundary.
+
+Resolution order:
+
+```text
+explicit AppConfig path
+-> FFMPEG_PATH / FFPROBE_PATH
+-> shutil.which()
+-> allowlisted project-local candidates
+-> UserFacingError
+```
+
+CLI media operations and Web diagnostics use the same resolver. Discovery is lazy for processing commands, so `--help` does not require external media tools.
+
+### Provider Defaults
+
+`src/defaults.py` contains public Provider defaults:
+
+- DeepSeek base URL and model.
+- Gemini base URL and model.
+- Active summary backend.
+
+Secrets remain environment-only. Provider constructors expose the effective model but never the Key.
+
 ### Analysis Layer
 
 CLI analysis:
@@ -171,14 +197,12 @@ They must not be treated as the current architecture. v1.2 may archive or remove
 
 The current architecture will be extended without replacing the pipeline:
 
-1. Shared FFmpeg/FFprobe executable discovery.
-2. Unified Provider model defaults and reporting.
-3. Knowledge-package integrity validation.
-4. Durable user notes.
-5. Durable local Web job history.
-6. Explicit removal or archival of disabled paths.
-7. Testable Gemini image-input Provider boundary.
-8. CLI inspection and release metadata.
+1. Knowledge-package integrity validation.
+2. Durable user notes.
+3. Durable local Web job history.
+4. Explicit removal or archival of disabled paths.
+5. Testable Gemini image-input Provider boundary.
+6. CLI inspection and release metadata.
 
 ## Future Scale Architecture
 

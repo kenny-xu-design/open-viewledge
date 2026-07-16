@@ -90,6 +90,11 @@ class WebUiContractTests(unittest.TestCase):
         self.assertNotIn('value="openai"', self.html)
         self.assertNotIn("taskPrivacy", self.html)
 
+    def test_runtime_panel_displays_tools_and_provider_models(self) -> None:
+        self.assertIn("runtime.tools", self.js)
+        self.assertIn("runtime.providers", self.js)
+        self.assertIn("未配置或未发现", self.js)
+
     def test_unavailable_features_are_explicitly_disabled(self) -> None:
         self.assertRegex(self.html, r'data-media="capture"[^>]*disabled')
         self.assertRegex(self.html, r'id="captureNote"[^>]*disabled')

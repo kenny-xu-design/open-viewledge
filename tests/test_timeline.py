@@ -21,7 +21,7 @@ class TimelineTests(unittest.TestCase):
         group = TranscriptGroup(index=0, start=0, end=10, title="主题", text="正文", segment_indexes=[0])
         source = SourceRecord(source_type="local_video", platform="local", source_id="id")
         entries = build_timeline([group], source)
-        with tempfile.TemporaryDirectory() as temp, patch("src.timeline.frame_extractor.run_command", side_effect=RuntimeError("boom")), patch("src.timeline.frame_extractor.require_executable", return_value="ffmpeg"):
+        with tempfile.TemporaryDirectory() as temp, patch("src.timeline.frame_extractor.run_command", side_effect=RuntimeError("boom")), patch("src.timeline.frame_extractor.resolve_executable", return_value="ffmpeg"):
             result, errors = extract_frames(Path(temp) / "video.mp4", entries, Path(temp) / "frames")
         self.assertEqual(len(result), 1)
         self.assertTrue(errors)

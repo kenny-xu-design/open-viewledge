@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from src.analysis.service import AnalysisService
 from src.analysis.schemas import AnalysisParseError, parse_analysis_response
 from src.domain.models import TranscriptGroup
+from src.defaults import DEFAULT_DEEPSEEK_MODEL
 from src.providers.llm import DeepSeekProvider, LLMResponse
 from src.utils import UserFacingError
 
@@ -80,6 +81,10 @@ class AnalysisSchemaTests(unittest.TestCase):
 
 
 class DeepSeekProviderTests(unittest.TestCase):
+    def test_default_model_is_centralized(self) -> None:
+        provider = DeepSeekProvider(api_key="test-key", client=_client([]))
+        self.assertEqual(provider.model_name, DEFAULT_DEEPSEEK_MODEL)
+
     def test_json_completion_records_model_usage_and_format(self) -> None:
         client = _client([_response('{"summary":"ok"}', model="resolved-model")])
         provider = DeepSeekProvider(api_key="test-key", client=client)

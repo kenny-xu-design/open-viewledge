@@ -3,13 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..domain.models import TimelineEntry
-from ..utils import require_executable, run_command
+from ..runtime_tools import resolve_executable
+from ..utils import run_command
 
 
-def extract_frames(media_path: Path, entries: list[TimelineEntry], frames_dir: Path) -> tuple[list[TimelineEntry], list[str]]:
+def extract_frames(
+    media_path: Path,
+    entries: list[TimelineEntry],
+    frames_dir: Path,
+    *,
+    ffmpeg_path: str | Path | None = None,
+) -> tuple[list[TimelineEntry], list[str]]:
     errors: list[str] = []
     try:
-        ffmpeg = require_executable("ffmpeg", "请先安装 FFmpeg 并加入 PATH。")
+        ffmpeg = resolve_executable("ffmpeg", ffmpeg_path)
     except Exception as exc:
         return entries, [str(exc)]
     frames_dir.mkdir(parents=True, exist_ok=True)

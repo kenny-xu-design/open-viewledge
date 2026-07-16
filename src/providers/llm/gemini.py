@@ -12,12 +12,9 @@ except ImportError:
     def load_dotenv() -> bool:  # type: ignore[no-redef]
         return False
 
+from ...defaults import DEFAULT_GEMINI_BASE_URL, DEFAULT_GEMINI_MODEL
 from ...utils import UserFacingError
 from .base import LLMProvider, LLMResponse
-
-
-DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 
 
 class GeminiProvider(LLMProvider):

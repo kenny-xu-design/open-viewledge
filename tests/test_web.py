@@ -20,6 +20,7 @@ from src.web import (
     load_knowledge_package,
     load_transcript_groups,
     resolve_library_file,
+    runtime_status_payload,
     _timestamp_seconds,
     _external_player_descriptor,
 )
@@ -174,6 +175,25 @@ class WebCommandTests(unittest.TestCase):
         self.assertEqual(_timestamp_seconds("01:30"), 90)
         self.assertEqual(_timestamp_seconds("01:01:01"), 3661)
 
+    def test_runtime_status_reports_tools_and_provider_models_without_keys(self) -> None:
+        with patch("src.web.runtime_tool_statuses") as mocked_tools, patch("src.web.ProviderRegistry") as registry:
+            mocked_tools.return_value = [
+                __import__("src.runtime_tools", fromlist=["ExecutableStatus"]).ExecutableStatus(
+                    name="ffmpeg",
+                    available=True,
+                    path="C:/tools/ffmpeg.exe",
+                    source="PATH",
+                )
+            ]
+            registry.return_value.statuses.return_value = [
+                {"name": "deepseek", "model": "deepseek-v4-flash", "configured": True}
+            ]
+            payload = runtime_status_payload()
+
+        self.assertEqual(payload["tools"][0]["name"], "ffmpeg")
+        self.assertEqual(payload["providers"][0]["model"], "deepseek-v4-flash")
+        self.assertNotIn("api_key", json.dumps(payload).lower())
+
 
 class WebLibraryTests(unittest.TestCase):
     def _write_package(self, root: Path, name: str = "demo") -> Path:
@@ -286,6 +306,8 @@ class WebApiTests(unittest.TestCase):
         with urlopen(f"{self.base_url}/api/runtime", timeout=3) as response:
             payload = json.loads(response.read().decode("utf-8"))
         self.assertEqual(payload["pythonExecutable"], __import__("sys").executable)
+        self.assertIn("tools", payload)
+        self.assertIn("providers", payload)
         self.assertIn("inProjectVenv", payload)
 
 

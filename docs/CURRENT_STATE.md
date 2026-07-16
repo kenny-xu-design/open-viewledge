@@ -24,7 +24,7 @@ python -m src.web --help
 ## v1.2 Progress
 
 - Documentation truth synchronization: completed on the feature branch.
-- Runtime executable discovery and model configuration unification: pending.
+- Runtime executable discovery and model configuration unification: completed on the feature branch.
 - Knowledge-package integrity validation: pending.
 - User-note and Web-job persistence: pending.
 - Disabled-route cleanup: pending.
@@ -74,10 +74,13 @@ Not implemented:
 - The project does not silently download a Whisper model.
 - Existing `transcript.raw.jsonl` can be reused when language and sample settings match.
 
-Current local environment limitation:
+Runtime discovery:
 
-- `ffmpeg` and `ffprobe` are not discoverable through PATH.
-- Project-level explicit executable discovery is planned for v1.2.
+- FFmpeg and FFprobe use one shared resolver.
+- Priority: explicit config, environment variable, PATH, project-local candidates, clear error.
+- `FFMPEG_PATH` and `FFPROBE_PATH` are supported.
+- Web runtime diagnostics report each tool independently.
+- The audited machine still does not expose either tool through PATH, but explicit configuration is supported.
 
 ## Analysis
 
@@ -196,12 +199,15 @@ Implemented:
 - Real secrets belong only in ignored `.env`.
 - `.env.example` contains empty keys and public defaults.
 - Models, output, media, virtual environments, logs, caches, and archives are ignored.
-- Current model defaults are inconsistent across code and example files; v1.2 will establish one source of truth.
+- Provider defaults are centralized in `src/defaults.py`.
+- DeepSeek default: `deepseek-v4-flash`.
+- Gemini default: `gemini-3.1-flash-lite`.
+- Environment variables can explicitly override defaults; unknown model names are passed through and never silently substituted.
+- Web runtime diagnostics show the effective provider and model without exposing Keys.
 
 ## Known Risks
 
 - Empty or malformed historical analysis can be displayed with an overly optimistic manifest status.
-- FFmpeg detection currently depends on PATH.
 - In-memory Web jobs disappear after restart.
 - Front-end note drafts disappear after reload.
 - Legacy code and historical docs can mislead maintainers if treated as active architecture.

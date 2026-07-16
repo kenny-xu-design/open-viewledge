@@ -20,7 +20,9 @@ from urllib.parse import quote, unquote, urlparse
 
 from .chat import answer_question
 from .chat_store import ChatStore
+from .config import load_config
 from .providers.llm import ProviderRegistry
+from .runtime_tools import runtime_tool_statuses
 from .utils import UserFacingError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -166,6 +168,26 @@ def _runtime_python_warning(python_executable: str | None = None) -> str:
     if _is_project_venv_python(python_executable):
         return ""
     return "当前 Web UI 未运行在项目虚拟环境中，可能缺少 yt-dlp / faster-whisper 等依赖。"
+
+
+def runtime_status_payload() -> dict[str, Any]:
+    config = load_config(PROJECT_ROOT / "config.example.json")
+    tools = [
+        item.to_dict()
+        for item in runtime_tool_statuses(
+            ffmpeg_path=config.ffmpeg_path,
+            ffprobe_path=config.ffprobe_path,
+            project_root=PROJECT_ROOT,
+        )
+    ]
+    return {
+        "pythonExecutable": sys.executable,
+        "projectRoot": str(PROJECT_ROOT),
+        "inProjectVenv": _is_project_venv_python(),
+        "warning": _runtime_python_warning(),
+        "tools": tools,
+        "providers": ProviderRegistry().statuses(),
+    }
 
 
 def _is_project_venv_python(python_executable: str | None = None) -> bool:
@@ -551,14 +573,7 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/library":
             self._send_json({"items": list_library_items()})
         elif parsed.path == "/api/runtime":
-            self._send_json(
-                {
-                    "pythonExecutable": sys.executable,
-                    "projectRoot": str(PROJECT_ROOT),
-                    "inProjectVenv": _is_project_venv_python(),
-                    "warning": _runtime_python_warning(),
-                }
-            )
+            self._send_json(runtime_status_payload())
         elif parsed.path == "/api/providers":
             self._send_json({"providers": ProviderRegistry().statuses()})
         elif parsed.path.startswith("/api/library/"):
@@ -1114,6 +1129,13 @@ def main() -> None:
     print(f"Python executable: {sys.executable}")
     print(f"Working directory: {PROJECT_ROOT}")
     print("Subprocess runner: uses this Web UI process sys.executable")
+    runtime = runtime_status_payload()
+    for tool in runtime["tools"]:
+        detail = f"{tool['path']} ({tool['source']})" if tool["available"] else "未配置或未发现"
+        print(f"{tool['name']}: {detail}")
+    for provider in runtime["providers"]:
+        configured = "configured" if provider["configured"] else "not configured"
+        print(f"Provider: {provider['name']} / {provider['model']} ({configured})")
     warning = _runtime_python_warning()
     if warning:
         print(warning)

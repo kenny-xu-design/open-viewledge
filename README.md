@@ -103,14 +103,26 @@ hf download Systran/faster-whisper-small --local-dir models/faster-whisper-small
 
 ### FFmpeg
 
-当前代码通过系统可执行文件发现机制调用 `ffmpeg`。在 `v1.2` 环境发现机制完成前，请确保 `ffmpeg` 和 `ffprobe` 已加入当前终端 PATH：
+FFmpeg 和 FFprobe 使用同一套项目级发现机制，优先级为：
 
-```powershell
-ffmpeg -version
-ffprobe -version
+```text
+config.example.json 中的 ffmpeg_path / ffprobe_path
+-> FFMPEG_PATH / FFPROBE_PATH
+-> 当前 PATH
+-> 项目内允许的 tools/、bin/、tools/ffmpeg/bin/ 等目录
+-> 明确错误
 ```
 
-仅查看 `--help` 不需要 FFmpeg。只有实际进行音频提取、媒体规范化或关键帧生成时才需要它。
+示例环境变量：
+
+```dotenv
+FFMPEG_PATH=C:\tools\ffmpeg\bin\ffmpeg.exe
+FFPROBE_PATH=C:\tools\ffmpeg\bin\ffprobe.exe
+```
+
+变量也可以指向包含对应程序的目录。项目不会修改系统 PATH，也不会自动下载二进制。
+
+仅查看 `--help` 不需要 FFmpeg。实际进行音频提取、媒体规范化或关键帧生成时才解析 FFmpeg。FFprobe 状态会独立显示，便于诊断后续媒体探测能力。
 
 ## API 配置
 
@@ -119,11 +131,14 @@ ffprobe -version
 ```dotenv
 DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-chat
+DEEPSEEK_MODEL=deepseek-v4-flash
 
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-3.5-flash
+GEMINI_MODEL=gemini-3.1-flash-lite
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+
+FFMPEG_PATH=
+FFPROBE_PATH=
 ```
 
 `.env` 已被 Git 忽略，`.env.example` 只保存空 Key 和非敏感默认值。不要把真实 Key 写入 `.env.example`、README、日志、知识包或提交记录。
@@ -302,12 +317,14 @@ frames/*.jpg
 
 ### 未找到 FFmpeg
 
-当前终端无法发现 `ffmpeg`。安装后将其加入当前环境 PATH，重新打开终端并运行：
+错误会说明缺少 `ffmpeg` 还是 `ffprobe`。可设置配置项、环境变量、PATH，或使用项目本地工具目录。例如：
 
 ```powershell
-ffmpeg -version
-ffprobe -version
+$env:FFMPEG_PATH = "C:\tools\ffmpeg\bin\ffmpeg.exe"
+$env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 ```
+
+项目不会静默下载程序或修改系统 PATH。
 
 ### 未找到本地 Whisper 模型
 
@@ -342,7 +359,6 @@ ffprobe -version
 
 ## 已知限制
 
-- FFmpeg/FFprobe 的项目级显式路径发现尚在 `v1.2` 收尾范围内。
 - B站官方 iframe 无可靠的程序化时间跳转和播放同步。
 - Gemini 视觉输入未实现，也未进行真实 API 验证。
 - 自写笔记和 Web 任务历史尚未持久化。

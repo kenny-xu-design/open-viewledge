@@ -2,17 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .utils import UserFacingError, require_executable, run_command
+from .runtime_tools import resolve_executable
+from .utils import UserFacingError, run_command
 
 
-FFMPEG_HINT = "请先安装 FFmpeg，并确认 ffmpeg 命令已加入 PATH。Windows 可使用 winget install Gyan.FFmpeg。"
-
-
-def extract_audio(video_path: Path, wav_path: Path, sample_seconds: int | None = None) -> Path:
+def extract_audio(
+    video_path: Path,
+    wav_path: Path,
+    sample_seconds: int | None = None,
+    *,
+    ffmpeg_path: str | Path | None = None,
+) -> Path:
     if not video_path.exists():
         raise UserFacingError(f"视频文件不存在：{video_path}")
 
-    ffmpeg = require_executable("ffmpeg", FFMPEG_HINT)
+    ffmpeg = resolve_executable("ffmpeg", ffmpeg_path)
     wav_path.parent.mkdir(parents=True, exist_ok=True)
     args = [
         ffmpeg,

@@ -96,6 +96,7 @@ class PipelineOrchestrator:
                     context.media_path,
                     context.output_dir / "audio" / "audio_16k.wav",
                     sample_seconds=self.sample_seconds,
+                    ffmpeg_path=self.config.ffmpeg_path,
                 )
                 provider = LocalWhisperProvider()
                 if not provider.is_available():
@@ -133,7 +134,12 @@ class PipelineOrchestrator:
                 if not self.generate_frames or context.source.source_type != "local_video":
                     return
                 frame_source = Path(context.source.local_path)
-                context.timeline, errors = extract_frames(frame_source, context.timeline, context.output_dir / "frames")
+                context.timeline, errors = extract_frames(
+                    frame_source,
+                    context.timeline,
+                    context.output_dir / "frames",
+                    ffmpeg_path=self.config.ffmpeg_path,
+                )
                 context.manifest.errors.extend(errors)
 
             self._stage(context, "extract_frames", frames, soft_fail=True)
@@ -150,6 +156,7 @@ class PipelineOrchestrator:
                     base_url=self.config.deepseek_base_url,
                     model_name=self.config.deepseek_model,
                 )
+                context.log(f"AI Provider：{provider.name} / {provider.model_name}")
                 context.manifest.llm_provider = provider.name
                 context.manifest.llm_model = provider.model_name
                 attempt = ProviderAttempt(provider=provider.name, model=provider.model_name, stage="run_analysis")

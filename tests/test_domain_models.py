@@ -6,6 +6,7 @@ from src.domain.models import AnalysisResult, ProcessingManifest, SourceRecord, 
 from src.main import normalize_backend
 from src.pipeline.context import PipelineContext
 from src.config import AppConfig
+from src.defaults import DEFAULT_DEEPSEEK_MODEL, DEFAULT_GEMINI_MODEL
 from src.utils import UserFacingError
 
 
@@ -44,3 +45,10 @@ class DomainModelTests(unittest.TestCase):
             previous_manifest={"sample_seconds": 30},
         )
         self.assertEqual(context.previous_manifest["sample_seconds"], 30)
+
+    def test_app_config_uses_central_provider_defaults(self) -> None:
+        config = AppConfig()
+        self.assertEqual(config.deepseek_model, DEFAULT_DEEPSEEK_MODEL)
+        self.assertEqual(config.gemini_model, DEFAULT_GEMINI_MODEL)
+        self.assertEqual(config.ffmpeg_path, "")
+        self.assertEqual(config.ffprobe_path, "")

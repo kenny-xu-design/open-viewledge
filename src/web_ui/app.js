@@ -186,10 +186,23 @@ async function init() {
 async function loadRuntimeInfo() {
   try {
     const runtime = await api("/api/runtime");
-    const text = `${runtime.inProjectVenv ? "项目虚拟环境" : "非项目虚拟环境"}\n${runtime.pythonExecutable}${runtime.warning ? `\n${runtime.warning}` : ""}`;
+    const toolLines = (runtime.tools || []).map((tool) => (
+      `${tool.name}: ${tool.available ? `${tool.path} (${tool.source})` : "未配置或未发现"}`
+    ));
+    const providerLines = (runtime.providers || []).map((provider) => (
+      `${provider.name}: ${provider.model} (${provider.configured ? "已配置" : "未配置 Key"})`
+    ));
+    const text = [
+      runtime.inProjectVenv ? "项目虚拟环境" : "非项目虚拟环境",
+      runtime.pythonExecutable,
+      ...toolLines,
+      ...providerLines,
+      runtime.warning || "",
+    ].filter(Boolean).join("\n");
     [$("#taskRuntime"), $("#settingsRuntime")].forEach((element) => {
       element.textContent = text;
-      element.classList.toggle("warning", !runtime.inProjectVenv);
+      const missingRequiredRuntime = (runtime.tools || []).some((tool) => !tool.available);
+      element.classList.toggle("warning", !runtime.inProjectVenv || missingRequiredRuntime);
     });
   } catch (error) {
     [$("#taskRuntime"), $("#settingsRuntime")].forEach((element) => {
