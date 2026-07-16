@@ -11,7 +11,6 @@ import threading
 import time
 import uuid
 import webbrowser
-from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,7 +20,10 @@ from urllib.parse import quote, unquote, urlparse
 from .chat import answer_question
 from .chat_store import ChatStore
 from .config import load_config
+from .exporters import refresh_compatible_export
+from .job_store import Job, JobStore
 from .knowledge_validation import inspect_knowledge_package
+from .note_store import NoteConflictError, NoteStore
 from .providers.llm import ProviderRegistry
 from .runtime_tools import runtime_tool_statuses
 from .utils import UserFacingError
@@ -29,6 +31,7 @@ from .utils import UserFacingError
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = PROJECT_ROOT / "output"
 WEB_UI_ROOT = Path(__file__).resolve().parent / "web_ui"
+LOCAL_STATE_ROOT = PROJECT_ROOT / ".local"
 SUPPORTED_MODES = {"summary", "tutorial", "viral", "close-reading"}
 SUPPORTED_BACKENDS = {"deepseek"}
 SUPPORTED_EXPORTS = {"none", "obsidian"}
@@ -43,24 +46,13 @@ LIBRARY_FILES = {
     "transcript.md",
     "source.md",
     "export_note.md",
+    "user_notes.md",
 }
 MEDIA_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"}
 
-
-@dataclass
-class Job:
-    id: str
-    command: list[str]
-    created_at: float = field(default_factory=time.time)
-    status: str = "queued"
-    returncode: int | None = None
-    logs: list[str] = field(default_factory=list)
-    output_dir: str = ""
-    error: str = ""
-
-
-JOBS: dict[str, Job] = {}
-JOBS_LOCK = threading.Lock()
+JOB_STORE = JobStore(LOCAL_STATE_ROOT / "web_jobs.json")
+JOBS: dict[str, Job] = {job.id: job for job in JOB_STORE.load_jobs()}
+JOBS_LOCK = threading.RLock()
 
 
 def build_cli_command(payload: dict[str, Any], python_executable: str | None = None) -> list[str]:
@@ -121,6 +113,11 @@ def start_job(payload: dict[str, Any]) -> Job:
     job = Job(id=uuid.uuid4().hex[:12], command=command)
     with JOBS_LOCK:
         JOBS[job.id] = job
+        try:
+            _persist_job(job, strict=True)
+        except OSError:
+            JOBS.pop(job.id, None)
+            raise
     thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
     thread.start()
     return job
@@ -131,8 +128,11 @@ def _run_job(job: Job) -> None:
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     job.status = "running"
+    job.started_at = time.time()
+    _persist_job(job)
     try:
         _append_runtime_logs(job)
+        _persist_job(job)
         process = subprocess.Popen(
             job.command,
             cwd=PROJECT_ROOT,
@@ -148,6 +148,7 @@ def _run_job(job: Job) -> None:
             _append_log(job, line.rstrip())
         job.returncode = process.wait()
         job.output_dir = _find_new_output_dir(before)
+        job.knowledge_id = Path(job.output_dir).name if job.output_dir else ""
         job.status = "success" if job.returncode == 0 else "failed"
         if job.returncode != 0:
             job.error = f"CLI 退出码：{job.returncode}"
@@ -155,6 +156,9 @@ def _run_job(job: Job) -> None:
         job.status = "failed"
         job.error = str(exc)
         _append_log(job, f"处理失败：{exc}")
+    finally:
+        job.finished_at = time.time()
+        _persist_job(job)
 
 
 def _append_runtime_logs(job: Job) -> None:
@@ -208,20 +212,34 @@ def _append_log(job: Job, line: str) -> None:
         job.logs.append(line)
         if len(job.logs) > 400:
             job.logs = job.logs[-400:]
+        should_persist = len(job.logs) % 10 == 0
+    if should_persist:
+        _persist_job(job)
 
 
-def _snapshot_output_dirs() -> set[Path]:
+def _persist_job(job: Job, strict: bool = False) -> None:
+    try:
+        JOB_STORE.upsert(job)
+    except OSError as exc:
+        if strict:
+            raise
+        print(f"[web] 任务状态持久化失败：{exc}")
+
+
+def _snapshot_output_dirs() -> dict[Path, float]:
     if not OUTPUT_ROOT.exists():
-        return set()
-    return {path for path in OUTPUT_ROOT.iterdir() if path.is_dir()}
+        return {}
+    return {path: path.stat().st_mtime for path in OUTPUT_ROOT.iterdir() if path.is_dir()}
 
 
-def _find_new_output_dir(before: set[Path]) -> str:
+def _find_new_output_dir(before: dict[Path, float]) -> str:
     if not OUTPUT_ROOT.exists():
         return ""
-    candidates = [path for path in OUTPUT_ROOT.iterdir() if path.is_dir() and path not in before]
-    if not candidates:
-        candidates = [path for path in OUTPUT_ROOT.iterdir() if path.is_dir()]
+    candidates = [
+        path
+        for path in OUTPUT_ROOT.iterdir()
+        if path.is_dir() and (path not in before or path.stat().st_mtime > before[path])
+    ]
     if not candidates:
         return ""
     newest = max(candidates, key=lambda path: path.stat().st_mtime)
@@ -245,9 +263,13 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "id": job.id,
         "command": job.command,
         "createdAt": job.created_at,
+        "updatedAt": job.updated_at,
+        "startedAt": job.started_at,
+        "finishedAt": job.finished_at,
         "status": job.status,
         "returncode": job.returncode,
         "logs": job.logs,
+        "knowledgeId": job.knowledge_id,
         "outputDir": job.output_dir,
         "outputFiles": output_files,
         "error": job.error,
@@ -662,6 +684,44 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             return
         self._send_json({"job": job_to_dict(job)}, HTTPStatus.CREATED)
 
+    def do_PUT(self) -> None:
+        parsed = urlparse(self.path)
+        if not (parsed.path.startswith("/api/library/") and parsed.path.endswith("/notes")):
+            self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+            return
+        knowledge_id = unquote(parsed.path[len("/api/library/") : -len("/notes")].strip("/"))
+        try:
+            payload = self._read_json_body()
+            if "content" not in payload:
+                raise ValueError("content 不能为空。")
+            expected_revision = payload.get("revision") if "revision" in payload else None
+            note = NoteStore(resolve_library_dir).save(
+                knowledge_id,
+                payload["content"],
+                str(expected_revision) if expected_revision is not None else None,
+            )
+            directory = resolve_library_dir(knowledge_id)
+            export: dict[str, str] = {}
+            warning = ""
+            try:
+                export_path = refresh_compatible_export(directory)
+                encoded_id = quote(knowledge_id, safe="")
+                export = {
+                    "name": export_path.name,
+                    "url": f"/api/library/{encoded_id}/file/{quote(export_path.name, safe='')}",
+                }
+            except FileNotFoundError:
+                warning = "笔记已保存，但知识包缺少 index.md，未刷新兼容导出。"
+            self._send_json({"note": note, "export": export, "warning": warning})
+        except NoteConflictError as exc:
+            self._send_json({"error": str(exc), "note": exc.current}, HTTPStatus.CONFLICT)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except FileNotFoundError:
+            self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
+        except OSError:
+            self._send_json({"error": "笔记保存失败，请检查输出目录是否可写。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path.startswith("/api/library/") and parsed.path.endswith("/chat"):
@@ -711,6 +771,9 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                 return
             if action == "chat" and len(parts) == 2:
                 self._send_json({"chat": ChatStore(resolve_library_dir).load(knowledge_id)})
+                return
+            if action == "notes" and len(parts) == 2:
+                self._send_json({"note": NoteStore(resolve_library_dir).load(knowledge_id)})
                 return
             if action == "media" and len(parts) == 2:
                 self._send_path(resolve_media_path(knowledge_id), allow_range=True)

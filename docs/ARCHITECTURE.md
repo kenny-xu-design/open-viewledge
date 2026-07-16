@@ -175,6 +175,20 @@ Responsibilities:
 
 Long processing remains in a background thread that starts the core CLI subprocess. The request thread does not execute the full media pipeline.
 
+Local Web state is deliberately small and file based:
+
+```text
+output/<knowledge_id>/user_notes.md
+output/<knowledge_id>/chat.json
+.local/web_jobs.json
+```
+
+- Notes and chat are isolated by knowledge package.
+- Notes use atomic replacement and revision checks.
+- Web jobs are persisted independently of the knowledge package and restored on restart.
+- In-process jobs that survive only as records are marked `interrupted`; the Web server does not pretend to resume a subprocess.
+- `.local/` is ignored and is not a distributed task queue.
+
 ### Export Layer
 
 The package exporter writes JSON and Markdown, including a Jinja2-rendered `index.md`.
@@ -203,13 +217,16 @@ They must not be treated as the current architecture. v1.2 may archive or remove
 
 ## v1.2 Evolution
 
-The current architecture will be extended without replacing the pipeline:
+Completed in the v1.2 branch:
 
 1. Durable user notes.
 2. Durable local Web job history.
-3. Explicit removal or archival of disabled paths.
-4. Testable Gemini image-input Provider boundary.
-5. Release metadata and final validation.
+
+The remaining architecture work will extend the product without replacing the pipeline:
+
+1. Explicit removal or archival of disabled paths.
+2. Testable Gemini image-input Provider boundary.
+3. Release metadata and final validation.
 
 ## Future Scale Architecture
 

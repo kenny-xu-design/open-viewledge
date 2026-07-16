@@ -188,7 +188,7 @@
       </section>
 
       <section class="notes-pane" id="notesPane">
-        <header class="module-header"><div><strong>自写笔记</strong><span class="save-status" id="noteSaveStatus">本地草稿</span></div><div class="note-actions"><button class="quiet-button" id="insertTimestamp">插入时间戳</button><button class="quiet-button" id="captureNote" disabled title="截图后端待开发">插入当前截图</button></div></header>
+        <header class="module-header"><div><strong>自写笔记</strong><span class="save-status" id="noteSaveStatus">未加载</span></div><div class="note-actions"><button class="quiet-button" id="insertTimestamp">插入时间戳</button><button class="quiet-button" id="captureNote" disabled title="截图后端待开发">插入当前截图</button></div></header>
         <div class="note-toolbar" aria-label="笔记工具栏">
           <button disabled title="富文本编辑待开发"><strong>B</strong></button><button disabled title="富文本编辑待开发"><em>I</em></button><button disabled title="富文本编辑待开发">列表</button><span></span><span class="obsidian-state" id="obsidianStatus">Obsidian 数据层 · 规划中</span>
         </div>
@@ -214,6 +214,10 @@
       <div class="toggle-list"><label><input id="taskFrames" type="checkbox" checked>生成关键帧</label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
       <div class="runtime-info" id="taskRuntime" aria-live="polite">正在读取 Python 运行环境…</div>
       <div class="task-progress hidden" id="taskProgress" aria-live="polite"><div><span id="taskStatusText">正在创建任务…</span><span id="taskPercent"></span></div><div class="progress-track"><span id="progressBar"></span></div><pre id="taskLogs"></pre></div>
+      <section class="task-history" aria-labelledby="taskHistoryTitle">
+        <header><strong id="taskHistoryTitle">最近任务</strong><button class="icon-button" id="refreshJobs" type="button" title="刷新任务历史"><svg><use href="#i-refresh"/></svg></button></header>
+        <div id="jobHistory"><div class="task-history-empty">打开面板后读取历史任务</div></div>
+      </section>
       <footer><button type="button" class="secondary-button" data-close-dialog>取消</button><button type="submit" class="primary-button" id="startTask">开始处理</button></footer>
     </form>
   </dialog>
@@ -223,6 +227,6 @@
   <dialog id="imageDialog" class="image-dialog"><button class="icon-button image-close" data-close-dialog aria-label="关闭预览"><svg><use href="#i-close"/></svg></button><img id="imagePreview" alt="关键帧预览"></dialog>
   <div class="drawer-scrim" id="drawerScrim"></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js?v=workspace-4" defer></script>
+  <script src="/static/app.js?v=workspace-5" defer></script>
 </body>
 </html>

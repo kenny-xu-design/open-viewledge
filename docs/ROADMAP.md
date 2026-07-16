@@ -28,6 +28,8 @@ Goal: finish the existing local product without redesigning it.
 
 ### 4. Local Persistence
 
+Status: completed on `feat/v1.2-product-completion`.
+
 - Persist user notes by knowledge ID.
 - Include notes in compatible export.
 - Persist Web job history.

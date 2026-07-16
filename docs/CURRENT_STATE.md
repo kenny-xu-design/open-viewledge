@@ -21,12 +21,22 @@ python -m src.main --help
 python -m src.web --help
 ```
 
+Latest v1.2 feature-branch verification:
+
+```text
+128 unit tests
+python -m compileall src
+python -m src.main --help
+python -m src.web --help
+node --check src/web_ui/app.js
+```
+
 ## v1.2 Progress
 
 - Documentation truth synchronization: completed on the feature branch.
 - Runtime executable discovery and model configuration unification: completed on the feature branch.
 - Knowledge-package integrity validation: completed on the feature branch.
-- User-note and Web-job persistence: pending.
+- User-note and Web-job persistence: completed on the feature branch.
 - Disabled-route cleanup: pending.
 - Gemini image-input implementation: pending.
 - Release validation: pending.
@@ -122,6 +132,7 @@ chapter_summary.md
 highlight_notes.md
 export_note.md
 chat.json
+user_notes.md
 audio/audio_16k.wav
 frames/*.jpg
 ```
@@ -160,9 +171,14 @@ Limitations:
 
 - Bilibili iframe playback cannot be reliably controlled or synchronized by the application.
 - Some online videos prohibit embedding and fall back to the external source.
-- Jobs are stored only in process memory.
-- User notes are stored only in front-end memory.
 - Frame capture API returns `501`.
+
+Local persistence:
+
+- Web task state is stored in ignored `.local/web_jobs.json`.
+- Historical tasks are restored after Web restart.
+- Jobs left in `queued` or `running` state are restored as `interrupted`.
+- The task dialog exposes recent persisted jobs and their output knowledge IDs.
 
 ## AI Chat
 
@@ -193,9 +209,11 @@ Implemented:
 
 ## Notes And Obsidian
 
-- User notes are currently only `noteDrafts` in front-end memory.
-- No notes API exists.
-- No durable `user_notes.md` exists.
+- User notes are stored as `output/<knowledge_id>/user_notes.md`.
+- `GET/PUT /api/library/<knowledge_id>/notes` provide isolated read and save operations.
+- Writes are atomic, limited to 1 MiB, and protected by SHA-256 revision checks.
+- The Web editor saves after an 800 ms debounce and flushes before package switching.
+- Saving a note refreshes `export_note.md` so the compatible export includes user content.
 - `--export obsidian` creates `export_note.md`, a compatible Markdown copy.
 - There is no Vault allowlist, Vault synchronization, or bidirectional Obsidian data layer.
 
@@ -220,6 +238,6 @@ Implemented:
 
 ## Known Risks
 
-- In-memory Web jobs disappear after restart.
-- Front-end note drafts disappear after reload.
+- A browser closed before its final keepalive request is accepted can leave the latest keystrokes unsaved; normal edits are persisted after 800 ms.
+- The local JSON job store is intentionally single-process and is not a Scale queue.
 - Legacy code and historical docs can mislead maintainers if treated as active architecture.

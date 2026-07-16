@@ -29,7 +29,7 @@ const state = {
   transcriptGroups: [],
   transcriptLoadedFor: "",
   scrollPositions: { summary: 0, transcript: 0 },
-  noteDrafts: {},
+  noteStateByKnowledgeId: {},
   providerStatuses: {},
 };
 
@@ -170,6 +170,22 @@ function currentChatState() {
   });
 }
 
+function currentNoteState(knowledgeId = state.selectedKnowledgeId) {
+  if (!knowledgeId) return { content: "", revision: "", loaded: false, dirty: false, saving: false, timer: 0 };
+  return state.noteStateByKnowledgeId[knowledgeId] || (state.noteStateByKnowledgeId[knowledgeId] = {
+    content: "",
+    revision: "",
+    updatedAt: "",
+    loaded: false,
+    loading: false,
+    dirty: false,
+    saving: false,
+    timer: 0,
+    savePromise: null,
+    error: "",
+  });
+}
+
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
@@ -222,6 +238,7 @@ function applyPersistedLayout() {
 
 function bindEvents() {
   $("#newSummary").addEventListener("click", openNewTask);
+  $("#refreshJobs").addEventListener("click", loadJobHistory);
   $("#focusSearch").addEventListener("click", focusSidebarSearch);
   $("#librarySearch").addEventListener("input", renderLibrary);
   $("#refreshLibrary").addEventListener("click", refreshLibrary);
@@ -294,14 +311,22 @@ function bindEvents() {
   document.addEventListener("keydown", handleKeyboard);
   window.addEventListener("hashchange", selectFromHash);
   window.addEventListener("resize", () => window.innerWidth >= 980 && closeDrawer());
-  window.addEventListener("beforeunload", () => clearInterval(taskPoller));
+  window.addEventListener("beforeunload", () => {
+    clearInterval(taskPoller);
+    flushPendingNotesOnUnload();
+  });
 }
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const type = response.headers.get("content-type") || "";
   const data = type.includes("application/json") ? await response.json() : await response.text();
-  if (!response.ok) throw new Error(data?.error || `请求失败：${response.status}`);
+  if (!response.ok) {
+    const error = new Error(data?.error || `请求失败：${response.status}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
   return data;
 }
 
@@ -383,6 +408,7 @@ function updateLibraryCounts() {
 async function loadKnowledge(id, force = false) {
   if (!id) return;
   if (state.selectedKnowledgeId && state.selectedKnowledgeId !== id) {
+    await flushNoteSave(state.selectedKnowledgeId);
     const previousChat = currentChatState();
     previousChat.draft = $("#chatInput")?.value || previousChat.draft;
     previousChat.controller?.abort();
@@ -411,7 +437,7 @@ async function loadKnowledge(id, force = false) {
     }
     history.replaceState(null, "", `#/knowledge/${encodeURIComponent(id)}`);
     renderKnowledge(knowledge);
-    await loadChatHistory(id);
+    await Promise.all([loadChatHistory(id), loadNote(id, force)]);
     if (state.activeResultTab === "transcript") await ensureTranscriptLoaded();
   } catch (error) {
     state.error = error.message;
@@ -429,7 +455,7 @@ function renderKnowledge(knowledge) {
   renderInsightPanel(knowledge);
   renderQuestionChips(knowledge.analysis?.thoughts || []);
   renderChatHistory();
-  renderNoteDraft();
+  renderNoteState(knowledge.id);
   $("#workspaceTitle").textContent = knowledge.source?.title || knowledge.id || "视频知识工作台";
   const model = knowledge.manifest?.llm_model || knowledge.analysis?.model || "";
   const provider = knowledge.manifest?.llm_provider || knowledge.analysis?.provider || "";
@@ -872,6 +898,7 @@ function openNewTask() {
   $("#taskFrames").checked = true;
   setTaskSourceType("url");
   $("#newTaskDialog").showModal();
+  loadJobHistory();
 }
 
 function setTaskSourceType(type) {
@@ -914,7 +941,7 @@ function pollTask(jobId) {
       const data = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
       state.taskStatus = data.job;
       renderTaskProgress(data.job);
-      if (["success", "failed"].includes(data.job.status)) {
+      if (["success", "failed", "interrupted"].includes(data.job.status)) {
         clearInterval(taskPoller);
         $("#startTask").disabled = false;
         if (data.job.status === "success") {
@@ -939,8 +966,15 @@ function renderTaskProgress(job) {
   const latestStage = [...logs].reverse().find((line) => line.includes("阶段：")) || "";
   const stage = latestStage.split("阶段：").pop();
   const stageIndex = Math.max(0, stageOrder.indexOf(stage));
-  const percent = job.status === "success" ? 100 : job.status === "failed" ? 100 : Math.max(8, Math.round(((stageIndex + 1) / stageOrder.length) * 100));
-  $("#taskStatusText").textContent = job.status === "failed" ? (job.error || "处理失败") : job.status === "success" ? "处理完成" : stageLabel(stage || "queued");
+  const terminal = ["success", "failed", "interrupted"].includes(job.status);
+  const percent = terminal ? 100 : Math.max(8, Math.round(((stageIndex + 1) / stageOrder.length) * 100));
+  $("#taskStatusText").textContent = job.status === "failed"
+    ? (job.error || "处理失败")
+    : job.status === "interrupted"
+      ? (job.error || "任务已中断")
+      : job.status === "success"
+        ? "处理完成"
+        : stageLabel(stage || "queued");
   $("#taskPercent").textContent = `${percent}%`;
   $("#progressBar").style.width = `${percent}%`;
   $("#taskLogs").textContent = logs.slice(-10).join("\n") || "等待任务日志…";
@@ -1050,15 +1084,116 @@ function readJsonSetting(key, fallback) {
   catch { return fallback; }
 }
 
-function saveNoteDraft() {
-  if (!state.selectedKnowledgeId) return;
-  state.noteDrafts[state.selectedKnowledgeId] = $("#noteEditor").value;
-  $("#noteSaveStatus").textContent = "会话草稿 · 未同步";
+async function loadNote(knowledgeId, force = false) {
+  const noteState = currentNoteState(knowledgeId);
+  if (noteState.loaded && !force) {
+    if (state.selectedKnowledgeId === knowledgeId) renderNoteState(knowledgeId);
+    return;
+  }
+  noteState.loading = true;
+  noteState.error = "";
+  if (state.selectedKnowledgeId === knowledgeId) renderNoteState(knowledgeId);
+  try {
+    const data = await api(`/api/library/${encodeURIComponent(knowledgeId)}/notes`);
+    if (noteState.dirty && !force) return;
+    noteState.content = data.note?.content || "";
+    noteState.revision = data.note?.revision || "";
+    noteState.updatedAt = data.note?.updated_at || "";
+    noteState.loaded = true;
+  } catch (error) {
+    noteState.error = error.message;
+    noteState.loaded = true;
+  } finally {
+    noteState.loading = false;
+    if (state.selectedKnowledgeId === knowledgeId) renderNoteState(knowledgeId);
+  }
 }
 
-function renderNoteDraft() {
-  $("#noteEditor").value = state.noteDrafts[state.selectedKnowledgeId] || "";
-  $("#noteSaveStatus").textContent = "会话草稿 · 未同步";
+function saveNoteDraft() {
+  const knowledgeId = state.selectedKnowledgeId;
+  if (!knowledgeId) return;
+  const noteState = currentNoteState(knowledgeId);
+  noteState.content = $("#noteEditor").value;
+  noteState.loaded = true;
+  noteState.dirty = true;
+  noteState.error = "";
+  clearTimeout(noteState.timer);
+  noteState.timer = window.setTimeout(() => flushNoteSave(knowledgeId), 800);
+  renderNoteSaveStatus(noteState);
+}
+
+async function flushNoteSave(knowledgeId) {
+  const noteState = currentNoteState(knowledgeId);
+  clearTimeout(noteState.timer);
+  noteState.timer = 0;
+  if (noteState.saving) return noteState.savePromise;
+  if (!noteState.dirty || noteState.error) return null;
+  const content = noteState.content;
+  const revision = noteState.revision;
+  noteState.saving = true;
+  noteState.error = "";
+  if (state.selectedKnowledgeId === knowledgeId) renderNoteSaveStatus(noteState);
+  noteState.savePromise = api(`/api/library/${encodeURIComponent(knowledgeId)}/notes`, {
+    method: "PUT",
+    body: JSON.stringify({ content, revision }),
+  }).then((data) => {
+    noteState.revision = data.note?.revision || noteState.revision;
+    noteState.updatedAt = data.note?.updated_at || "";
+    noteState.dirty = noteState.content !== content;
+    if (state.selectedKnowledgeId === knowledgeId && data.export?.url && state.activeSource) {
+      state.activeSource.files = state.activeSource.files || {};
+      state.activeSource.files[data.export.name || "export_note.md"] = data.export.url;
+    }
+  }).catch((error) => {
+    noteState.error = error.message;
+    if (error.status === 409 && error.data?.note) {
+      noteState.revision = error.data.note.revision || noteState.revision;
+    }
+  }).finally(() => {
+    noteState.saving = false;
+    noteState.savePromise = null;
+    if (state.selectedKnowledgeId === knowledgeId) renderNoteSaveStatus(noteState);
+    if (noteState.dirty && !noteState.error) {
+      noteState.timer = window.setTimeout(() => flushNoteSave(knowledgeId), 800);
+    }
+  });
+  return noteState.savePromise;
+}
+
+function renderNoteState(knowledgeId = state.selectedKnowledgeId) {
+  const noteState = currentNoteState(knowledgeId);
+  const editor = $("#noteEditor");
+  editor.disabled = !knowledgeId || noteState.loading;
+  if (editor.value !== noteState.content) editor.value = noteState.content;
+  renderNoteSaveStatus(noteState);
+}
+
+function renderNoteSaveStatus(noteState) {
+  const status = $("#noteSaveStatus");
+  status.classList.toggle("error", Boolean(noteState.error));
+  status.textContent = noteState.loading
+    ? "正在读取…"
+    : noteState.error
+      ? `保存失败 · ${noteState.error}`
+      : noteState.saving
+        ? "正在保存…"
+        : noteState.dirty
+          ? "等待保存…"
+          : noteState.loaded
+            ? "已保存"
+            : "未加载";
+}
+
+function flushPendingNotesOnUnload() {
+  Object.entries(state.noteStateByKnowledgeId).forEach(([knowledgeId, noteState]) => {
+    if (!noteState.dirty || noteState.saving || noteState.error) return;
+    fetch(`/api/library/${encodeURIComponent(knowledgeId)}/notes`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: noteState.content, revision: noteState.revision }),
+      keepalive: true,
+    });
+  });
 }
 
 function insertNoteTimestamp() {
@@ -1068,6 +1203,45 @@ function insertNoteTimestamp() {
   editor.setRangeText(timestamp, editor.selectionStart, editor.selectionEnd, "end");
   editor.focus();
   saveNoteDraft();
+}
+
+async function loadJobHistory() {
+  const root = $("#jobHistory");
+  root.innerHTML = '<div class="task-history-empty">正在读取历史任务…</div>';
+  try {
+    const data = await api("/api/jobs");
+    renderJobHistory(data.jobs || []);
+  } catch (error) {
+    root.innerHTML = `<div class="task-history-empty">历史任务读取失败：${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderJobHistory(jobs) {
+  const root = $("#jobHistory");
+  if (!jobs.length) {
+    root.innerHTML = '<div class="task-history-empty">暂无历史任务</div>';
+    return;
+  }
+  root.innerHTML = jobs.slice(0, 8).map((job) => `
+    <button type="button" class="task-history-item" data-job-knowledge="${escapeAttr(job.knowledgeId || "")}" ${job.knowledgeId ? "" : "disabled"}>
+      <span><strong>${escapeHtml(job.knowledgeId || job.id)}</strong><small>${escapeHtml(formatJobTime(job.updatedAt || job.createdAt))}</small></span>
+      <em class="${escapeAttr(job.status)}">${escapeHtml(jobStatusLabel(job.status))}</em>
+    </button>`).join("");
+  $$("[data-job-knowledge]", root).forEach((button) => button.addEventListener("click", async () => {
+    const knowledgeId = button.dataset.jobKnowledge;
+    if (!knowledgeId) return;
+    $("#newTaskDialog").close();
+    await loadKnowledge(knowledgeId, true);
+  }));
+}
+
+function jobStatusLabel(status) {
+  return ({ queued: "等待", running: "处理中", success: "完成", failed: "失败", interrupted: "已中断" })[status] || status;
+}
+
+function formatJobTime(value) {
+  if (!value) return "";
+  return new Date(Number(value) * 1000).toLocaleString("zh-CN", { hour12: false });
 }
 
 function setFollowMode(value) {

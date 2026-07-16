@@ -19,7 +19,7 @@ from src.exporters import export_knowledge_package
 
 
 class ExporterTests(unittest.TestCase):
-    def _render(self) -> str:
+    def _render(self, export_legacy_note: bool = False, user_note: str = "") -> str:
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         source = SourceRecord(source_type="online_video", platform="youtube", source_url="https://youtube.com/watch?v=abc", source_id="abc", title="测试视频", author="作者")
@@ -37,7 +37,9 @@ class ExporterTests(unittest.TestCase):
             manifest=ProcessingManifest(task_id="task", status="completed", completed_at="now"),
             output_dir=root,
         )
-        export_knowledge_package(package)
+        if user_note:
+            (root / "user_notes.md").write_text(user_note, encoding="utf-8")
+        export_knowledge_package(package, export_legacy_note=export_legacy_note)
         return (root / "index.md").read_text(encoding="utf-8")
 
     def tearDown(self) -> None:
@@ -63,4 +65,10 @@ class ExporterTests(unittest.TestCase):
         text = self._render()
         self.assertNotIn("## 术语", text)
         self.assertNotIn("null", text)
+
+    def test_compatible_export_includes_user_notes(self) -> None:
+        self._render(export_legacy_note=True, user_note="这是用户自己的判断。")
+        text = (Path(self.temp.name) / "export_note.md").read_text(encoding="utf-8")
+        self.assertIn("## 自写笔记", text)
+        self.assertIn("这是用户自己的判断。", text)
 

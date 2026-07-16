@@ -24,6 +24,7 @@ tmp/
 cache/
 logs/
 *.log
+.local/
 
 input/
 *.mp4

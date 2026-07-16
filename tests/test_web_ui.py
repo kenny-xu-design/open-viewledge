@@ -84,6 +84,20 @@ class WebUiContractTests(unittest.TestCase):
         self.assertNotIn("vs.note", self.js)
         self.assertNotIn("vs.chat", self.js)
 
+    def test_notes_use_backend_persistence_instead_of_session_drafts(self) -> None:
+        self.assertIn("/notes`", self.js)
+        self.assertIn('method: "PUT"', self.js)
+        self.assertIn("flushNoteSave", self.js)
+        self.assertIn("keepalive: true", self.js)
+        self.assertNotIn("noteDrafts", self.js)
+        self.assertIn('id="noteSaveStatus">未加载', self.html)
+
+    def test_recent_job_history_is_visible_and_reloadable(self) -> None:
+        self.assertIn('id="jobHistory"', self.html)
+        self.assertIn('id="refreshJobs"', self.html)
+        self.assertIn('api("/api/jobs")', self.js)
+        self.assertIn("interrupted", self.js)
+
     def test_deepseek_is_the_only_task_backend(self) -> None:
         self.assertIn('id="taskBackend" type="hidden" value="deepseek"', self.html)
         self.assertNotIn('value="ollama"', self.html)

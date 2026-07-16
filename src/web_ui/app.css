@@ -295,6 +295,20 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
 .progress-track { height: 5px; margin: 8px 0; background: #e7e8ed; border-radius: 999px; overflow: hidden; }
 .progress-track span { display: block; width: 12%; height: 100%; background: var(--accent); transition: width .25s ease; }
 .task-progress pre { max-height: 110px; overflow: auto; white-space: pre-wrap; margin: 8px 0 0; color: var(--muted); font: 11px/1.5 Consolas, monospace; }
+.task-history { margin: 0 16px 15px; border-top: 1px solid var(--line); padding-top: 12px; }
+.task-history > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+.task-history > header strong { font-size: 12px; }
+.task-history-item { width: 100%; min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 8px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--text); text-align: left; }
+.task-history-item:not(:disabled):hover { background: var(--panel-soft); }
+.task-history-item:disabled { cursor: default; opacity: .75; }
+.task-history-item span { min-width: 0; display: grid; gap: 2px; }
+.task-history-item strong, .task-history-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-history-item strong { font-size: 12px; }
+.task-history-item small, .task-history-empty { color: var(--muted); font-size: 11px; }
+.task-history-item em { flex: 0 0 auto; font-style: normal; font-size: 11px; }
+.task-history-item em.success { color: var(--green); }
+.task-history-item em.failed, .task-history-item em.interrupted { color: var(--red); }
+.task-history-empty { padding: 10px 8px; }
 .runtime-info { margin: 3px 16px 12px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-soft); color: var(--muted); font: 11px/1.5 Consolas, "Microsoft YaHei", monospace; overflow-wrap: anywhere; }
 .runtime-info.warning { border-color: #edcf9b; background: var(--orange-soft); color: #80530f; }
 .settings-list .runtime-info { margin: 0; }
@@ -490,6 +504,7 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
 .notes-pane textarea { flex: 1; width: 100%; min-height: 0; resize: none; border: 0; outline: 0; padding: 16px; line-height: 1.7; color: var(--text); background: var(--panel); }
 .notes-pane textarea::placeholder { color: var(--faint); }
 .save-status { color: var(--orange); }
+.save-status.error { color: var(--red); }
 .obsidian-state { overflow: hidden; text-overflow: ellipsis; }
 .layout-settings > p { margin: 0; color: var(--muted); line-height: 1.55; }
 

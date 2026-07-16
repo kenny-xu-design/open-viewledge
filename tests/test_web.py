@@ -211,6 +211,7 @@ class WebLibraryTests(unittest.TestCase):
             "# 分组字幕\n\n## 1. 开场\n\n**时间：00:00 - 00:12**\n\n这是分组字幕。\n",
             encoding="utf-8",
         )
+        (package / "index.md").write_text("# 真实记录\n\n## 摘要\n\n摘要内容。\n", encoding="utf-8")
         return package
 
     def test_library_lists_only_knowledge_packages(self) -> None:
@@ -327,6 +328,54 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("tools", payload)
         self.assertIn("providers", payload)
         self.assertIn("inProjectVenv", payload)
+
+    def test_notes_endpoint_persists_and_updates_compatible_export(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = WebLibraryTests()._write_package(root)
+            with patch("src.web.OUTPUT_ROOT", root):
+                with urlopen(f"{self.base_url}/api/library/demo/notes", timeout=3) as response:
+                    initial = json.loads(response.read().decode("utf-8"))["note"]
+                request = Request(
+                    f"{self.base_url}/api/library/demo/notes",
+                    data=json.dumps({"content": "持久化笔记", "revision": initial["revision"]}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="PUT",
+                )
+                with urlopen(request, timeout=3) as response:
+                    saved = json.loads(response.read().decode("utf-8"))
+                with urlopen(f"{self.base_url}/api/library/demo/notes", timeout=3) as response:
+                    reloaded = json.loads(response.read().decode("utf-8"))["note"]
+            self.assertEqual(saved["note"]["content"], "持久化笔记")
+            self.assertEqual(reloaded["content"], "持久化笔记")
+            self.assertEqual((package / "user_notes.md").read_text(encoding="utf-8"), "持久化笔记")
+            self.assertIn("持久化笔记", (package / "export_note.md").read_text(encoding="utf-8"))
+
+    def test_notes_endpoint_rejects_stale_revision(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            WebLibraryTests()._write_package(root)
+            with patch("src.web.OUTPUT_ROOT", root):
+                with urlopen(f"{self.base_url}/api/library/demo/notes", timeout=3) as response:
+                    initial = json.loads(response.read().decode("utf-8"))["note"]
+                first = Request(
+                    f"{self.base_url}/api/library/demo/notes",
+                    data=json.dumps({"content": "第一版", "revision": initial["revision"]}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="PUT",
+                )
+                with urlopen(first, timeout=3):
+                    pass
+                stale = Request(
+                    f"{self.base_url}/api/library/demo/notes",
+                    data=json.dumps({"content": "过期版本", "revision": initial["revision"]}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="PUT",
+                )
+                with self.assertRaises(HTTPError) as context:
+                    urlopen(stale, timeout=3)
+
+        self.assertEqual(context.exception.code, 409)
 
 
 if __name__ == "__main__":

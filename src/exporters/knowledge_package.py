@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ..domain.models import KnowledgePackage
 from ..utils import save_json, write_text
+from .compatible_note import refresh_compatible_export
 from .markdown import render_index
 
 
@@ -23,8 +24,7 @@ def export_knowledge_package(package: KnowledgePackage, export_legacy_note: bool
     render_index(package, Path(__file__).parent / "templates", index)
     files = [index, metadata, manifest, analysis, timeline, source_md]
     if export_legacy_note:
-        legacy = root / "export_note.md"
-        write_text(legacy, index.read_text(encoding="utf-8"))
+        legacy = refresh_compatible_export(root)
         files.append(legacy)
     return files
 
