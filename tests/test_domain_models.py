@@ -4,6 +4,8 @@ import unittest
 
 from src.domain.models import AnalysisResult, ProcessingManifest, SourceRecord, TranscriptGroup, TranscriptSegment
 from src.main import normalize_backend
+from src.pipeline.context import PipelineContext
+from src.config import AppConfig
 from src.utils import UserFacingError
 
 
@@ -32,3 +34,13 @@ class DomainModelTests(unittest.TestCase):
         self.assertEqual(normalize_backend(None), "deepseek")
         with self.assertRaisesRegex(UserFacingError, "已停用"):
             normalize_backend("ollama")
+
+    def test_pipeline_context_keeps_previous_manifest_for_cache_validation(self) -> None:
+        context = PipelineContext(
+            config=AppConfig(),
+            input_value="video.mp4",
+            output_dir=__import__("pathlib").Path("output"),
+            analysis_profile="summary",
+            previous_manifest={"sample_seconds": 30},
+        )
+        self.assertEqual(context.previous_manifest["sample_seconds"], 30)

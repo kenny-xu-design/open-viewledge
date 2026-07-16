@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
+from .chat import answer_question
+from .chat_store import ChatStore
+from .providers.llm import ProviderRegistry
+from .utils import UserFacingError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = PROJECT_ROOT / "output"
@@ -288,8 +292,23 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
     media_kind = "external"
     if media_available:
         media_kind = "audio" if media_path.suffix.lower() in {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"} else "video"
+    external_url = source.get("canonical_url") or source.get("source_url") or metadata.get("source_url") or ""
+    embed = _external_player_descriptor(str(external_url))
+    platform = str(source.get("platform") or metadata.get("platform") or "local").lower()
+    normalized_platform = "bilibili" if platform in {"bili", "bilibili"} else platform
+    if normalized_platform not in {"local", "youtube", "bilibili"}:
+        normalized_platform = "generic" if external_url else "local"
+    video_id = str((embed or {}).get("videoId") or source.get("video_id") or metadata.get("video_id") or "")
     return {
         "id": knowledge_id,
+        "knowledge_id": knowledge_id,
+        "source_type": "online_video" if external_url and not media_available else "local",
+        "platform": normalized_platform,
+        "source_url": external_url,
+        "source_id": video_id,
+        "video_id": video_id,
+        "thumbnail": source.get("thumbnail") or metadata.get("thumbnail") or "",
+        "duration": float(source.get("duration") or metadata.get("duration") or 0),
         "status": manifest.get("status") or "unknown",
         "currentStage": manifest.get("current_stage") or "",
         "source": source,
@@ -302,10 +321,38 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
             "kind": media_kind,
             "available": media_available,
             "url": f"/api/library/{encoded_id}/media" if media_available else "",
-            "externalUrl": source.get("canonical_url") or source.get("source_url") or metadata.get("source_url") or "",
+            "externalUrl": external_url,
             "thumbnail": source.get("thumbnail") or metadata.get("thumbnail") or "",
+            "embed": embed,
         },
     }
+
+
+def _external_player_descriptor(source_url: str) -> dict[str, str] | None:
+    """Return an allow-listed official player descriptor for supported platforms."""
+    if not source_url:
+        return None
+    parsed = urlparse(source_url)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    if host in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}:
+        video_id = ""
+        if host == "youtu.be":
+            video_id = parsed.path.strip("/").split("/", 1)[0]
+        else:
+            from urllib.parse import parse_qs
+
+            video_id = parse_qs(parsed.query).get("v", [""])[0]
+        if re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id):
+            return {"provider": "youtube", "videoId": video_id}
+    if host in {"bilibili.com", "www.bilibili.com", "m.bilibili.com", "b23.tv"}:
+        match = re.search(r"(?i)(BV[0-9A-Za-z]{10})", source_url)
+        if match:
+            return {
+                "provider": "bilibili",
+                "videoId": match.group(1),
+                "url": f"https://player.bilibili.com/player.html?bvid={match.group(1)}&p=1&danmaku=0",
+            }
+    return None
 
 
 def load_transcript_groups(knowledge_id: str) -> list[dict[str, Any]]:
@@ -330,7 +377,81 @@ def load_transcript_groups(knowledge_id: str) -> list[dict[str, Any]]:
             for index, item in enumerate(timeline)
             if isinstance(item, dict)
         ]
+    raw_path = directory / "transcript.raw.jsonl"
+    if raw_path.exists():
+        segments = []
+        for line in raw_path.read_text(encoding="utf-8").splitlines():
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict) and str(item.get("text") or "").strip():
+                segments.append(item)
+        groups = []
+        for offset in range(0, len(segments), 12):
+            chunk = segments[offset : offset + 12]
+            groups.append(
+                {
+                    "index": len(groups),
+                    "start": float(chunk[0].get("start") or 0),
+                    "end": float(chunk[-1].get("end") or chunk[-1].get("start") or 0),
+                    "title": f"字幕片段 {len(groups) + 1}",
+                    "text": " ".join(str(item.get("text") or "").strip() for item in chunk),
+                    "keywords": [],
+                    "sourceLink": "",
+                }
+            )
+        return groups
     return []
+
+
+def chat_with_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
+    knowledge_id = str(payload.get("knowledge_id") or "").strip()
+    if not knowledge_id:
+        raise ValueError("knowledge_id 不能为空。")
+    knowledge = load_knowledge_package(knowledge_id)
+    groups = load_transcript_groups(knowledge_id)
+    client_history = payload.get("history") or []
+    if not isinstance(client_history, list):
+        raise ValueError("history 必须是数组。")
+    question = str(payload.get("question") or "")
+    requested_provider = str(payload.get("provider") or "auto")
+    registry = ProviderRegistry()
+    visual_terms = ("画面", "截图", "界面", "按钮", "图表", "图像", "视觉")
+    visual_fallback = requested_provider == "auto" and any(term in question for term in visual_terms) and not any(
+        item["name"] == "gemini" and item["configured"] for item in registry.statuses()
+    )
+    provider = registry.resolve(
+        requested_provider,
+        question,
+        str(payload.get("model") or "") or None,
+    )
+    store = ChatStore(resolve_library_dir)
+    stored_history = store.load(knowledge_id).get("messages", [])
+    result = answer_question(
+        question=question,
+        groups=groups,
+        analysis=knowledge.get("analysis") if isinstance(knowledge.get("analysis"), dict) else {},
+        source=knowledge.get("source") if isinstance(knowledge.get("source"), dict) else {},
+        history=stored_history if stored_history else client_history,
+        provider=provider,
+        knowledge_id=knowledge_id,
+    )
+    if visual_fallback:
+        result["warning"] = "Gemini 未配置，本次仅使用 DeepSeek 和字幕文本回答，未执行视觉识别。"
+    new_messages = [] if stored_history and stored_history[-1].get("role") == "user" and stored_history[-1].get("content") == question else [{"role": "user", "content": question}]
+    new_messages.append(
+        {
+            "role": "assistant",
+            "content": result["answer"],
+            "citations": result["citations"],
+            "provider": result["provider"],
+            "model": result["model"],
+            "warning": result.get("warning", ""),
+        }
+    )
+    store.append(knowledge_id, new_messages)
+    return result
 
 
 def resolve_library_dir(knowledge_id: str) -> Path:
@@ -438,6 +559,8 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                     "warning": _runtime_python_warning(),
                 }
             )
+        elif parsed.path == "/api/providers":
+            self._send_json({"providers": ProviderRegistry().statuses()})
         elif parsed.path.startswith("/api/library/"):
             self._handle_library_get(parsed.path)
         elif parsed.path == "/api/jobs":
@@ -459,8 +582,30 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/library/") and parsed.path.endswith("/chat"):
+            try:
+                knowledge_id = unquote(parsed.path[len("/api/library/") : -len("/chat")].strip("/"))
+                payload = self._read_json_body()
+                messages = payload.get("messages") or []
+                if not isinstance(messages, list):
+                    raise ValueError("messages 必须是数组。")
+                self._send_json({"chat": ChatStore(resolve_library_dir).replace(knowledge_id, messages)})
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError:
+                self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
+            return
         if parsed.path == "/api/chat":
-            self._send_json({"error": "上下文对话功能尚未接入"}, HTTPStatus.NOT_IMPLEMENTED)
+            try:
+                self._send_json(chat_with_knowledge(self._read_json_body()))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError:
+                self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
+            except UserFacingError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+            except Exception:
+                self._send_json({"error": "上下文对话请求失败。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         if parsed.path.endswith("/capture-frame") and parsed.path.startswith("/api/library/"):
             self._send_json({"error": "服务端关键帧保存接口尚未接入"}, HTTPStatus.NOT_IMPLEMENTED)
@@ -480,8 +625,29 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             return
         self._send_json({"job": job_to_dict(job)}, HTTPStatus.CREATED)
 
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/library/") and parsed.path.endswith("/chat"):
+            try:
+                knowledge_id = unquote(parsed.path[len("/api/library/") : -len("/chat")].strip("/"))
+                ChatStore(resolve_library_dir).clear(knowledge_id)
+                self._send_json({"knowledge_id": knowledge_id, "cleared": True})
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError:
+                self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
+            return
+        self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[web] {self.address_string()} - {fmt % args}")
+
+    def _read_json_body(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        if not isinstance(payload, dict):
+            raise ValueError("请求体必须是 JSON 对象。")
+        return payload
 
     def _send_html(self, html: str) -> None:
         data = html.encode("utf-8")
@@ -502,6 +668,9 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             action = parts[1]
             if action == "transcript" and len(parts) == 2:
                 self._send_json({"groups": load_transcript_groups(knowledge_id)})
+                return
+            if action == "chat" and len(parts) == 2:
+                self._send_json({"chat": ChatStore(resolve_library_dir).load(knowledge_id)})
                 return
             if action == "media" and len(parts) == 2:
                 self._send_path(resolve_media_path(knowledge_id), allow_range=True)

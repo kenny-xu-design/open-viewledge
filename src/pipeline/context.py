@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+from typing import Any
 
 from ..config import AppConfig
 from ..domain.models import AnalysisResult, ProcessingManifest, SourceRecord, TimelineEntry, TranscriptGroup, TranscriptSegment
@@ -30,6 +31,7 @@ class PipelineContext:
     timeline: list[TimelineEntry] = field(default_factory=list)
     analysis: AnalysisResult | None = None
     manifest: ProcessingManifest | None = None
+    previous_manifest: dict[str, Any] = field(default_factory=dict)
 
     def log(self, message: str) -> None:
         if self.log_callback:

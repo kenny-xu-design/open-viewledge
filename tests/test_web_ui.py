@@ -41,11 +41,31 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("class MediaController", self.js)
         self.assertIn("class HtmlMediaController", self.js)
         self.assertIn("class ExternalLinkController", self.js)
+        self.assertIn("class YouTubeMediaController", self.js)
+        self.assertIn("class BilibiliEmbedController", self.js)
+        self.assertIn("class LocalVideoController", self.js)
+        self.assertIn("class LocalAudioController", self.js)
+        self.assertIn("supportsSeek()", self.js)
+        self.assertIn("mediaController?.destroy()", self.js)
+        self.assertIn("mediaController?.openExternally", self.js)
 
     def test_chat_uses_real_endpoint_and_has_no_simulated_answer(self) -> None:
         self.assertIn('api("/api/chat"', self.js)
-        self.assertIn("上下文对话功能尚未接入", self.js)
+        self.assertIn("data.citations", self.js)
+        self.assertNotIn("上下文对话功能尚未接入", self.js)
         self.assertNotIn("模拟回答", self.js)
+        self.assertIn("currentChatHistory()", self.js)
+        self.assertIn("data.model", self.js)
+        self.assertIn("AbortController", self.js)
+        self.assertIn("data.knowledge_id !== knowledgeId", self.js)
+        self.assertIn("/chat`", self.js)
+
+    def test_provider_selector_and_chat_controls_exist(self) -> None:
+        self.assertIn('id="chatProvider"', self.html)
+        self.assertIn('value="deepseek"', self.html)
+        self.assertIn('value="gemini"', self.html)
+        self.assertIn('id="clearChat"', self.html)
+        self.assertIn("regenerateLastAnswer", self.js)
 
     def test_local_storage_is_limited_to_ui_settings(self) -> None:
         settings_match = re.search(r"const SETTINGS = \{(?P<body>.*?)\};", self.js, re.S)

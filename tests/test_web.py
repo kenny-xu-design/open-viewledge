@@ -21,10 +21,21 @@ from src.web import (
     load_transcript_groups,
     resolve_library_file,
     _timestamp_seconds,
+    _external_player_descriptor,
 )
 
 
 class WebCommandTests(unittest.TestCase):
+    def test_official_external_player_descriptors(self) -> None:
+        self.assertEqual(
+            _external_player_descriptor("https://www.youtube.com/watch?v=BqF6PUAXY1M"),
+            {"provider": "youtube", "videoId": "BqF6PUAXY1M"},
+        )
+        bilibili = _external_player_descriptor("https://www.bilibili.com/video/BV19mMu66Eap/")
+        self.assertEqual(bilibili["provider"], "bilibili")
+        self.assertEqual(bilibili["videoId"], "BV19mMu66Eap")
+        self.assertIsNone(_external_player_descriptor("https://example.com/video"))
+
     def test_build_url_command(self) -> None:
         python_executable = r"C:\test\.venv\Scripts\python.exe"
         command = build_cli_command(
@@ -251,18 +262,25 @@ class WebApiTests(unittest.TestCase):
             urlopen(f"{self.base_url}/api/library/definitely-missing", timeout=3)
         self.assertEqual(context.exception.code, 404)
 
-    def test_chat_endpoint_returns_real_not_implemented_response(self) -> None:
+    @patch("src.web.chat_with_knowledge")
+    def test_chat_endpoint_returns_grounded_response(self, mocked_chat) -> None:
+        mocked_chat.return_value = {
+            "answer": "回答 [1]",
+            "citations": [{"index": 1, "start": 30}],
+            "provider": "deepseek",
+            "model": "test-model",
+            "usage": {},
+        }
         request = Request(
             f"{self.base_url}/api/chat",
             data=json.dumps({"knowledge_id": "demo", "question": "test"}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with self.assertRaises(HTTPError) as context:
-            urlopen(request, timeout=3)
-        payload = json.loads(context.exception.read().decode("utf-8"))
-        self.assertEqual(context.exception.code, 501)
-        self.assertEqual(payload["error"], "上下文对话功能尚未接入")
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(payload["answer"], "回答 [1]")
+        self.assertEqual(payload["citations"][0]["start"], 30)
 
     def test_runtime_endpoint_reports_current_python(self) -> None:
         with urlopen(f"{self.base_url}/api/runtime", timeout=3) as response:

@@ -61,6 +61,7 @@ class PipelineOrchestrator:
             self._stage(context, "collect_metadata", lambda: setattr(context, "source", source_adapter.collect_metadata()))
             assert context.source and context.manifest
             context.output_dir = ensure_dir(Path(self.config.output_dir) / _package_name(context.source.title, context.source.source_id))
+            context.previous_manifest = load_json(context.output_dir / "manifest.json")
             ensure_dir(context.output_dir / "audio")
             ensure_dir(context.output_dir / "frames")
             context.manifest.source = context.source
@@ -70,7 +71,7 @@ class PipelineOrchestrator:
                 cached_raw = context.output_dir / "transcript.raw.jsonl"
                 if cached_raw.exists():
                     cached_segments = read_jsonl(cached_raw)
-                    cached_manifest = load_json(context.output_dir / "manifest.json")
+                    cached_manifest = context.previous_manifest
                     cache_sample = cached_manifest.get("sample_seconds")
                     if (
                         cached_segments

@@ -175,13 +175,13 @@
 
     <section class="collaboration-pane workspace-module" id="collaborationPane" data-module="collaboration">
       <section class="chat-pane" id="chatPane">
-        <header><div><strong>AI 对话</strong><span class="unavailable-dot" title="对话后端待接入"></span><span class="module-status">待接入</span></div><button class="icon-button small" id="expandChat" aria-label="展开对话"><svg><use href="#i-full"/></svg></button></header>
-        <div class="chat-history" id="chatHistory"><div class="chat-empty">可从左侧思考题发起提问。当前对话后端尚未接入。</div></div>
+        <header><div><strong>AI 对话</strong><span class="available-dot" id="chatProviderDot" title="模型状态"></span><span class="module-status" id="chatProviderStatus">字幕检索</span></div><div class="chat-header-actions"><button class="quiet-button" id="clearChat">清空</button><button class="icon-button small" id="expandChat" aria-label="展开对话"><svg><use href="#i-full"/></svg></button></div></header>
+        <div class="chat-history" id="chatHistory"><div class="chat-empty">针对当前视频提问，回答会附带可跳转的字幕时间引用。</div></div>
         <div class="question-chips" id="questionChips"></div>
         <div class="chat-composer">
           <textarea id="chatInput" rows="3" placeholder="询问当前知识记录…" aria-label="聊天问题"></textarea>
           <div class="composer-footer">
-            <div class="composer-tools"><button class="icon-button small" aria-label="添加附件待开发" title="附件功能待开发" disabled><svg><use href="#i-clip"/></svg></button><span class="model-label">上下文对话待接入</span></div>
+            <div class="composer-tools"><button class="icon-button small" aria-label="添加附件待开发" title="附件功能待开发" disabled><svg><use href="#i-clip"/></svg></button><select id="chatProvider" aria-label="对话模型"><option value="auto">自动</option><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option></select><span class="model-label" id="chatModelLabel">当前视频字幕</span></div>
             <button class="send-button" id="sendChat" aria-label="发送问题"><svg><use href="#i-send"/></svg></button>
           </div>
         </div>

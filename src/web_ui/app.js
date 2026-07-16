@@ -22,7 +22,7 @@ const state = {
   moduleOrder: readModuleOrder(),
   moduleWidths: readJsonSetting(SETTINGS.moduleWidths, {}),
   taskStatus: null,
-  chatHistory: [],
+  chatStateByKnowledgeId: {},
   loading: false,
   error: "",
   filter: "all",
@@ -30,6 +30,7 @@ const state = {
   transcriptLoadedFor: "",
   scrollPositions: { summary: 0, transcript: 0 },
   noteDrafts: {},
+  providerStatuses: {},
 };
 
 const knowledgeCache = new Map();
@@ -39,13 +40,19 @@ let taskPoller = 0;
 let activeSourceType = "url";
 
 class MediaController {
-  load() {}
+  load(source) { this.source = source; }
+  destroy() {}
   play() {}
   pause() {}
   seek() {}
   getCurrentTime() { return 0; }
   setPlaybackRate() {}
   setLoop() {}
+  supportsSeek() { return false; }
+  openExternally(seconds = 0) {
+    const url = timestampLink(this.source?.canonical_url || this.source?.source_url || "", seconds);
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
+  }
   fullscreen() {}
 }
 
@@ -54,6 +61,7 @@ class HtmlMediaController extends MediaController {
     super();
     this.element = element;
   }
+  destroy() { this.pause(); this.element.removeAttribute("src"); this.element.load(); }
   load() { this.element.load(); }
   play() { return this.element.play(); }
   pause() { this.element.pause(); }
@@ -61,22 +69,105 @@ class HtmlMediaController extends MediaController {
   getCurrentTime() { return this.element.currentTime || 0; }
   setPlaybackRate(rate) { this.element.playbackRate = rate; }
   setLoop(value) { this.element.loop = value; }
+  supportsSeek() { return true; }
   fullscreen() { this.element.requestFullscreen?.(); }
 }
+
+class LocalVideoController extends HtmlMediaController {}
+class LocalAudioController extends HtmlMediaController {}
 
 class ExternalLinkController extends MediaController {
   constructor(source) {
     super();
-    this.source = source;
+    this.load(source);
   }
   play() { showToast("在线视频预览未嵌入，请在原网站播放"); }
-  seek(seconds) {
-    const url = timestampLink(this.source?.canonical_url || this.source?.source_url || "", seconds);
-    if (url) window.open(url, "_blank", "noopener,noreferrer");
-  }
+  seek() {}
   getCurrentTime() { return state.currentTime; }
   setPlaybackRate() {}
   fullscreen() {}
+}
+
+class YouTubeMediaController extends MediaController {
+  constructor(element, videoId, source, onFallback) {
+    super();
+    this.load(source);
+    this.element = element;
+    this.ready = false;
+    this.player = null;
+    this.timer = 0;
+    loadYouTubeApi().then(() => {
+      if (!element.isConnected || state.activeSource?.media?.embed?.videoId !== videoId) return;
+      this.player = new window.YT.Player(element, {
+        videoId,
+        playerVars: { playsinline: 1, rel: 0 },
+        events: {
+          onReady: () => {
+            this.ready = true;
+            this.timer = window.setInterval(() => {
+              state.currentTime = this.getCurrentTime();
+              updateTimeDisplay();
+              updateActiveChapter();
+            }, 500);
+            updateTimeDisplay();
+          },
+          onStateChange: (event) => setPlayIcon(event.data === window.YT.PlayerState.PLAYING),
+          onError: () => onFallback("YouTube 视频不允许嵌入"),
+        },
+      });
+    }).catch(() => onFallback("YouTube 播放器加载失败"));
+  }
+  destroy() { window.clearInterval(this.timer); this.ready = false; this.player?.destroy?.(); this.player = null; }
+  play() { if (this.ready) this.player.playVideo(); }
+  pause() { if (this.ready) this.player.pauseVideo(); }
+  seek(seconds) {
+    state.currentTime = Math.max(0, seconds);
+    if (this.ready) {
+      this.player.seekTo(state.currentTime, true);
+      this.player.playVideo();
+    }
+  }
+  getCurrentTime() { return this.ready ? Number(this.player.getCurrentTime() || 0) : state.currentTime; }
+  setPlaybackRate(rate) { if (this.ready) this.player.setPlaybackRate(rate); }
+  supportsSeek() { return true; }
+  fullscreen() { this.player?.getIframe?.().requestFullscreen?.(); }
+}
+
+class BilibiliEmbedController extends MediaController {
+  constructor(element, videoId, source) { super(); this.element = element; this.videoId = videoId; this.load(source); }
+  destroy() { this.element.src = "about:blank"; }
+  play() { showToast("请在播放器内点击播放"); }
+  seek() {}
+  getCurrentTime() { return state.currentTime; }
+  fullscreen() { this.element.requestFullscreen?.(); }
+}
+
+let youtubeApiPromise = null;
+function loadYouTubeApi() {
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+  if (youtubeApiPromise) return youtubeApiPromise;
+  youtubeApiPromise = new Promise((resolve, reject) => {
+    const previous = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { previous?.(); resolve(window.YT); };
+    const script = document.createElement("script");
+    script.src = "https://www.youtube.com/iframe_api";
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return youtubeApiPromise;
+}
+
+function currentChatHistory() {
+  if (!state.selectedKnowledgeId) return [];
+  return currentChatState().messages;
+}
+
+function currentChatState() {
+  const id = state.selectedKnowledgeId;
+  if (!id) return { messages: [], draft: "", loading: false, controller: null, provider: "auto" };
+  return state.chatStateByKnowledgeId[id] || (state.chatStateByKnowledgeId[id] = {
+    messages: [], draft: "", loading: false, controller: null, provider: "auto", loaded: false,
+  });
 }
 
 document.addEventListener("DOMContentLoaded", init);
@@ -85,6 +176,7 @@ async function init() {
   applyPersistedLayout();
   bindEvents();
   loadRuntimeInfo();
+  loadProviderStatuses();
   setResultTab(state.activeResultTab, false);
   $("#followPlayback").checked = state.transcriptFollowMode;
   $("#footerFollow").checked = state.transcriptFollowMode;
@@ -137,6 +229,12 @@ function bindEvents() {
   $("#backToTop").addEventListener("click", () => $("#resultScroll").scrollTo({ top: 0, behavior: "smooth" }));
   $("#transcriptSearch").addEventListener("input", renderTranscriptGroups);
   $("#sendChat").addEventListener("click", sendChat);
+  $("#clearChat").addEventListener("click", clearCurrentChat);
+  $("#chatProvider").addEventListener("change", (event) => {
+    currentChatState().provider = event.target.value;
+    renderProviderStatus();
+  });
+  $("#chatInput").addEventListener("input", (event) => currentChatState().draft = event.target.value);
   $("#chatInput").addEventListener("keydown", (event) => {
     if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); sendChat(); }
   });
@@ -167,6 +265,11 @@ function bindEvents() {
     const target = event.target.closest("[data-seek]");
     if (target) seekTo(Number(target.dataset.seek));
   });
+  $("#chatHistory").addEventListener("click", (event) => {
+    const target = event.target.closest("[data-seek]");
+    if (target) seekTo(Number(target.dataset.seek));
+    if (event.target.closest("[data-regenerate]")) regenerateLastAnswer();
+  });
   $("#noteEditor").addEventListener("input", saveNoteDraft);
   $("#insertTimestamp").addEventListener("click", insertNoteTimestamp);
   $$('[id^="layoutPosition"]').forEach((select) => select.addEventListener("change", updateLayoutFromControls));
@@ -187,6 +290,29 @@ async function api(path, options = {}) {
   const data = type.includes("application/json") ? await response.json() : await response.text();
   if (!response.ok) throw new Error(data?.error || `请求失败：${response.status}`);
   return data;
+}
+
+async function loadProviderStatuses() {
+  try {
+    const data = await api("/api/providers");
+    state.providerStatuses = Object.fromEntries((data.providers || []).map((item) => [item.name, item]));
+  } catch (error) {
+    state.providerStatuses = {};
+  }
+  renderProviderStatus();
+}
+
+function renderProviderStatus() {
+  const chatState = currentChatState();
+  const selected = chatState.provider || "auto";
+  const status = selected === "auto" ? null : state.providerStatuses[selected];
+  $("#chatProvider").value = selected;
+  const configured = selected === "auto" ? Object.values(state.providerStatuses).some((item) => item.configured) : Boolean(status?.configured);
+  $("#chatProviderDot").className = configured ? "available-dot" : "unavailable-dot";
+  $("#chatProviderStatus").textContent = selected === "auto" ? "自动路由" : (configured ? "已配置" : "未配置");
+  $("#chatModelLabel").textContent = status?.model || "当前视频字幕";
+  $("#sendChat").disabled = chatState.loading || !configured;
+  $("#sendChat").title = configured ? "发送问题" : `${selected === "gemini" ? "Gemini" : "模型"} 未配置`;
 }
 
 async function refreshLibrary() {
@@ -243,6 +369,14 @@ function updateLibraryCounts() {
 
 async function loadKnowledge(id, force = false) {
   if (!id) return;
+  if (state.selectedKnowledgeId && state.selectedKnowledgeId !== id) {
+    const previousChat = currentChatState();
+    previousChat.draft = $("#chatInput")?.value || previousChat.draft;
+    previousChat.controller?.abort();
+    previousChat.loading = false;
+    mediaController?.destroy();
+    mediaController = null;
+  }
   state.selectedKnowledgeId = id;
   state.loading = true;
   renderLibrary();
@@ -258,13 +392,13 @@ async function loadKnowledge(id, force = false) {
     state.activeSource = knowledge;
     state.currentTime = 0;
     state.currentChapter = -1;
-    state.chatHistory = [];
     if (state.transcriptLoadedFor !== id) {
       state.transcriptGroups = [];
       state.transcriptLoadedFor = "";
     }
     history.replaceState(null, "", `#/knowledge/${encodeURIComponent(id)}`);
     renderKnowledge(knowledge);
+    await loadChatHistory(id);
     if (state.activeResultTab === "transcript") await ensureTranscriptLoaded();
   } catch (error) {
     state.error = error.message;
@@ -281,6 +415,7 @@ function renderKnowledge(knowledge) {
   renderSummary(knowledge);
   renderInsightPanel(knowledge);
   renderQuestionChips(knowledge.analysis?.thoughts || []);
+  renderChatHistory();
   renderNoteDraft();
   $("#workspaceTitle").textContent = knowledge.source?.title || knowledge.id || "视频知识工作台";
   const model = knowledge.manifest?.llm_model || knowledge.analysis?.model || "";
@@ -306,7 +441,7 @@ function renderMedia(knowledge) {
     video.addEventListener("play", () => setPlayIcon(true));
     video.addEventListener("pause", () => setPlayIcon(false));
     surface.appendChild(video);
-    mediaController = new HtmlMediaController(video);
+    mediaController = new LocalVideoController(video);
   } else if (media.kind === "audio" && media.available) {
     surface.innerHTML = '<div class="audio-surface"><svg><use href="#i-file"/></svg></div>';
     const audio = document.createElement("audio");
@@ -316,25 +451,25 @@ function renderMedia(knowledge) {
     audio.addEventListener("timeupdate", throttle(handleTimeUpdate, 300));
     audio.addEventListener("loadedmetadata", updateTimeDisplay);
     $(".audio-surface", surface).appendChild(audio);
-    mediaController = new HtmlMediaController(audio);
+    mediaController = new LocalAudioController(audio);
+  } else if (media.embed?.provider === "youtube" && media.embed.videoId) {
+    const player = document.createElement("div");
+    player.className = "official-player";
+    surface.appendChild(player);
+    mediaController = new YouTubeMediaController(player, media.embed.videoId, knowledge.source, (message) => {
+      if (state.selectedKnowledgeId === knowledge.id) renderExternalMedia(surface, knowledge, message);
+    });
+  } else if (media.embed?.provider === "bilibili" && media.embed.videoId && isSafeHttpUrl(media.embed.url)) {
+    const player = document.createElement("iframe");
+    player.className = "official-player";
+    player.src = media.embed.url;
+    player.allow = "autoplay; fullscreen; picture-in-picture";
+    player.allowFullscreen = true;
+    player.referrerPolicy = "strict-origin-when-cross-origin";
+    surface.appendChild(player);
+    mediaController = new BilibiliEmbedController(player, media.embed.videoId, knowledge.source);
   } else if (media.externalUrl) {
-    const wrapper = document.createElement("div");
-    wrapper.className = "external-media";
-    if (isSafeHttpUrl(media.thumbnail)) {
-      const image = document.createElement("img");
-      image.className = "media-poster";
-      image.alt = `${knowledge.source?.title || "在线视频"}封面`;
-      image.src = media.thumbnail;
-      image.referrerPolicy = "no-referrer";
-      wrapper.appendChild(image);
-    }
-    const button = document.createElement("button");
-    button.className = "external-open";
-    button.innerHTML = '<svg><use href="#i-external"/></svg><span>在原网站打开</span>';
-    button.addEventListener("click", openOriginal);
-    wrapper.appendChild(button);
-    surface.appendChild(wrapper);
-    mediaController = new ExternalLinkController(knowledge.source);
+    renderExternalMedia(surface, knowledge);
   } else {
     surface.className = "media-surface empty-surface";
     surface.innerHTML = '<div class="media-empty"><svg><use href="#i-video"/></svg><p>当前记录没有可预览媒体</p></div>';
@@ -342,6 +477,35 @@ function renderMedia(knowledge) {
   }
   setPlaybackRate(Number(localStorage.getItem(SETTINGS.playbackRate)) || 1);
   updateTimeDisplay();
+}
+
+function renderExternalMedia(surface, knowledge, message = "") {
+  mediaController?.destroy();
+  surface.innerHTML = "";
+  const media = knowledge.media || {};
+  const wrapper = document.createElement("div");
+  wrapper.className = "external-media";
+  if (isSafeHttpUrl(media.thumbnail)) {
+    const image = document.createElement("img");
+    image.className = "media-poster";
+    image.alt = `${knowledge.source?.title || "在线视频"}封面`;
+    image.src = media.thumbnail;
+    image.referrerPolicy = "no-referrer";
+    wrapper.appendChild(image);
+  }
+  if (message) {
+    const notice = document.createElement("span");
+    notice.className = "external-notice";
+    notice.textContent = message;
+    wrapper.appendChild(notice);
+  }
+  const button = document.createElement("button");
+  button.className = "external-open";
+  button.innerHTML = '<svg><use href="#i-external"/></svg><span>在原网站打开</span>';
+  button.addEventListener("click", openOriginal);
+  wrapper.appendChild(button);
+  surface.appendChild(wrapper);
+  mediaController = new ExternalLinkController(knowledge.source);
 }
 
 function renderSourceInfo(knowledge) {
@@ -518,15 +682,19 @@ function handleMediaAction(action) {
 }
 
 function togglePlay() {
-  const element = mediaController?.element;
-  if (element?.paused) mediaController.play();
-  else if (element) mediaController.pause();
-  else mediaController?.play();
+  if (mediaController instanceof HtmlMediaController) {
+    if (mediaController.element.paused) mediaController.play();
+    else mediaController.pause();
+    return;
+  }
+  mediaController?.play();
 }
 
 function seekTo(seconds) {
   state.currentTime = Math.max(0, seconds || 0);
-  mediaController?.seek(state.currentTime);
+  if (mediaController?.supportsSeek()) mediaController.seek(state.currentTime);
+  else mediaController?.openExternally(state.currentTime);
+  updateTimeDisplay();
   updateActiveChapter();
   setMobileView("media");
   $("#mediaSection").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -584,21 +752,97 @@ async function sendChat() {
   const input = $("#chatInput");
   const question = input.value.trim();
   if (!question || !state.selectedKnowledgeId) return;
-  state.chatHistory.push({ role: "user", content: question });
   input.value = "";
+  currentChatState().draft = "";
+  await requestChat(question, true);
+}
+
+async function requestChat(question, appendUser) {
+  const knowledgeId = state.selectedKnowledgeId;
+  const chatState = currentChatState();
+  if (appendUser) chatState.messages.push({ role: "user", content: question });
+  chatState.loading = true;
+  chatState.controller?.abort();
+  chatState.controller = new AbortController();
   renderChatHistory();
+  renderProviderStatus();
   try {
-    const data = await api("/api/chat", { method: "POST", body: JSON.stringify({ knowledge_id: state.selectedKnowledgeId, question, history: state.chatHistory.slice(0, -1) }) });
-    state.chatHistory.push({ role: "assistant", content: data.answer || "" });
+    const data = await api("/api/chat", {
+      method: "POST",
+      signal: chatState.controller.signal,
+      body: JSON.stringify({ knowledge_id: knowledgeId, question, provider: chatState.provider, model: null, history: chatState.messages.slice(0, -1) }),
+    });
+    if (state.selectedKnowledgeId !== knowledgeId || data.knowledge_id !== knowledgeId) return;
+    chatState.messages.push({ role: "assistant", content: data.answer || "", citations: data.citations || [], provider: data.provider || "", model: data.model || "", warning: data.warning || "" });
   } catch (error) {
-    state.chatHistory.push({ role: "system", content: error.message || "上下文对话功能尚未接入" });
+    if (error.name !== "AbortError" && state.selectedKnowledgeId === knowledgeId) {
+      chatState.messages.push({ role: "system", content: error.message || "上下文对话请求失败" });
+    }
+  } finally {
+    chatState.loading = false;
+    chatState.controller = null;
   }
+  if (state.selectedKnowledgeId === knowledgeId) {
+    renderChatHistory();
+    renderProviderStatus();
+  }
+}
+
+async function loadChatHistory(knowledgeId) {
+  const chatState = currentChatState();
+  if (!chatState.loaded) {
+    try {
+      const data = await api(`/api/library/${encodeURIComponent(knowledgeId)}/chat`);
+      if (state.selectedKnowledgeId !== knowledgeId) return;
+      chatState.messages = data.chat?.messages || [];
+      chatState.loaded = true;
+    } catch (error) {
+      chatState.messages = [{ role: "system", content: `聊天记录加载失败：${error.message}` }];
+    }
+  }
+  $("#chatInput").value = chatState.draft || "";
   renderChatHistory();
+  renderProviderStatus();
+}
+
+async function clearCurrentChat() {
+  if (!state.selectedKnowledgeId) return;
+  const knowledgeId = state.selectedKnowledgeId;
+  const chatState = currentChatState();
+  chatState.controller?.abort();
+  try {
+    await api(`/api/library/${encodeURIComponent(knowledgeId)}/chat`, { method: "DELETE" });
+    chatState.messages = [];
+    chatState.draft = "";
+    $("#chatInput").value = "";
+    renderChatHistory();
+  } catch (error) { showToast(error.message); }
+}
+
+async function regenerateLastAnswer() {
+  const chatState = currentChatState();
+  const userIndex = [...chatState.messages].map((item) => item.role).lastIndexOf("user");
+  if (userIndex < 0 || chatState.loading) return;
+  const question = chatState.messages[userIndex].content;
+  chatState.messages = chatState.messages.slice(0, userIndex + 1);
+  await api(`/api/library/${encodeURIComponent(state.selectedKnowledgeId)}/chat`, {
+    method: "POST",
+    body: JSON.stringify({ messages: chatState.messages }),
+  });
+  await requestChat(question, false);
 }
 
 function renderChatHistory() {
   const root = $("#chatHistory");
-  root.innerHTML = state.chatHistory.length ? state.chatHistory.map((item) => `<div class="chat-message ${escapeAttr(item.role)}">${escapeHtml(item.content)}</div>`).join("") : '<div class="chat-empty">可从摘要中的思考题发起提问。当前对话后端尚未接入。</div>';
+  const chatHistory = currentChatHistory();
+  root.innerHTML = chatHistory.length ? chatHistory.map((item) => {
+    const citations = Array.isArray(item.citations) ? item.citations : [];
+    const citationHtml = citations.length ? `<div class="chat-citations">${citations.map((citation) => `<button type="button" data-seek="${Number(citation.start || 0)}" title="${escapeAttr(citation.excerpt || citation.title || "字幕证据")}">[${Number(citation.index || 0)}] ${formatTime(Number(citation.start || 0))}</button>`).join("")}</div>` : "";
+    const warningHtml = item.warning ? `<div class="chat-warning">${escapeHtml(item.warning)}</div>` : "";
+    const modelHtml = item.role === "assistant" && item.model ? `<small class="chat-model">${escapeHtml(providerLabel(item.provider))} · ${escapeHtml(item.model)} · ${citations.length} 条证据 <button type="button" data-regenerate>重新生成</button></small>` : "";
+    return `<div class="chat-message ${escapeAttr(item.role)}"><div>${escapeHtml(item.content)}</div>${warningHtml}${citationHtml}${modelHtml}</div>`;
+  }).join("") : '<div class="chat-empty">针对当前视频提问，回答会附带可跳转的字幕时间引用。</div>';
+  if (currentChatState().loading) root.insertAdjacentHTML("beforeend", '<div class="chat-message assistant loading">正在检索当前视频并请求模型…</div>');
   root.scrollTop = root.scrollHeight;
 }
 
@@ -920,6 +1164,7 @@ function platformLabel(platform) {
 function providerLabel(provider) {
   const value = String(provider || "").toLowerCase();
   if (value.includes("deepseek")) return "DeepSeek";
+  if (value.includes("gemini")) return "Gemini";
   return provider || "AI";
 }
 
