@@ -203,17 +203,11 @@ It validates required files, JSON roots, domain schemas, meaningful transcript c
 
 The pipeline validates newly exported packages before reporting success. The Web UI uses the same inspection result for display status. CLI `inspect` can audit historical packages without rewriting them.
 
-## Existing Duplication
+## Retired Paths
 
-The repository still contains pre-orchestrator modules:
+The v1.2 branch removed the unreachable pre-orchestrator branch from `src.main`, the unused legacy adapter package, the Ollama summarizer, and the legacy LLM adapter after dependency checks.
 
-- `src/adapters/`
-- legacy portions of `src/main.py` after the active pipeline return
-- `src/summarizer.py`
-- `src/providers/llm/legacy_adapter.py`
-- historical comment prompts
-
-They must not be treated as the current architecture. v1.2 may archive or remove unreachable paths only after dependency checks and tests.
+The retired comment-analysis prompt is kept only under `docs/archive/prompts/`. The `--comments` option is a compatibility warning and does not activate comment retrieval or analysis.
 
 ## v1.2 Evolution
 
@@ -221,12 +215,12 @@ Completed in the v1.2 branch:
 
 1. Durable user notes.
 2. Durable local Web job history.
+3. Explicit removal or archival of disabled paths.
 
 The remaining architecture work will extend the product without replacing the pipeline:
 
-1. Explicit removal or archival of disabled paths.
-2. Testable Gemini image-input Provider boundary.
-3. Release metadata and final validation.
+1. Testable Gemini image-input Provider boundary.
+2. Release metadata and final validation.
 
 ## Future Scale Architecture
 

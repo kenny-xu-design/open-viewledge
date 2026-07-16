@@ -24,7 +24,7 @@ python -m src.web --help
 Latest v1.2 feature-branch verification:
 
 ```text
-128 unit tests
+123 unit tests
 python -m compileall src
 python -m src.main --help
 python -m src.web --help
@@ -37,7 +37,7 @@ node --check src/web_ui/app.js
 - Runtime executable discovery and model configuration unification: completed on the feature branch.
 - Knowledge-package integrity validation: completed on the feature branch.
 - User-note and Web-job persistence: completed on the feature branch.
-- Disabled-route cleanup: pending.
+- Disabled-route cleanup and platform-limit documentation: completed on the feature branch.
 - Gemini image-input implementation: pending.
 - Release validation: pending.
 
@@ -220,10 +220,11 @@ Implemented:
 ## Disabled Or Historical Paths
 
 - Comment retrieval and analysis are disabled.
-- `--comments` remains only for old command compatibility.
+- `--comments` remains only for old command compatibility and never enters a comment pipeline.
 - Ollama is not an active backend.
 - `bilibili-cli` is not an active dependency or runtime command.
-- Legacy adapter and summarizer modules remain in the tree but are not reached after the current `PipelineOrchestrator` returns successfully.
+- The unreachable pre-orchestrator branch, legacy adapters, Ollama summarizer, and legacy LLM adapter have been removed from active source.
+- The historical comment-analysis prompt is retained only under `docs/archive/prompts/`.
 
 ## Configuration
 
@@ -240,4 +241,4 @@ Implemented:
 
 - A browser closed before its final keepalive request is accepted can leave the latest keystrokes unsaved; normal edits are persisted after 800 ms.
 - The local JSON job store is intentionally single-process and is not a Scale queue.
-- Legacy code and historical docs can mislead maintainers if treated as active architecture.
+- Archived documents can describe retired routes and must not be treated as current specifications.

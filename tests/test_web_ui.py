@@ -116,7 +116,13 @@ class WebUiContractTests(unittest.TestCase):
     def test_unavailable_features_are_explicitly_disabled(self) -> None:
         self.assertRegex(self.html, r'data-media="capture"[^>]*disabled')
         self.assertRegex(self.html, r'id="captureNote"[^>]*disabled')
-        self.assertIn("Obsidian 数据层 · 规划中", self.html)
+        self.assertIn("Obsidian 兼容 Markdown", self.html)
+
+    def test_bilibili_controls_do_not_claim_programmatic_sync(self) -> None:
+        self.assertIn("function syncMediaControls()", self.js)
+        self.assertIn("mediaController instanceof BilibiliEmbedController", self.js)
+        self.assertIn("当前平台播放器需在播放器内控制", self.js)
+        self.assertIn("mediaController?.openExternally", self.js)
 
     def test_raw_transcript_is_only_loaded_on_explicit_action(self) -> None:
         self.assertNotIn("transcript.raw.jsonl", self.html)

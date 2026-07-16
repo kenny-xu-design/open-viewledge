@@ -190,7 +190,7 @@
       <section class="notes-pane" id="notesPane">
         <header class="module-header"><div><strong>自写笔记</strong><span class="save-status" id="noteSaveStatus">未加载</span></div><div class="note-actions"><button class="quiet-button" id="insertTimestamp">插入时间戳</button><button class="quiet-button" id="captureNote" disabled title="截图后端待开发">插入当前截图</button></div></header>
         <div class="note-toolbar" aria-label="笔记工具栏">
-          <button disabled title="富文本编辑待开发"><strong>B</strong></button><button disabled title="富文本编辑待开发"><em>I</em></button><button disabled title="富文本编辑待开发">列表</button><span></span><span class="obsidian-state" id="obsidianStatus">Obsidian 数据层 · 规划中</span>
+          <button disabled title="富文本编辑待开发"><strong>B</strong></button><button disabled title="富文本编辑待开发"><em>I</em></button><button disabled title="富文本编辑待开发">列表</button><span></span><span class="obsidian-state" id="obsidianStatus" title="保存笔记时同步刷新 export_note.md">Obsidian 兼容 Markdown</span>
         </div>
         <textarea id="noteEditor" placeholder="记录你的想法、判断和待办…" aria-label="自写笔记"></textarea>
       </section>
@@ -227,6 +227,6 @@
   <dialog id="imageDialog" class="image-dialog"><button class="icon-button image-close" data-close-dialog aria-label="关闭预览"><svg><use href="#i-close"/></svg></button><img id="imagePreview" alt="关键帧预览"></dialog>
   <div class="drawer-scrim" id="drawerScrim"></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js?v=workspace-5" defer></script>
+  <script src="/static/app.js?v=workspace-6" defer></script>
 </body>
 </html>

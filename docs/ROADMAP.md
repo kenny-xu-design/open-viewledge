@@ -37,6 +37,8 @@ Status: completed on `feat/v1.2-product-completion`.
 
 ### 5. Disabled Routes And Product Limits
 
+Status: completed on `feat/v1.2-product-completion`.
+
 - Remove or archive unreachable comment and legacy runtime paths.
 - Document Bilibili player control limits.
 - Keep YouTube IFrame behavior.

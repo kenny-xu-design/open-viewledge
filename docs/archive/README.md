@@ -14,3 +14,5 @@ Current documentation:
 - `../../.agents/skills/video-summary/SKILL.md`
 
 Archived files may mention retired paths such as Ollama, `bilibili-cli`, comment analysis, or earlier adapter designs.
+
+`prompts/` contains retired prompt text preserved for history. Files under that directory are not loaded by the current application.

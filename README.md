@@ -42,11 +42,11 @@ knowledge_id
 - 标准知识包、时间轴、关键帧和兼容 Markdown 输出。
 - 三栏 Web 工作台、本地媒体播放、YouTube 官方 IFrame 预览和 B站官方 iframe 预览。
 - 基于当前知识包字幕的真实 AI 对话、时间戳引用和按知识包保存的 `chat.json`。
+- 按知识包原子保存的 `user_notes.md`，以及包含用户笔记的 `export_note.md`。
+- 可在服务重启后恢复的本地 Web 任务历史；未完成进程会标记为 `interrupted`。
 
 尚未完成：
 
-- 用户自写笔记目前仍是浏览器会话草稿，尚未持久化。
-- Web 任务状态目前仅保存在进程内存中。
 - Gemini 图片输入接口尚未完成；当前 Gemini 仅用于文本对话。
 - Obsidian 目前仅提供兼容 Markdown 文件，不具备 Vault 同步或双向管理。
 - B站官方 iframe 不提供本项目可依赖的可靠播放时间控制。
@@ -220,7 +220,7 @@ Obsidian 兼容 Markdown 副本：
   --export obsidian
 ```
 
-这里的 `obsidian` 表示生成兼容 Markdown 副本 `export_note.md`，不表示自动写入 Vault。
+这里的 `obsidian` 表示生成兼容 Markdown 副本 `export_note.md`，不表示自动写入 Vault。通过 Web 保存的 `user_notes.md` 会合并到该兼容副本中。
 
 ### CLI 参数
 
@@ -233,7 +233,7 @@ Obsidian 兼容 Markdown 副本：
 - `--sample-seconds`：只处理媒体开头指定秒数。
 - `--no-frames`：跳过关键帧生成。
 - `--export obsidian`：生成 Obsidian 兼容 Markdown 副本。
-- `--comments`：仅为旧命令兼容保留，当前会提示已停用。
+- `--comments`：仅为旧命令兼容保留；不会获取或分析评论。
 
 ## Web UI
 
@@ -273,9 +273,13 @@ Web 当前支持：
 - 使用 B站官方 iframe 预览。
 - 对当前知识包进行字幕检索和 AI 对话。
 - 按 `knowledge_id` 加载和保存 `chat.json`。
+- 按 `knowledge_id` 加载和原子保存 `user_notes.md`。
+- 查看服务重启后仍保留的最近任务；异常中断任务显示为 `interrupted`。
 - 调整三栏模块顺序和宽度。
 
-当前笔记编辑区不会写入磁盘；刷新页面或重启服务后草稿可能丢失。
+笔记编辑区在停止输入 800 ms 后保存，切换知识包前也会尝试完成保存。保存笔记时会同步刷新 `export_note.md`。
+
+B站预览使用官方 iframe。应用不会声称可以可靠控制其播放时间；点击摘要、字幕或聊天引用中的时间戳时，会改为在原网站打开对应时间链接。
 
 ## 知识包结构
 
@@ -307,6 +311,7 @@ chapter_summary.md
 highlight_notes.md
 export_note.md
 chat.json
+user_notes.md
 audio/audio_16k.wav
 frames/*.jpg
 ```
@@ -352,7 +357,7 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 
 ### 在线视频无法预览
 
-视频可能禁止嵌入、需要登录、受地区限制或平台 iframe 不提供控制能力。知识包、字幕和分析仍可正常查看；必要时使用“在原网站打开”。
+视频可能禁止嵌入、需要登录、受地区限制或平台 iframe 不提供控制能力。知识包、字幕和分析仍可正常查看；必要时使用“在原网站打开”。B站 iframe 的播放、倍速和时间跳转由播放器自身控制。
 
 ## 测试
 
@@ -363,7 +368,7 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 .\.venv\Scripts\python.exe -m src.web --help
 ```
 
-当前 `v1.1` 基线为 97 项单元测试通过。新增功能不得减少现有覆盖。
+当前 `v1.1` 基线为 97 项单元测试通过；v1.2 功能分支在清理不可达旧模块后为 123 项通过。删除的是旧适配器与 Ollama 路线测试，活动管线覆盖保持并新增了持久化和 CLI 契约测试。
 
 ## 项目文档
 
@@ -377,6 +382,5 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 
 - B站官方 iframe 无可靠的程序化时间跳转和播放同步。
 - Gemini 视觉输入未实现，也未进行真实 API 验证。
-- 自写笔记和 Web 任务历史尚未持久化。
 - Obsidian 仅为兼容 Markdown 导出，不是 Vault 数据层。
 - 通用网页正文采集尚未实现；当前 URL 输入面向 `yt-dlp` 支持的视频平台。

@@ -514,8 +514,23 @@ function renderMedia(knowledge) {
     surface.innerHTML = '<div class="media-empty"><svg><use href="#i-video"/></svg><p>当前记录没有可预览媒体</p></div>';
     mediaController = new MediaController();
   }
+  syncMediaControls();
   setPlaybackRate(Number(localStorage.getItem(SETTINGS.playbackRate)) || 1);
   updateTimeDisplay();
+}
+
+function syncMediaControls() {
+  const seekable = Boolean(mediaController?.supportsSeek());
+  const htmlMedia = mediaController instanceof HtmlMediaController;
+  const iframeMedia = mediaController instanceof YouTubeMediaController || mediaController instanceof BilibiliEmbedController;
+  const externallyControlled = mediaController instanceof BilibiliEmbedController || mediaController instanceof ExternalLinkController;
+  $$('[data-media="play"], [data-media="back"], [data-media="forward"]').forEach((button) => {
+    button.disabled = externallyControlled;
+    button.title = externallyControlled ? "当前平台播放器需在播放器内控制；时间引用会在原网站打开" : "";
+  });
+  $("#playbackRate").disabled = !seekable;
+  $('[data-media="repeat"]').disabled = !htmlMedia;
+  $('[data-media="fullscreen"]').disabled = !(htmlMedia || iframeMedia);
 }
 
 function renderExternalMedia(surface, knowledge, message = "") {

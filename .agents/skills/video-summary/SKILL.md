@@ -158,7 +158,7 @@ Obsidian-compatible Markdown copy:
   --export obsidian
 ```
 
-This export creates `export_note.md`. It does not synchronize an Obsidian Vault.
+This export creates `export_note.md`. Saved `user_notes.md` content is included in the compatible export. It does not synchronize an Obsidian Vault.
 
 ## Web UI
 
@@ -180,7 +180,7 @@ Default URL:
 http://127.0.0.1:5188/
 ```
 
-The Web UI starts processing through `src.main` using the Web process `sys.executable`. It also provides knowledge-package browsing and grounded text chat.
+The Web UI starts processing through `src.main` using the Web process `sys.executable`. It also provides knowledge-package browsing, grounded text chat, durable `user_notes.md`, and ignored local task history.
 
 ## Outputs
 
@@ -207,6 +207,7 @@ chapter_summary.md
 highlight_notes.md
 export_note.md
 chat.json
+user_notes.md
 frames/*.jpg
 ```
 
