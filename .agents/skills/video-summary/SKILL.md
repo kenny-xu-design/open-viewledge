@@ -1,168 +1,269 @@
 ---
 name: video-summary
-description: Summarize or analyze user-provided public video URLs and local audio/video files with the local video-summary-skill CLI. Use for Bilibili, YouTube, yt-dlp-supported public videos, or local mp4/mp3/wav/m4a files when the user asks for transcripts, summaries, tutorial analysis, viral analysis, close reading, comment insights, or Obsidian-ready video notes.
+description: Process user-provided public video URLs or local audio/video files with the video-summary-skill CLI, producing transcripts, structured DeepSeek analysis, and knowledge-package Markdown. Use for Bilibili, YouTube, other yt-dlp-supported public videos, and local media when the user asks for transcription, summaries, tutorial analysis, viral content analysis, close reading, or Obsidian-compatible notes.
 ---
 
-# Video Summary
+# Video Summary Skill
 
-Use this skill to turn a user-provided video URL or local media file into Markdown outputs through the project CLI.
+Use the existing project CLI. Do not reimplement downloading, subtitle parsing, ASR, analysis, or export logic inside the Skill.
 
-Run commands from the project root:
+## Project
 
-```bash
-cd video-summary-skill
-python -m src.main
+The formal project directory is:
+
+```text
+E:\AGT\git\video-summary-skill
 ```
 
-If `python` is unavailable, use an available Python 3.10+ executable with the same `-m src.main` command.
+Run commands from the active repository or approved worktree. Prefer the project virtual environment:
 
-## Core Workflow
-
-1. Confirm the user provided either one public video URL or one local file path.
-2. Choose the CLI command from the examples below.
-3. Run the CLI and let it create a timestamped directory under `output/`.
-4. Identify the newest matching `output/<name>_<timestamp>/` directory.
-5. Inspect generated files before reporting completion.
-6. If the CLI skipped LLM output because no API key or Ollama service is available, use Codex to read the generated transcript and write the requested Markdown report into the same output directory.
-
-Do not bypass the CLI for transcript generation. The CLI owns platform handling, subtitle cleanup, FFmpeg audio extraction, and faster-whisper transcription.
-
-## Platform Handling
-
-- Bilibili URLs: the CLI uses `src/adapters/bilibili_adapter.py`, calls external `bili` / `bilibili-cli`, and falls back to yt-dlp plus FFmpeg/faster-whisper if needed.
-- YouTube and other public URLs: the CLI uses yt-dlp for metadata and subtitles, then falls back to FFmpeg/faster-whisper when subtitles are unavailable.
-- Local files: the CLI accepts local mp4, mp3, wav, m4a, and similar files, then uses FFmpeg plus faster-whisper.
-
-If `bilibili-cli` is missing, tell the user in Chinese:
-
-```bash
-uv tool install bilibili-cli
+```powershell
+.\.venv\Scripts\python.exe
 ```
 
-or:
+## Supported Inputs
 
-```bash
-pipx install bilibili-cli
+- Public YouTube URLs.
+- Public Bilibili URLs or BV identifiers accepted by the CLI.
+- Other public video URLs supported by `yt-dlp`.
+- Local video and audio files supported by `LocalMediaSource`.
+
+Only process links or files the user explicitly provides.
+
+## Current Processing Path
+
+```text
+input
+-> LocalMediaSource or YtdlpSource
+-> platform subtitles when available
+-> FFmpeg plus local faster-whisper when subtitles are unavailable
+-> normalized and grouped transcript
+-> timeline and optional local-video frames
+-> DeepSeek structured analysis
+-> knowledge package
 ```
 
-For Bilibili audio support, mention:
+Important:
 
-```bash
-uv tool install "bilibili-cli[audio]"
+- Online video handling uses the project's `yt-dlp` path.
+- Do not install, require, or invoke `bilibili-cli`.
+- Do not use `--backend ollama`.
+- CLI structured analysis currently uses `deepseek`.
+- Local ASR uses the existing local `faster-whisper-small` model.
+- Comment retrieval and comment analysis are not current features.
+- Gemini text chat exists in the Web UI, but Gemini image or video understanding is not complete.
+
+## Before Running
+
+Check the project environment without exposing secret values:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import sys; print(sys.executable)"
+.\.venv\Scripts\python.exe -c "import yt_dlp; print('yt-dlp OK')"
+.\.venv\Scripts\python.exe -c "import faster_whisper; print('faster-whisper OK')"
 ```
 
-## Command Examples
+When ASR, media conversion, or frame extraction is needed, also check:
 
-Summary for Bilibili:
+```powershell
+ffmpeg -version
+ffprobe -version
+```
 
-```bash
-python -m src.main --url "<B站链接>" --backend ollama --mode summary
+Do not print `.env` contents or API Keys.
+
+## Commands
+
+Show help:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main --help
+```
+
+Public URL summary:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main `
+  --url "<public-video-url>" `
+  --backend deepseek `
+  --mode summary
 ```
 
 Tutorial analysis:
 
-```bash
-python -m src.main --url "<视频链接>" --backend ollama --mode tutorial
+```powershell
+.\.venv\Scripts\python.exe -m src.main `
+  --url "<public-video-url>" `
+  --backend deepseek `
+  --mode tutorial
 ```
 
-Viral analysis with Bilibili comments:
+Viral content analysis:
 
-```bash
-python -m src.main --url "<B站链接>" --backend ollama --mode viral --comments
+```powershell
+.\.venv\Scripts\python.exe -m src.main `
+  --url "<public-video-url>" `
+  --backend deepseek `
+  --mode viral
 ```
 
 Close reading:
 
-```bash
-python -m src.main --url "<视频链接>" --backend ollama --mode close-reading
+```powershell
+.\.venv\Scripts\python.exe -m src.main `
+  --url "<public-video-url>" `
+  --backend deepseek `
+  --mode close-reading
 ```
 
-Local file summary:
+Local media:
 
-```bash
-python -m src.main --file "<本地视频或音频路径>" --backend ollama --mode summary
+```powershell
+.\.venv\Scripts\python.exe -m src.main `
+  --file "<absolute-local-media-path>" `
+  --backend deepseek `
+  --mode summary
 ```
 
 Transcript only:
 
-```bash
-python -m src.main --url "<视频链接>" --no-summary
-python -m src.main --file "<本地视频或音频路径>" --no-summary
+```powershell
+.\.venv\Scripts\python.exe -m src.main `
+  --file "<absolute-local-media-path>" `
+  --no-summary
 ```
 
-Obsidian merged note:
+Short local validation:
 
-```bash
-python -m src.main --url "<视频链接>" --backend ollama --mode tutorial --export obsidian
+```powershell
+.\.venv\Scripts\python.exe -m src.main `
+  --file "<absolute-local-media-path>" `
+  --no-summary `
+  --sample-seconds 30
 ```
 
-Use `--lang zh` or `--lang en` when the user specifies a subtitle/transcription language.
+Obsidian-compatible Markdown copy:
 
-## Expected Outputs
+```powershell
+.\.venv\Scripts\python.exe -m src.main `
+  --url "<public-video-url>" `
+  --backend deepseek `
+  --mode summary `
+  --export obsidian
+```
 
-Always expect:
+This export creates `export_note.md`. It does not synchronize an Obsidian Vault.
 
-- `metadata.json`
-- `transcript.md`
+## Web UI
 
-When summary generation succeeds, expect some of:
+Start with:
 
-- `summary.md`
-- `chapter_summary.md`
-- `highlight_notes.md`
-- `tutorial_report.md`
-- `viral_analysis.md`
-- `close_reading.md`
-- `export_note.md`
+```powershell
+.\start_web.ps1
+```
 
-When Bilibili comments are requested and available, expect:
+or:
 
-- `comments.json`
-- `comments.md`
-- `comment_insights.md`
+```bat
+start_web.bat
+```
 
-Tell the user which output directory was produced and list the important files.
+Default URL:
 
-## Codex Fallback Reports
+```text
+http://127.0.0.1:5188/
+```
 
-If the CLI generated `transcript.md` but did not generate the requested report because the LLM backend is unavailable:
+The Web UI starts processing through `src.main` using the Web process `sys.executable`. It also provides knowledge-package browsing and grounded text chat.
 
-1. Read `metadata.json`.
-2. Read `transcript.md`.
-3. Read the matching prompt from `prompts/`:
-   - `summary_prompt.md`
-   - `chapter_prompt.md`
-   - `highlight_prompt.md`
-   - `tutorial_prompt.md`
-   - `viral_prompt.md`
-   - `close_reading_prompt.md`
-   - `comment_insights_prompt.md`
-4. Generate the requested Chinese Markdown report with Codex.
-5. Write it to the expected output filename.
+## Outputs
 
-Only use `comments.json` / `comments.md` for `comment_insights.md`. Do not invent comment-section information.
+Report the created knowledge-package directory and the most relevant result files.
 
-When writing summaries or analysis, do not invent details absent from the transcript. Use `视频中未明确说明` for uncertain or missing information.
+Core outputs:
 
-## Compliance
+```text
+output/<knowledge-id>/index.md
+output/<knowledge-id>/metadata.json
+output/<knowledge-id>/manifest.json
+output/<knowledge-id>/analysis.json
+output/<knowledge-id>/timeline.json
+output/<knowledge-id>/transcript.raw.jsonl
+output/<knowledge-id>/transcript.grouped.md
+output/<knowledge-id>/transcript.md
+```
 
-Only process user-provided public video links or content the user owns, collected, or saved locally. Do not help bypass paid access, crack protections, remove watermarks, leak cookies, save credentials, mass-download videos, or prepare infringing reposts.
+Conditional outputs:
 
-Do not print or save sensitive cookies or account credentials. Cookie usage, if any, must stay within the user's local authorized tool state.
+```text
+summary.md
+chapter_summary.md
+highlight_notes.md
+export_note.md
+chat.json
+frames/*.jpg
+```
 
-For viral analysis and comment insights, focus on original topic migration and content learning. Do not encourage copying, washing, or reposting others' work.
+When responding to the user:
 
-## Error Handling
+1. State whether transcript acquisition used platform subtitles or local ASR when known.
+2. State whether AI analysis succeeded, failed, or was skipped.
+3. Include the actual provider and model recorded in `analysis.json` or `manifest.json`.
+4. Provide the knowledge-package path.
+5. Link or name the key result files.
+6. Do not claim success based only on file existence; inspect status and meaningful content.
 
-Give short Chinese explanations for:
+## Failure Handling
 
-- invalid or inaccessible links;
-- unsupported local paths;
-- missing FFmpeg;
-- missing Python dependencies;
-- missing `bili` / `bilibili-cli`;
-- yt-dlp subtitle failure followed by transcription fallback;
-- faster-whisper transcription failure;
-- no `transcript.md` produced.
+### Project virtual environment is not active
 
-Preserve generated intermediate files whenever possible and tell the user where they are.
+Run commands through:
+
+```powershell
+.\.venv\Scripts\python.exe
+```
+
+Do not fall back to a global `python` without telling the user.
+
+### yt-dlp or faster-whisper is missing
+
+Report the current `sys.executable` and working directory, then suggest:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+### FFmpeg or FFprobe is unavailable
+
+Explain which executable is missing. Do not silently download binaries or change the system PATH.
+
+### Local Whisper model is incomplete
+
+Report:
+
+```text
+未找到完整的本地 faster-whisper 模型，请先执行：
+hf download Systran/faster-whisper-small --local-dir models/faster-whisper-small
+```
+
+Do not allow an implicit Hugging Face download.
+
+### DeepSeek is not configured
+
+Tell the user to set `DEEPSEEK_API_KEY` in the ignored project `.env`. Never request that the Key be committed or pasted into tracked files.
+
+### Online video preview fails
+
+The platform may prohibit embedding or require login. Processing results can still be used. Bilibili iframe playback does not provide reliable programmatic time synchronization; use source timestamp links when available.
+
+### Gemini visual request
+
+State that Gemini image input is not currently complete or real-API verified. Do not simulate visual understanding from subtitles.
+
+## Safety
+
+- Do not expose API Keys, cookies, Authorization headers, or credentials.
+- Do not add `.env`, media, models, or `output/` to Git.
+- Do not bypass paid content, access controls, DRM, or platform restrictions.
+- Do not encourage reposting, plagiarism, or copyright infringement.
+- Do not claim comment analysis, Gemini visual analysis, Vault synchronization, or Bilibili time synchronization are complete.
