@@ -236,9 +236,7 @@ Completed in the v1.2 branch:
 3. Explicit removal or archival of disabled paths.
 4. Testable Gemini image-input Provider and keyframe-service boundary.
 
-The remaining architecture work is release completion:
-
-1. Release metadata and final validation.
+The v1.2 local-product architecture work is complete on the feature branch. Scale and SaaS remain separate future phases.
 
 ## Future Scale Architecture
 

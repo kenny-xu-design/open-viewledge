@@ -55,6 +55,8 @@ Status: completed on `feat/v1.2-product-completion`; mock verified, real API unv
 
 ### 7. Release Completion
 
+Status: completed on `feat/v1.2-product-completion`.
+
 - Complete CLI inspection and validation commands.
 - Align Web and CLI contracts.
 - Add release notes and version metadata.

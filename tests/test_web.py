@@ -10,6 +10,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from src import __version__
 from src.web import (
     PROJECT_ROOT,
     VideoSummaryHandler,
@@ -324,6 +325,7 @@ class WebApiTests(unittest.TestCase):
     def test_runtime_endpoint_reports_current_python(self) -> None:
         with urlopen(f"{self.base_url}/api/runtime", timeout=3) as response:
             payload = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(payload["version"], __version__)
         self.assertEqual(payload["pythonExecutable"], __import__("sys").executable)
         self.assertIn("tools", payload)
         self.assertIn("providers", payload)

@@ -2,7 +2,7 @@
 
 `video-summary-skill` 是一个本地优先的视频与音频知识提取工具。它把用户提供的本地媒体或公开在线视频转换为带时间戳、可追溯的知识包，并提供 Web 浏览和基于当前知识包字幕的 AI 对话。
 
-当前稳定基线为 `v1.1`。`v1.2` 正在进行产品收尾，范围限于本地产品完整性，不包含 Scale 或 SaaS。
+当前开发版本为 `1.2.0`，稳定主分支基线仍为 `v1.1`。`v1.2` 已完成本地产品收尾，范围不包含 Scale 或 SaaS。
 
 ## 当前能力
 
@@ -151,6 +151,12 @@ FFPROBE_PATH=
 
 ```powershell
 .\.venv\Scripts\python.exe -m src.main --help
+```
+
+查看版本：
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main --version
 ```
 
 只读检查已有知识包：
@@ -368,10 +374,11 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 .\.venv\Scripts\python.exe -m src.web --help
 ```
 
-当前 `v1.1` 基线为 97 项单元测试通过；v1.2 功能分支在加入 Gemini 关键帧边界测试后为 129 项通过。删除的是旧适配器与 Ollama 路线测试，活动管线覆盖保持，并新增了持久化、CLI 契约和 Gemini 图片请求测试。
+当前 `v1.1` 基线为 97 项单元测试通过；v1.2 功能分支在加入版本与 Gemini 关键帧边界测试后为 130 项通过。删除的是旧适配器与 Ollama 路线测试，活动管线覆盖保持，并新增了持久化、CLI 契约、版本和 Gemini 图片请求测试。
 
 ## 项目文档
 
+- [变更记录](CHANGELOG.md)
 - [当前状态](docs/CURRENT_STATE.md)
 - [架构](docs/ARCHITECTURE.md)
 - [路线图](docs/ROADMAP.md)

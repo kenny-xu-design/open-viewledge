@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
+from . import __version__
 from .chat import answer_question
 from .chat_store import ChatStore
 from .config import load_config
@@ -186,6 +187,7 @@ def runtime_status_payload() -> dict[str, Any]:
         )
     ]
     return {
+        "version": __version__,
         "pythonExecutable": sys.executable,
         "projectRoot": str(PROJECT_ROOT),
         "inProjectVenv": _is_project_venv_python(),
@@ -604,7 +606,7 @@ def resolve_media_path(knowledge_id: str) -> Path:
 
 
 class VideoSummaryHandler(BaseHTTPRequestHandler):
-    server_version = "VideoSummaryWeb/0.1"
+    server_version = f"VideoSummaryWeb/{__version__}"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -1204,6 +1206,7 @@ INDEX_HTML = r"""<!doctype html>
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Start the video-summary-skill web UI.")
+    parser.add_argument("--version", action="version", version=f"video-summary-skill {__version__}")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5188)
     parser.add_argument("--open", action="store_true", help="Open the browser after starting.")

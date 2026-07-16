@@ -5,8 +5,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from typer.testing import CliRunner
+
+from src import __version__
 from src.config import AppConfig
-from src.main import ExitWithCode, run_pipeline
+from src.main import ExitWithCode, app, run_pipeline
 
 
 class _Console:
@@ -18,6 +21,12 @@ class _Console:
 
 
 class MainPipelineTests(unittest.TestCase):
+    @unittest.skipIf(app is None, "Typer is not installed")
+    def test_version_option_reports_package_version(self) -> None:
+        result = CliRunner().invoke(app, ["--version"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout.strip(), f"video-summary-skill {__version__}")
+
     def test_comments_flag_only_emits_compatibility_warning(self) -> None:
         console = _Console()
         package = SimpleNamespace(output_dir=Path("output/demo"))

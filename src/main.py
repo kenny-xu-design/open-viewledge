@@ -17,6 +17,7 @@ except ImportError:
 
     Console = None  # type: ignore[assignment]
 
+from . import __version__
 from .config import load_config
 from .knowledge_validation import inspect_knowledge_package
 from .pipeline import PipelineOrchestrator
@@ -33,6 +34,12 @@ else:
     app = None
 
 console = Console() if Console else _fallback_console  # type: ignore[misc]
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        print(f"video-summary-skill {__version__}")
+        raise typer.Exit()  # type: ignore[union-attr]
 
 
 def normalize_mode(mode: str | None) -> str:
@@ -142,6 +149,7 @@ def _run_argparse() -> None:
         prog="python -m src.main",
         description="把视频链接或本地视频文件转换成结构化内容摘要。",
     )
+    parser.add_argument("--version", action="version", version=f"video-summary-skill {__version__}")
     parser.add_argument("--url", help="公开视频链接，例如 B站 / YouTube。")
     parser.add_argument("--file", type=Path, help="本地视频文件路径。")
     parser.add_argument("--lang", help="字幕或转写语言，例如 zh / en。")
@@ -189,6 +197,13 @@ if typer:
     @app.callback(invoke_without_command=True)  # type: ignore[union-attr]
     def run(
         ctx: typer.Context,
+        version: bool = typer.Option(
+            False,
+            "--version",
+            callback=_version_callback,
+            is_eager=True,
+            help="显示版本并退出。",
+        ),
         url: Optional[str] = typer.Option(None, "--url", help="公开视频链接，例如 B站 / YouTube。"),
         file: Optional[Path] = typer.Option(None, "--file", help="本地视频文件路径。"),
         lang: Optional[str] = typer.Option(None, "--lang", help="字幕或转写语言，例如 zh / en。"),

@@ -9,6 +9,7 @@ This document describes the implementation that currently exists. Planned work b
 - Formal repository: `E:\AGT\git\video-summary-skill`
 - Stable baseline: `main` at `33a4cc7` (`v1.1`)
 - v1.2 development branch: `feat/v1.2-product-completion`
+- Package version on the feature branch: `1.2.0`
 - Remote: `origin`
 - Python: 3.12.13 in the project `.venv`
 
@@ -24,7 +25,7 @@ python -m src.web --help
 Latest v1.2 feature-branch verification:
 
 ```text
-129 unit tests
+130 unit tests
 python -m compileall src
 python -m src.main --help
 python -m src.web --help
@@ -39,7 +40,7 @@ node --check src/web_ui/app.js
 - User-note and Web-job persistence: completed on the feature branch.
 - Disabled-route cleanup and platform-limit documentation: completed on the feature branch.
 - Gemini image-input Provider and keyframe-service boundary: completed and mock tested on the feature branch.
-- Release validation: pending.
+- Release metadata and validation: completed on the feature branch.
 
 ## Active Product Path
 

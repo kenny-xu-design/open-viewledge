@@ -80,6 +80,12 @@ Show help:
 .\.venv\Scripts\python.exe -m src.main --help
 ```
 
+Show the installed project version:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main --version
+```
+
 Inspect an existing package without modifying it:
 
 ```powershell
