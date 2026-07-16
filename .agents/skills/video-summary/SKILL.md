@@ -51,7 +51,7 @@ Important:
 - CLI structured analysis currently uses `deepseek`.
 - Local ASR uses the existing local `faster-whisper-small` model.
 - Comment retrieval and comment analysis are not current features.
-- Gemini text chat exists in the Web UI, but Gemini image or video understanding is not complete.
+- Gemini text chat exists in the Web UI. A keyframe image-request boundary is implemented and mock tested, but it has no CLI/Web product trigger and has not been real-API verified.
 
 ## Before Running
 
@@ -265,7 +265,7 @@ The platform may prohibit embedding or require login. Processing results can sti
 
 ### Gemini visual request
 
-State that Gemini image input is not currently complete or real-API verified. Do not simulate visual understanding from subtitles.
+The repository contains a mock-tested keyframe image-request boundary, but the current Skill and CLI do not expose it as a product command. Do not invoke it implicitly, do not claim real-API validation, and do not simulate visual understanding from subtitles.
 
 ## Safety
 
@@ -273,4 +273,4 @@ State that Gemini image input is not currently complete or real-API verified. Do
 - Do not add `.env`, media, models, or `output/` to Git.
 - Do not bypass paid content, access controls, DRM, or platform restrictions.
 - Do not encourage reposting, plagiarism, or copyright infringement.
-- Do not claim comment analysis, Gemini visual analysis, Vault synchronization, or Bilibili time synchronization are complete.
+- Do not claim comment analysis, an end-to-end Gemini visual product flow, Vault synchronization, or Bilibili time synchronization are complete.

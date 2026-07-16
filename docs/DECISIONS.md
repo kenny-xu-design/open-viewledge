@@ -48,7 +48,9 @@ CLI structured analysis currently uses DeepSeek.
 
 Gemini text completion can be used by Web chat when configured.
 
-Image-input support is a separate Provider capability and must not be claimed complete until code and tests exist. Real API validation must be reported separately from mock validation.
+Image-input support is a separate Provider capability exposed through `KeyframeAnalysisService`. It is not part of the default pipeline or text-chat path, and an empty frame set must never produce a network call.
+
+The image request code and service boundary are mock tested. Real API validation must be reported separately and remains unverified.
 
 ## D007: Knowledge Packages Are The Data Contract
 

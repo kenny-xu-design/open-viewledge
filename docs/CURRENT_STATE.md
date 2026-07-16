@@ -24,7 +24,7 @@ python -m src.web --help
 Latest v1.2 feature-branch verification:
 
 ```text
-123 unit tests
+129 unit tests
 python -m compileall src
 python -m src.main --help
 python -m src.web --help
@@ -38,7 +38,7 @@ node --check src/web_ui/app.js
 - Knowledge-package integrity validation: completed on the feature branch.
 - User-note and Web-job persistence: completed on the feature branch.
 - Disabled-route cleanup and platform-limit documentation: completed on the feature branch.
-- Gemini image-input implementation: pending.
+- Gemini image-input Provider and keyframe-service boundary: completed and mock tested on the feature branch.
 - Release validation: pending.
 
 ## Active Product Path
@@ -204,8 +204,12 @@ Implemented:
 
 - Text completion Provider exists.
 - Provider registry supports selecting Gemini for text chat.
-- Image input currently raises an explicit not-implemented error.
-- Gemini visual analysis has not been implemented or real-API verified.
+- `GeminiProvider.generate_with_images()` sends JPEG, PNG, or WebP frames as Base64 `inline_data` through the official `generateContent` REST shape.
+- A request is limited to 12 frames and 18 MiB of raw image data.
+- `KeyframeAnalysisService` returns `skipped` without calling the Provider when no frames are available.
+- Text and image capabilities are resolved separately; visual wording in a chat question does not silently turn a text request into an image request.
+- Image requests and service behavior are covered by fake-opener and fake-Provider tests.
+- There is no CLI or Web trigger for keyframe analysis in v1.2, and no real Gemini API request has been performed.
 
 ## Notes And Obsidian
 

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import os
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -20,6 +23,16 @@ from .base import LLMProvider, LLMResponse
 class GeminiProvider(LLMProvider):
     name = "gemini"
     is_cloud = True
+    supports_images = True
+
+    MAX_INLINE_IMAGES = 12
+    MAX_INLINE_IMAGE_BYTES = 18 * 1024 * 1024
+    IMAGE_MIME_TYPES = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
 
     def __init__(
         self,
@@ -68,6 +81,66 @@ class GeminiProvider(LLMProvider):
         payload: dict[str, Any] = {"contents": contents, "generationConfig": generation_config}
         if system_parts:
             payload["systemInstruction"] = {"parts": [{"text": "\n".join(system_parts)}]}
+        return self._generate(payload)
+
+    def generate_with_images(
+        self,
+        prompt: str,
+        image_paths: list[Path],
+        *,
+        system_prompt: str = "",
+        json_mode: bool = False,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        normalized_prompt = prompt.strip()
+        if not normalized_prompt:
+            raise ValueError("Gemini 图片分析 prompt 不能为空。")
+        if not image_paths:
+            raise UserFacingError("未提供关键帧，本次不会调用 Gemini。")
+        if len(image_paths) > self.MAX_INLINE_IMAGES:
+            raise UserFacingError(f"Gemini 单次最多处理 {self.MAX_INLINE_IMAGES} 张关键帧。")
+        if not self.is_available():
+            raise UserFacingError("Gemini 未配置，请在项目 .env 中设置 GEMINI_API_KEY。")
+
+        parts: list[dict[str, Any]] = [{"text": normalized_prompt}]
+        total_bytes = 0
+        for raw_path in image_paths:
+            path = Path(raw_path)
+            if not path.is_file():
+                raise UserFacingError(f"关键帧文件不存在：{path}")
+            mime_type = self.IMAGE_MIME_TYPES.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0]
+            if mime_type not in set(self.IMAGE_MIME_TYPES.values()):
+                raise UserFacingError(f"不支持的关键帧格式：{path.suffix or path.name}")
+            data = path.read_bytes()
+            total_bytes += len(data)
+            if total_bytes > self.MAX_INLINE_IMAGE_BYTES:
+                raise UserFacingError("关键帧总大小超过 18 MiB，请减少图片数量或尺寸。")
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": base64.b64encode(data).decode("ascii"),
+                    }
+                }
+            )
+
+        generation_config: dict[str, Any] = {"temperature": temperature}
+        if max_tokens is not None:
+            generation_config["maxOutputTokens"] = max_tokens
+        if json_mode:
+            generation_config["responseMimeType"] = "application/json"
+        payload: dict[str, Any] = {
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": generation_config,
+        }
+        if system_prompt.strip():
+            payload["systemInstruction"] = {"parts": [{"text": system_prompt.strip()}]}
+        return self._generate(payload)
+
+    def _generate(self, payload: dict[str, Any]) -> LLMResponse:
+        if not self.is_available():
+            raise UserFacingError("Gemini 未配置，请在项目 .env 中设置 GEMINI_API_KEY。")
         request = Request(
             f"{self.base_url}/models/{self.model_name}:generateContent",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -108,6 +181,3 @@ class GeminiProvider(LLMProvider):
                 if usage.get(source) is not None
             },
         )
-
-    def generate_with_images(self, *args: Any, **kwargs: Any) -> LLMResponse:
-        raise UserFacingError("Gemini 关键帧视觉问答将在下一阶段接入。")

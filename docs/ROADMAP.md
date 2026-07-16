@@ -46,6 +46,8 @@ Status: completed on `feat/v1.2-product-completion`.
 
 ### 6. Gemini Image Boundary
 
+Status: completed on `feat/v1.2-product-completion`; mock verified, real API unverified.
+
 - Implement image-input requests in the Gemini Provider.
 - Skip calls when there are no frames.
 - Add mock-based tests.

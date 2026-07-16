@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+from ...utils import UserFacingError
 
 
 @dataclass(frozen=True)
@@ -18,6 +21,7 @@ class LLMProvider(ABC):
     name: str
     model_name: str
     is_cloud: bool = False
+    supports_images: bool = False
 
     @abstractmethod
     def is_available(self) -> bool: ...
@@ -31,3 +35,15 @@ class LLMProvider(ABC):
         temperature: float = 0.2,
         max_tokens: int | None = None,
     ) -> LLMResponse: ...
+
+    def generate_with_images(
+        self,
+        prompt: str,
+        image_paths: list[Path],
+        *,
+        system_prompt: str = "",
+        json_mode: bool = False,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        raise UserFacingError(f"{self.name} 不支持图片输入。")

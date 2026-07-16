@@ -159,6 +159,24 @@ Retrieval is local and lexical:
 
 Chat history is persisted in `chat.json` beside the knowledge package.
 
+### Visual Provider Boundary
+
+Gemini image input is isolated from text chat and the processing pipeline:
+
+```text
+explicit caller
+-> KeyframeAnalysisService
+-> GeminiProvider.generate_with_images()
+-> Gemini generateContent REST endpoint
+```
+
+- Empty frame lists return a local `skipped` result and never call Gemini.
+- The Provider accepts JPEG, PNG, and WebP frames as Base64 inline data.
+- Image count and aggregate byte limits are enforced before the request.
+- `ProviderRegistry` resolves text and image capabilities independently.
+- The default pipeline and Web chat do not invoke this boundary.
+- Tests use fake HTTP openers and Providers; real API validation remains separate.
+
 ### Web Layer
 
 The Web server uses Python's `ThreadingHTTPServer`.
@@ -216,11 +234,11 @@ Completed in the v1.2 branch:
 1. Durable user notes.
 2. Durable local Web job history.
 3. Explicit removal or archival of disabled paths.
+4. Testable Gemini image-input Provider and keyframe-service boundary.
 
-The remaining architecture work will extend the product without replacing the pipeline:
+The remaining architecture work is release completion:
 
-1. Testable Gemini image-input Provider boundary.
-2. Release metadata and final validation.
+1. Release metadata and final validation.
 
 ## Future Scale Architecture
 

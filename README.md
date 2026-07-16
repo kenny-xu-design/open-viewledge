@@ -47,7 +47,7 @@ knowledge_id
 
 尚未完成：
 
-- Gemini 图片输入接口尚未完成；当前 Gemini 仅用于文本对话。
+- Gemini 关键帧图片请求和独立服务边界已实现并通过 mock 测试，但尚未接入默认 CLI/Web 产品流程，也未使用真实 API 验证。
 - Obsidian 目前仅提供兼容 Markdown 文件，不具备 Vault 同步或双向管理。
 - B站官方 iframe 不提供本项目可依赖的可靠播放时间控制。
 
@@ -68,7 +68,7 @@ knowledge_id
 - FFmpeg 和 FFprobe。
 - 本地 faster-whisper 模型。
 - DeepSeek API Key，仅在需要 AI 分析或 DeepSeek 对话时需要。
-- Gemini API Key，仅在选择 Gemini 文本对话时需要。
+- Gemini API Key，仅在选择 Gemini 文本对话或未来显式调用关键帧分析边界时需要。
 
 安装 Python 依赖：
 
@@ -143,7 +143,7 @@ FFPROBE_PATH=
 
 `.env` 已被 Git 忽略，`.env.example` 只保存空 Key 和非敏感默认值。不要把真实 Key 写入 `.env.example`、README、日志、知识包或提交记录。
 
-当前 CLI 结构化分析后端仅支持 `deepseek`。Gemini 当前只出现在 Web 文本对话 Provider 中，不能用于 CLI 视频结构化分析，也不能进行视觉理解。
+当前 CLI 结构化分析后端仅支持 `deepseek`。Gemini 可用于 Web 文本对话；关键帧图片请求代码已经实现，但没有 CLI/Web 触发入口，不会在处理视频或聊天时自动上传图片。
 
 ## CLI
 
@@ -368,7 +368,7 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 .\.venv\Scripts\python.exe -m src.web --help
 ```
 
-当前 `v1.1` 基线为 97 项单元测试通过；v1.2 功能分支在清理不可达旧模块后为 123 项通过。删除的是旧适配器与 Ollama 路线测试，活动管线覆盖保持并新增了持久化和 CLI 契约测试。
+当前 `v1.1` 基线为 97 项单元测试通过；v1.2 功能分支在加入 Gemini 关键帧边界测试后为 129 项通过。删除的是旧适配器与 Ollama 路线测试，活动管线覆盖保持，并新增了持久化、CLI 契约和 Gemini 图片请求测试。
 
 ## 项目文档
 
@@ -381,6 +381,6 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 ## 已知限制
 
 - B站官方 iframe 无可靠的程序化时间跳转和播放同步。
-- Gemini 视觉输入未实现，也未进行真实 API 验证。
+- Gemini 关键帧图片输入仅完成 Provider 与服务边界的 mock 验证，尚未进行真实 API 验证，也未形成可操作的视觉分析产品流程。
 - Obsidian 仅为兼容 Markdown 导出，不是 Vault 数据层。
 - 通用网页正文采集尚未实现；当前 URL 输入面向 `yt-dlp` 支持的视频平台。

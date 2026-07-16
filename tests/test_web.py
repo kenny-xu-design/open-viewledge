@@ -329,6 +329,38 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("providers", payload)
         self.assertIn("inProjectVenv", payload)
 
+    @patch("src.web.answer_question")
+    @patch("src.web.ProviderRegistry")
+    @patch("src.web.ChatStore")
+    @patch("src.web.load_transcript_groups")
+    @patch("src.web.load_knowledge_package")
+    def test_visual_chat_question_is_explicitly_text_only(
+        self,
+        load_knowledge,
+        load_groups,
+        chat_store,
+        registry,
+        answer,
+    ) -> None:
+        load_knowledge.return_value = {"analysis": {}, "source": {}}
+        load_groups.return_value = [{"index": 0, "start": 0, "end": 5, "text": "字幕"}]
+        registry.return_value.resolve.return_value = object()
+        chat_store.return_value.load.return_value = {"messages": []}
+        answer.return_value = {
+            "knowledge_id": "demo",
+            "answer": "回答",
+            "citations": [],
+            "provider": "deepseek",
+            "model": "test",
+            "usage": {},
+        }
+
+        result = __import__("src.web", fromlist=["chat_with_knowledge"]).chat_with_knowledge(
+            {"knowledge_id": "demo", "question": "画面里有什么按钮？"}
+        )
+
+        self.assertIn("未附带关键帧", result["warning"])
+
     def test_notes_endpoint_persists_and_updates_compatible_export(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

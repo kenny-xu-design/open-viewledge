@@ -484,9 +484,7 @@ def chat_with_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
     requested_provider = str(payload.get("provider") or "auto")
     registry = ProviderRegistry()
     visual_terms = ("画面", "截图", "界面", "按钮", "图表", "图像", "视觉")
-    visual_fallback = requested_provider == "auto" and any(term in question for term in visual_terms) and not any(
-        item["name"] == "gemini" and item["configured"] for item in registry.statuses()
-    )
+    visual_question = any(term in question for term in visual_terms)
     provider = registry.resolve(
         requested_provider,
         question,
@@ -503,8 +501,8 @@ def chat_with_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
         provider=provider,
         knowledge_id=knowledge_id,
     )
-    if visual_fallback:
-        result["warning"] = "Gemini 未配置，本次仅使用 DeepSeek 和字幕文本回答，未执行视觉识别。"
+    if visual_question:
+        result["warning"] = "当前聊天请求未附带关键帧，本次仅基于字幕和已有文本分析回答。"
     new_messages = [] if stored_history and stored_history[-1].get("role") == "user" and stored_history[-1].get("content") == question else [{"role": "user", "content": question}]
     new_messages.append(
         {
