@@ -153,6 +153,20 @@ FFPROBE_PATH=
 .\.venv\Scripts\python.exe -m src.main --help
 ```
 
+只读检查已有知识包：
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main inspect "output\<knowledge-id>"
+```
+
+机器可读输出：
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main inspect "output\<knowledge-id>" --json
+```
+
+检查命令不会修改历史输出。返回码：`0` 表示有效，`1` 表示存在兼容性警告，`2` 表示知识包无效。
+
 本地视频完整处理：
 
 ```powershell
@@ -298,6 +312,8 @@ frames/*.jpg
 ```
 
 `analysis.json` 应记录 `status`、`provider`、`model`、`usage` 和结构化分析结果。`manifest.json` 记录各处理阶段、Provider 尝试、错误和输出文件。
+
+新知识包还会在 manifest 中明确记录 `analysis_status` 和 `analysis_error`。空 `analysis.json`、无有效字幕、无时间轴或缺少必需文件不会被视为成功知识包。
 
 ## 常见错误
 

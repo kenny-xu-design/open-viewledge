@@ -543,7 +543,7 @@ function renderStatus(manifest) {
   let className = "";
   if (status === "completed") className = "success";
   else if (status === "completed_with_warnings") className = "warning";
-  else if (status === "failed") className = "error";
+  else if (status === "failed" || status === "invalid") className = "error";
   const errors = Array.isArray(manifest.errors) && manifest.errors.length ? ` · ${manifest.errors[0]}` : "";
   element.className = `processing-status ${className}`;
   element.innerHTML = `<svg><use href="#${className === "error" || className === "warning" ? "i-warning" : "i-check"}"/></svg><span>${escapeHtml(statusLabel(status))}${manifest.current_stage ? ` · ${escapeHtml(stageLabel(manifest.current_stage))}` : ""}${escapeHtml(errors)}</span>`;
@@ -1159,7 +1159,7 @@ function timestampLink(url, seconds) {
 }
 
 function statusLabel(status) {
-  return ({ completed: "总结完成", completed_with_warnings: "部分完成", running: "处理中", processing: "处理中", created: "等待处理", failed: "处理失败", unknown: "状态未知" })[status] || status || "状态未知";
+  return ({ completed: "总结完成", completed_with_warnings: "部分完成", running: "处理中", processing: "处理中", created: "等待处理", failed: "处理失败", invalid: "知识包异常", unknown: "状态未知" })[status] || status || "状态未知";
 }
 
 function stageLabel(stage) {

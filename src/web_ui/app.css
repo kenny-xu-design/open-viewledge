@@ -113,7 +113,7 @@ button:disabled { color: var(--faint); cursor: not-allowed; }
 .record-state { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); margin-top: 6px; }
 .record-state.completed { background: var(--green); }
 .record-state.running, .record-state.processing { background: var(--accent); }
-.record-state.failed { background: var(--red); }
+.record-state.failed, .record-state.invalid { background: var(--red); }
 .library-empty, .loading-list { padding: 28px 12px; color: var(--muted); text-align: center; line-height: 1.7; }
 .library-empty button { margin-top: 10px; }
 

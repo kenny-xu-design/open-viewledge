@@ -25,7 +25,7 @@ python -m src.web --help
 
 - Documentation truth synchronization: completed on the feature branch.
 - Runtime executable discovery and model configuration unification: completed on the feature branch.
-- Knowledge-package integrity validation: pending.
+- Knowledge-package integrity validation: completed on the feature branch.
 - User-note and Web-job persistence: pending.
 - Disabled-route cleanup: pending.
 - Gemini image-input implementation: pending.
@@ -96,7 +96,7 @@ Verified historical successful packages include:
 - A full local video analysis using DeepSeek.
 - A full YouTube analysis using DeepSeek.
 
-One historical Bilibili package contains an empty analysis object while its manifest reports completion. v1.2 must add package validation and correct state semantics without silently rewriting historical output.
+One historical Bilibili package contains an empty analysis object while its manifest reports completion. The v1.2 inspector detects this conflict without silently rewriting historical output.
 
 ## Knowledge Package
 
@@ -126,7 +126,20 @@ audio/audio_16k.wav
 frames/*.jpg
 ```
 
-The package is rendered through the exporter and Jinja2 template. Current package discovery in the Web UI is based on metadata plus one or more expected package files; a stronger integrity validator is planned.
+The package is rendered through the exporter and Jinja2 template.
+
+`src/knowledge_validation.py` now checks:
+
+- required files;
+- JSON object structure;
+- source and manifest schema;
+- meaningful transcript segments;
+- timeline items;
+- analysis status and meaningful content;
+- manifest/analysis consistency;
+- declared output existence.
+
+CLI `inspect` reports existing package anomalies without mutating them. Web package views use the same inspection result and do not display empty analysis as successful.
 
 ## Web UI
 
@@ -207,7 +220,6 @@ Implemented:
 
 ## Known Risks
 
-- Empty or malformed historical analysis can be displayed with an overly optimistic manifest status.
 - In-memory Web jobs disappear after restart.
 - Front-end note drafts disappear after reload.
 - Legacy code and historical docs can mislead maintainers if treated as active architecture.

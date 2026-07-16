@@ -181,6 +181,14 @@ The package exporter writes JSON and Markdown, including a Jinja2-rendered `inde
 
 `export_note.md` is an Obsidian-compatible Markdown copy. It is not a Vault integration.
 
+### Knowledge-Package Validation
+
+`src/knowledge_validation.py` is the read-only integrity boundary for generated and historical packages.
+
+It validates required files, JSON roots, domain schemas, meaningful transcript content, timeline content, analysis semantics, manifest consistency, and declared outputs.
+
+The pipeline validates newly exported packages before reporting success. The Web UI uses the same inspection result for display status. CLI `inspect` can audit historical packages without rewriting them.
+
 ## Existing Duplication
 
 The repository still contains pre-orchestrator modules:
@@ -197,12 +205,11 @@ They must not be treated as the current architecture. v1.2 may archive or remove
 
 The current architecture will be extended without replacing the pipeline:
 
-1. Knowledge-package integrity validation.
-2. Durable user notes.
-3. Durable local Web job history.
-4. Explicit removal or archival of disabled paths.
-5. Testable Gemini image-input Provider boundary.
-6. CLI inspection and release metadata.
+1. Durable user notes.
+2. Durable local Web job history.
+3. Explicit removal or archival of disabled paths.
+4. Testable Gemini image-input Provider boundary.
+5. Release metadata and final validation.
 
 ## Future Scale Architecture
 

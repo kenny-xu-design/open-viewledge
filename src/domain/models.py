@@ -129,6 +129,8 @@ class ProcessingManifest(BaseModel):
     asr_model: str = ""
     llm_provider: str = ""
     llm_model: str = ""
+    analysis_status: Literal["pending", "completed", "failed", "skipped"] = "pending"
+    analysis_error: str = ""
     prompt_version: str = "1"
     errors: list[str] = Field(default_factory=list)
     output_files: list[str] = Field(default_factory=list)

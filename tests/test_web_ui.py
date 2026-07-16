@@ -95,6 +95,10 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("runtime.providers", self.js)
         self.assertIn("未配置或未发现", self.js)
 
+    def test_invalid_knowledge_package_is_not_rendered_as_success(self) -> None:
+        self.assertIn('status === "failed" || status === "invalid"', self.js)
+        self.assertIn('invalid: "知识包异常"', self.js)
+
     def test_unavailable_features_are_explicitly_disabled(self) -> None:
         self.assertRegex(self.html, r'data-media="capture"[^>]*disabled')
         self.assertRegex(self.html, r'id="captureNote"[^>]*disabled')

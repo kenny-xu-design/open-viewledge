@@ -11,6 +11,7 @@ from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, Pr
 from ..exporters import export_knowledge_package
 from ..providers.asr import LocalWhisperProvider
 from ..providers.llm import DeepSeekProvider
+from ..knowledge_validation import inspect_knowledge_package
 from ..sources import LocalMediaSource, YtdlpSource
 from ..timeline import build_timeline, extract_frames
 from ..transcripts import group_segments, parse_subtitle_file, read_jsonl, write_grouped_markdown, write_jsonl, write_legacy_transcript
@@ -111,6 +112,8 @@ class PipelineOrchestrator:
                 context.segments = normalize_segments(context.segments)
                 if self.sample_seconds:
                     context.segments = _limit_segments(context.segments, self.sample_seconds)
+                if not any(item.text.strip() for item in context.segments):
+                    raise UserFacingError("字幕或转写结果为空，不能生成知识包。")
                 write_jsonl(context.output_dir / "transcript.raw.jsonl", context.segments)
                 context.legacy_transcript_path = write_legacy_transcript(
                     context.output_dir / "transcript.md", context.segments, context.source.canonical_url or context.source.source_url
@@ -125,6 +128,8 @@ class PipelineOrchestrator:
                     self.config.transcript_group_seconds,
                     self.config.transcript_group_max_segments,
                 )
+                if not any(item.text.strip() for item in context.groups):
+                    raise UserFacingError("字幕分组为空，不能生成知识包。")
                 write_grouped_markdown(context.output_dir / "transcript.grouped.md", context.groups, context.source.source_url)
 
             self._stage(context, "group_transcript", group)
@@ -147,6 +152,8 @@ class PipelineOrchestrator:
             def analyze() -> None:
                 if self.no_analysis:
                     context.analysis = AnalysisResult(status="skipped", analysis_profile=self.analysis_profile)
+                    context.manifest.analysis_status = "skipped"
+                    context.manifest.analysis_error = ""
                     return
                 if self.backend != "deepseek":
                     raise UserFacingError(
@@ -171,11 +178,15 @@ class PipelineOrchestrator:
                     attempt.finished_at = utc_now()
                     attempt.error_type = "configuration"
                     attempt.error_message = context.analysis.error
+                    context.manifest.analysis_status = "failed"
+                    context.manifest.analysis_error = context.analysis.error
                     context.manifest.provider_attempts.append(attempt)
                     raise UserFacingError("未检测到 DEEPSEEK_API_KEY，请在项目 .env 中配置后重试。")
                 try:
                     context.analysis = AnalysisService(provider).analyze(context.groups, self.analysis_profile, context)
                     context.manifest.llm_model = context.analysis.model or provider.model_name
+                    context.manifest.analysis_status = "completed"
+                    context.manifest.analysis_error = ""
                     attempt.model = context.manifest.llm_model
                     attempt.success = True
                 except Exception as exc:
@@ -189,6 +200,8 @@ class PipelineOrchestrator:
                         )
                     attempt.error_type = type(exc).__name__
                     attempt.error_message = str(exc)
+                    context.manifest.analysis_status = "failed"
+                    context.manifest.analysis_error = context.analysis.error or str(exc)
                     raise
                 finally:
                     attempt.finished_at = utc_now()
@@ -197,7 +210,13 @@ class PipelineOrchestrator:
 
             self._stage(context, "run_analysis", analyze, soft_fail=True)
             if context.analysis is None:
-                context.analysis = AnalysisResult(analysis_profile=self.analysis_profile)
+                context.analysis = AnalysisResult(
+                    status="failed",
+                    error="分析阶段未生成结果。",
+                    analysis_profile=self.analysis_profile,
+                )
+                context.manifest.analysis_status = "failed"
+                context.manifest.analysis_error = context.analysis.error
 
             def export() -> None:
                 assert context.source and context.manifest
@@ -215,6 +234,10 @@ class PipelineOrchestrator:
                 files = export_knowledge_package(package, self.export_legacy_note)
                 context.manifest.output_files = [path.name for path in files] + ["transcript.raw.jsonl", "transcript.grouped.md", "transcript.md"]
                 self._save_manifest(context)
+                inspection = inspect_knowledge_package(context.output_dir)
+                if not inspection.valid:
+                    messages = [issue.message for issue in inspection.issues if issue.severity == "error"]
+                    raise UserFacingError("知识包完整性检查失败：" + "；".join(messages[:5]))
 
             self._stage(context, "export_knowledge_package", export)
             if not self.config.keep_temp_files:
@@ -243,11 +266,17 @@ class PipelineOrchestrator:
         self._save_manifest(context)
         try:
             action()
-            context.manifest.stage_status[name] = "completed"
+            if name == "run_analysis" and context.manifest.analysis_status == "skipped":
+                context.manifest.stage_status[name] = "skipped"
+            else:
+                context.manifest.stage_status[name] = "completed"
         except Exception as exc:
             message = f"阶段 {name} 失败：{exc}"
             context.manifest.errors.append(message)
-            context.manifest.stage_status[name] = "warning" if soft_fail else "failed"
+            if name == "run_analysis":
+                context.manifest.stage_status[name] = "failed"
+            else:
+                context.manifest.stage_status[name] = "warning" if soft_fail else "failed"
             self._save_manifest(context)
             if not soft_fail:
                 raise UserFacingError(message) from exc

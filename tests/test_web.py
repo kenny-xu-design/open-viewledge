@@ -233,8 +233,9 @@ class WebLibraryTests(unittest.TestCase):
 
         self.assertNotIn("local_path", detail["source"])
         self.assertNotIn("source_path", detail["source"])
-        self.assertEqual(detail["analysis"], {})
+        self.assertEqual(detail["analysis"]["status"], "failed")
         self.assertEqual(detail["status"], "partial")
+        self.assertEqual(detail["inspection"]["analysis_status"], "invalid")
 
     def test_grouped_transcript_is_parsed_without_loading_raw_transcript(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -256,6 +257,23 @@ class WebLibraryTests(unittest.TestCase):
                     resolve_library_file("demo", "../metadata.json")
                 with self.assertRaises(ValueError):
                     resolve_library_file("demo", "secret.txt")
+
+    def test_completed_manifest_with_empty_analysis_is_exposed_as_invalid(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            (package / "manifest.json").write_text(
+                '{"task_id":"task","status":"completed","source":{"source_type":"online_video","platform":"youtube","source_url":"https://example.com","source_id":"id","title":"Demo"},"stage_status":{"run_analysis":"completed"}}',
+                encoding="utf-8",
+            )
+            (package / "analysis.json").write_text("{}", encoding="utf-8")
+            with patch("src.web.OUTPUT_ROOT", root):
+                detail = load_knowledge_package("demo")
+                items = list_library_items()
+
+        self.assertEqual(detail["status"], "invalid")
+        self.assertEqual(detail["analysis"]["status"], "failed")
+        self.assertEqual(items[0]["status"], "invalid")
 
 
 class QuietVideoSummaryHandler(VideoSummaryHandler):

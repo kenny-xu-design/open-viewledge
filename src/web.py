@@ -21,6 +21,7 @@ from urllib.parse import quote, unquote, urlparse
 from .chat import answer_question
 from .chat_store import ChatStore
 from .config import load_config
+from .knowledge_validation import inspect_knowledge_package
 from .providers.llm import ProviderRegistry
 from .runtime_tools import runtime_tool_statuses
 from .utils import UserFacingError
@@ -264,6 +265,10 @@ def list_library_items() -> list[dict[str, Any]]:
         manifest = _load_json_file(directory / "manifest.json")
         source = manifest.get("source") if isinstance(manifest.get("source"), dict) else metadata
         analysis = _load_json_file(directory / "analysis.json")
+        inspection = inspect_knowledge_package(directory)
+        display_status = manifest.get("status") or ("completed" if (directory / "transcript.md").exists() else "unknown")
+        if inspection.level == "invalid" and str(display_status).startswith("completed"):
+            display_status = "invalid"
         items.append(
             {
                 "id": directory.name,
@@ -272,10 +277,13 @@ def list_library_items() -> list[dict[str, Any]]:
                 "sourceType": source.get("source_type") or "unknown",
                 "author": source.get("author") or metadata.get("author") or "",
                 "thumbnail": source.get("thumbnail") or "",
-                "status": manifest.get("status") or ("completed" if (directory / "transcript.md").exists() else "unknown"),
+                "status": display_status,
                 "currentStage": manifest.get("current_stage") or "",
                 "updatedAt": directory.stat().st_mtime,
                 "hasAnalysis": bool(analysis.get("summary") or analysis.get("highlights") or analysis.get("chapters")),
+                "analysisStatus": inspection.analysis_status,
+                "integrity": inspection.level,
+                "integrityIssues": [issue.message for issue in inspection.issues[:5]],
                 "chapterCount": _timeline_count(directory),
             }
         )
@@ -291,6 +299,19 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
     local_path = str(source.pop("local_path", "") or source.pop("source_path", "") or metadata.get("source_path") or "")
     analysis = _load_json_file(directory / "analysis.json")
     analysis.pop("raw_response", None)
+    inspection = inspect_knowledge_package(directory)
+    if inspection.analysis_status == "invalid":
+        analysis = {
+            "status": "failed",
+            "error": "知识包中的 analysis.json 无效，请运行 CLI inspect 查看详情。",
+        }
+    manifest_view = dict(manifest)
+    if inspection.level == "invalid" and str(manifest_view.get("status") or "").startswith("completed"):
+        manifest_view["status"] = "invalid"
+        manifest_view["errors"] = [
+            *list(manifest_view.get("errors") or []),
+            *[issue.message for issue in inspection.issues if issue.severity == "error"][:5],
+        ]
     timeline_payload = _load_json_file(directory / "timeline.json")
     timeline = timeline_payload.get("items", []) if isinstance(timeline_payload, dict) else []
     if not isinstance(timeline, list):
@@ -331,11 +352,12 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
         "video_id": video_id,
         "thumbnail": source.get("thumbnail") or metadata.get("thumbnail") or "",
         "duration": float(source.get("duration") or metadata.get("duration") or 0),
-        "status": manifest.get("status") or "unknown",
-        "currentStage": manifest.get("current_stage") or "",
+        "status": manifest_view.get("status") or "unknown",
+        "currentStage": manifest_view.get("current_stage") or "",
         "source": source,
-        "manifest": manifest,
+        "manifest": manifest_view,
         "analysis": analysis,
+        "inspection": inspection.to_dict(),
         "timeline": timeline,
         "files": files,
         "frames": frames,
@@ -683,6 +705,9 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             action = parts[1]
             if action == "transcript" and len(parts) == 2:
                 self._send_json({"groups": load_transcript_groups(knowledge_id)})
+                return
+            if action == "inspect" and len(parts) == 2:
+                self._send_json({"inspection": inspect_knowledge_package(resolve_library_dir(knowledge_id)).to_dict()})
                 return
             if action == "chat" and len(parts) == 2:
                 self._send_json({"chat": ChatStore(resolve_library_dir).load(knowledge_id)})

@@ -27,9 +27,15 @@ class DomainModelTests(unittest.TestCase):
         self.assertEqual(result.schema_version, "2")
 
     def test_manifest_records_stage_status(self) -> None:
-        manifest = ProcessingManifest(task_id="task", stage_status={"resolve_source": "completed"}, sample_seconds=30)
+        manifest = ProcessingManifest(
+            task_id="task",
+            stage_status={"resolve_source": "completed"},
+            sample_seconds=30,
+            analysis_status="skipped",
+        )
         self.assertEqual(manifest.stage_status["resolve_source"], "completed")
         self.assertEqual(manifest.sample_seconds, 30)
+        self.assertEqual(manifest.analysis_status, "skipped")
 
     def test_only_deepseek_backend_is_active(self) -> None:
         self.assertEqual(normalize_backend(None), "deepseek")

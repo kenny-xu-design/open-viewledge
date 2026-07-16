@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sys
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -24,6 +26,7 @@ from .audio import extract_audio
 from .adapters import BilibiliAdapter, LocalFileAdapter, YtdlpAdapter, is_bilibili_url
 from .config import AppConfig, load_config
 from .pipeline import PipelineOrchestrator
+from .knowledge_validation import inspect_knowledge_package
 from .subtitle import subtitle_to_transcript
 from .summarizer import NO_KEY_MESSAGE, generate_report, generate_summary
 from .transcriber import transcribe_audio
@@ -503,6 +506,13 @@ def _yaml_escape(value: str) -> str:
 def _run_argparse() -> None:
     import argparse
 
+    if len(sys.argv) > 1 and sys.argv[1] == "inspect":
+        inspect_parser = argparse.ArgumentParser(prog="python -m src.main inspect")
+        inspect_parser.add_argument("package", type=Path, help="知识包目录。")
+        inspect_parser.add_argument("--json", action="store_true", dest="json_output", help="输出 JSON。")
+        args = inspect_parser.parse_args(sys.argv[2:])
+        raise SystemExit(_print_inspection(args.package, args.json_output))
+
     parser = argparse.ArgumentParser(
         prog="python -m src.main",
         description="把视频链接或本地视频文件转换成结构化内容摘要。",
@@ -543,8 +553,17 @@ def _run_argparse() -> None:
 
 
 if typer:
+    @app.command("inspect")  # type: ignore[union-attr]
+    def inspect_command(
+        package: Path = typer.Argument(..., help="知识包目录。"),
+        json_output: bool = typer.Option(False, "--json", help="输出机器可读 JSON。"),
+    ) -> None:
+        raise typer.Exit(code=_print_inspection(package, json_output))
+
+
     @app.callback(invoke_without_command=True)  # type: ignore[union-attr]
     def run(
+        ctx: typer.Context,
         url: Optional[str] = typer.Option(None, "--url", help="公开视频链接，例如 B站 / YouTube。"),
         file: Optional[Path] = typer.Option(None, "--file", help="本地视频文件路径。"),
         lang: Optional[str] = typer.Option(None, "--lang", help="字幕或转写语言，例如 zh / en。"),
@@ -561,10 +580,27 @@ if typer:
         no_frames: bool = typer.Option(False, "--no-frames", help="跳过关键帧生成。"),
         sample_seconds: Optional[int] = typer.Option(None, "--sample-seconds", help="仅处理开头指定秒数，用于快速链路验证。"),
     ) -> None:
+        if ctx.invoked_subcommand:
+            return
         try:
             run_pipeline(url, file, lang, backend, mode, comments, export, no_summary, config, not no_frames, sample_seconds)
         except ExitWithCode as exc:
             raise typer.Exit(code=exc.code) from exc
+
+
+def _print_inspection(package: Path, json_output: bool) -> int:
+    report = inspect_knowledge_package(package)
+    if json_output:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        console.print(f"知识包：{report.package_path}")
+        console.print(f"完整性：{report.level}")
+        console.print(f"Manifest：{report.manifest_status or 'unknown'}")
+        console.print(f"分析：{report.analysis_status or 'unknown'}")
+        console.print(f"有效字幕段：{report.transcript_segments}")
+        for issue in report.issues:
+            console.print(f"[{issue.severity}] {issue.code}: {issue.message}")
+    return 0 if report.level == "valid" else 1 if report.level == "warning" else 2
 
 
 if __name__ == "__main__":

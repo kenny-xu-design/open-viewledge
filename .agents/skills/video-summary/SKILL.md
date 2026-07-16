@@ -80,6 +80,12 @@ Show help:
 .\.venv\Scripts\python.exe -m src.main --help
 ```
 
+Inspect an existing package without modifying it:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main inspect "output\<knowledge-id>" --json
+```
+
 Public URL summary:
 
 ```powershell
@@ -211,7 +217,7 @@ When responding to the user:
 3. Include the actual provider and model recorded in `analysis.json` or `manifest.json`.
 4. Provide the knowledge-package path.
 5. Link or name the key result files.
-6. Do not claim success based only on file existence; inspect status and meaningful content.
+6. Do not claim success based only on file existence; use the CLI `inspect` command and inspect meaningful content.
 
 ## Failure Handling
 
