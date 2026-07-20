@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased] - 1.2.1
+## [1.2.1] - 2026-07-20
 
 ### Added
 
@@ -14,7 +14,7 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - Main and compatible notes now share one structured Markdown renderer.
-- Package version advanced to 1.2.1 on the feature branch.
+- Package version advanced to 1.2.1.
 
 ## [1.2.0] - 2026-07-16
 

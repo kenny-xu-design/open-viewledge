@@ -1,15 +1,15 @@
 # Current State
 
-Last verified: 2026-07-16
+Last verified: 2026-07-20
 
 This document describes the implementation that currently exists. Planned work belongs in `ROADMAP.md`.
 
 ## Repository
 
 - Formal repository: `E:\AGT\git\video-summary-skill`
-- Stable baseline: `main` at `33a4cc7` (`v1.1`)
-- v1.2 development branch: `feat/v1.2-product-completion`
-- Package version on the feature branch: `1.2.1`
+- Stable baseline: `main` at `0583a89` (`v1.2.1`)
+- Release tag: `v1.2.1`
+- Package version: `1.2.1`
 
 ## v1.2.1 export increment
 
@@ -30,10 +30,10 @@ python -m src.main --help
 python -m src.web --help
 ```
 
-Latest v1.2 feature-branch verification:
+Latest v1.2.1 verification:
 
 ```text
-130 unit tests
+147 unit tests
 python -m compileall src
 python -m src.main --help
 python -m src.web --help
@@ -42,13 +42,13 @@ node --check src/web_ui/app.js
 
 ## v1.2 Progress
 
-- Documentation truth synchronization: completed on the feature branch.
-- Runtime executable discovery and model configuration unification: completed on the feature branch.
-- Knowledge-package integrity validation: completed on the feature branch.
-- User-note and Web-job persistence: completed on the feature branch.
-- Disabled-route cleanup and platform-limit documentation: completed on the feature branch.
-- Gemini image-input Provider and keyframe-service boundary: completed and mock tested on the feature branch.
-- Release metadata and validation: completed on the feature branch.
+- Documentation truth synchronization: completed in v1.2.1.
+- Runtime executable discovery and model configuration unification: completed in v1.2.1.
+- Knowledge-package integrity validation: completed in v1.2.1.
+- User-note and Web-job persistence: completed in v1.2.1.
+- Disabled-route cleanup and platform-limit documentation: completed in v1.2.1.
+- Gemini image-input Provider and keyframe-service boundary: completed and mock tested in v1.2.1.
+- Release metadata and validation: completed in v1.2.1.
 
 ## Active Product Path
 

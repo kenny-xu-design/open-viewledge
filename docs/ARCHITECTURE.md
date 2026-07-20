@@ -229,14 +229,14 @@ The retired comment-analysis prompt is kept only under `docs/archive/prompts/`. 
 
 ## v1.2 Evolution
 
-Completed in the v1.2 branch:
+Completed in v1.2.1:
 
 1. Durable user notes.
 2. Durable local Web job history.
 3. Explicit removal or archival of disabled paths.
 4. Testable Gemini image-input Provider and keyframe-service boundary.
 
-The v1.2 local-product architecture work is complete on the feature branch. Scale and SaaS remain separate future phases.
+The v1.2 local-product architecture work is complete in v1.2.1. Scale and SaaS remain separate future phases.
 
 ## Future Scale Architecture
 

@@ -81,7 +81,9 @@ class AnalysisSchemaTests(unittest.TestCase):
 
 
 class DeepSeekProviderTests(unittest.TestCase):
-    def test_default_model_is_centralized(self) -> None:
+    @patch("src.providers.llm.deepseek.load_dotenv", return_value=False)
+    @patch.dict("os.environ", {}, clear=True)
+    def test_default_model_is_centralized(self, _load_dotenv) -> None:
         provider = DeepSeekProvider(api_key="test-key", client=_client([]))
         self.assertEqual(provider.model_name, DEFAULT_DEEPSEEK_MODEL)
 
