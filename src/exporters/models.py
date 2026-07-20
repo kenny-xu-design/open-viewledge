@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from ..schema_compat import require_supported_schema
 
 
 SECTIONS = (
@@ -19,6 +21,7 @@ PRESETS = {
 
 
 class ExportSelection(BaseModel):
+    schema_version: str = "1.0"
     knowledge_id: str
     sections: list[str] = Field(default_factory=lambda: list(PRESETS["full"]))
     order: list[str] = Field(default_factory=list)
@@ -26,6 +29,11 @@ class ExportSelection(BaseModel):
     filename: str = ""
     overwrite: bool = False
     open_after_export: bool = False
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_supported_schema(value, supported_major=1, object_name="导出请求")
 
     def normalized_sections(self) -> list[str]:
         chosen = [value for value in self.sections if value in SECTIONS]

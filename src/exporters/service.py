@@ -65,6 +65,7 @@ def selection_for_request(knowledge_id: str, payload: dict[str, Any]) -> ExportS
     selection = selection_from_preset(
         knowledge_id,
         str(payload.get("preset") or "full"),
+        schema_version=str(payload.get("schema_version") or "1.0"),
         destination=str(payload.get("destination") or "preview"),
         overwrite=bool(payload.get("overwrite", False)),
         open_after_export=bool(payload.get("open_after_export", False)),

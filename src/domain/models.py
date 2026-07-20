@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from ..schema_compat import require_supported_schema
 
 
 def utc_now() -> str:
@@ -127,6 +129,11 @@ class AnalysisResult(BaseModel):
     usage: dict[str, int] = Field(default_factory=dict)
     generated_at: str = Field(default_factory=utc_now)
 
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_supported_schema(value, supported_major=2, object_name="分析结果", legacy_default=1)
+
 
 class ProviderAttempt(BaseModel):
     provider: str
@@ -140,6 +147,7 @@ class ProviderAttempt(BaseModel):
 
 
 class ProcessingManifest(BaseModel):
+    schema_version: str = "1.0"
     task_id: str
     source: SourceRecord | None = None
     status: str = "created"
@@ -160,6 +168,11 @@ class ProcessingManifest(BaseModel):
     output_files: list[str] = Field(default_factory=list)
     stage_status: dict[str, str] = Field(default_factory=dict)
     provider_attempts: list[ProviderAttempt] = Field(default_factory=list)
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_supported_schema(value, supported_major=1, object_name="知识包 Manifest")
 
 
 class KnowledgePackage(BaseModel):

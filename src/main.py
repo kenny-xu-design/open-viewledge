@@ -2,23 +2,20 @@ from __future__ import annotations
 
 import json
 import sys
+import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 try:
     import typer
 except ImportError:
     typer = None  # type: ignore[assignment]
 
-try:
-    from rich.console import Console
-except ImportError:
-    from .utils import console as _fallback_console
-
-    Console = None  # type: ignore[assignment]
-
 from . import __version__
+from .cli_contract import CliEmitter, ExitCode, classify_error, error_object, sanitize_message
+from .cli_tasks import CliTaskRecord, CliTaskStore
 from .config import load_config
+from .diagnostics import run_doctor
 from .exporters import export_directory_to_vault, render_directory_export, selection_for_request
 from .exporters.obsidian_exporter import safe_export_filename
 from .knowledge_validation import inspect_knowledge_package
@@ -29,14 +26,14 @@ from .utils import UserFacingError
 DEFAULT_MODE = "summary"
 SUPPORTED_MODES = ("auto", "summary", "tutorial", "interview", "lecture", "review", "viral", "close-reading")
 SUPPORTED_EXPORTS = ("none", "obsidian")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG = Path("config.example.json")
+CLI_TASK_ROOT = PROJECT_ROOT / ".local" / "cli_tasks"
 
 if typer:
     app = typer.Typer(add_completion=False, help="把视频链接或本地视频文件转换成结构化内容摘要。")
 else:
     app = None
-
-console = Console() if Console else _fallback_console  # type: ignore[misc]
-
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -81,18 +78,24 @@ def run_pipeline(
     config: Path = Path("config.example.json"),
     generate_frames: bool = True,
     sample_seconds: int | None = None,
-) -> None:
+    *,
+    task_id: str | None = None,
+    emitter: CliEmitter | None = None,
+) -> dict[str, Any]:
+    emitter = emitter or CliEmitter("analyze")
     if not url and not file:
-        console.print("[yellow]请提供 --url 或 --file。使用 --help 查看示例。[/yellow]")
-        raise ExitWithCode(1)
+        raise ExitWithCode(ExitCode.USAGE_OR_CONFIG, "请提供 --url 或 --file。使用 --help 查看示例。")
     if url and file:
-        console.print("[red]--url 和 --file 只能二选一。[/red]")
-        raise ExitWithCode(1)
+        raise ExitWithCode(ExitCode.USAGE_OR_CONFIG, "--url 和 --file 只能二选一。")
     if sample_seconds is not None and sample_seconds <= 0:
-        console.print("[red]--sample-seconds 必须是大于 0 的整数。[/red]")
-        raise ExitWithCode(1)
+        raise ExitWithCode(ExitCode.USAGE_OR_CONFIG, "--sample-seconds 必须是大于 0 的整数。")
+    if file and not file.expanduser().is_file():
+        raise ExitWithCode(ExitCode.INPUT_INACCESSIBLE, f"本地输入文件不存在：{file}")
 
-    cfg = load_config(config)
+    try:
+        cfg = load_config(config)
+    except UserFacingError as exc:
+        raise ExitWithCode(ExitCode.USAGE_OR_CONFIG, str(exc)) from exc
     language = lang or cfg.language
     if language != cfg.language:
         cfg = cfg.model_copy(update={"language": language})
@@ -101,11 +104,10 @@ def run_pipeline(
         analysis_mode = normalize_mode(mode)
         export_mode = normalize_export(export)
     except UserFacingError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise ExitWithCode(1) from exc
+        raise ExitWithCode(ExitCode.USAGE_OR_CONFIG, str(exc)) from exc
 
     if comments:
-        console.print("[yellow]--comments 已停用；本次不会获取或分析评论。[/yellow]")
+        emitter.diagnostic("警告：--comments 已停用；本次不会获取或分析评论。")
     try:
         package = PipelineOrchestrator(
             cfg,
@@ -115,21 +117,193 @@ def run_pipeline(
             generate_frames=generate_frames,
             sample_seconds=sample_seconds,
             export_legacy_note=export_mode == "obsidian",
-            log_callback=lambda message: console.print(f"[cyan]{message}[/cyan]"),
+            log_callback=emitter.diagnostic,
+            event_callback=lambda event, **payload: emitter.event(event, **payload),
+            task_id=task_id,
         ).run(str(url or file), is_url=bool(url))
     except UserFacingError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise ExitWithCode(1) from exc
+        message = str(exc)
+        raise ExitWithCode(classify_error(message), message) from exc
     except Exception as exc:
-        console.print(f"[red]处理失败：{exc}[/red]")
-        raise ExitWithCode(1) from exc
+        message = f"处理失败：{exc}"
+        raise ExitWithCode(ExitCode.EXECUTION_FAILED, message) from exc
 
-    console.print(f"[green]处理完成：{package.output_dir}[/green]")
-    console.print(f"index.md: {package.output_dir / 'index.md'}")
-    console.print(f"transcript.grouped.md: {package.output_dir / 'transcript.grouped.md'}")
-    console.print(f"transcript.md: {package.output_dir / 'transcript.md'}")
-    if export_mode == "obsidian":
-        console.print(f"export_note.md: {package.output_dir / 'export_note.md'}")
+    return {
+        "task_id": package.manifest.task_id,
+        "knowledge_id": package.output_dir.name,
+        "output_dir": str(package.output_dir),
+        "status": package.manifest.status,
+        "analysis": {
+            "status": package.analysis.status if package.analysis else "skipped",
+            "provider": package.analysis.provider if package.analysis else "",
+            "model": package.analysis.model if package.analysis else "",
+        },
+        "artifacts": {
+            "index": str(package.output_dir / "index.md"),
+            "transcript_grouped": str(package.output_dir / "transcript.grouped.md"),
+            "transcript": str(package.output_dir / "transcript.md"),
+            **({"compatible_export": str(package.output_dir / "export_note.md")} if export_mode == "obsidian" else {}),
+        },
+    }
+
+
+def execute_analyze(
+    *,
+    url: str | None = None,
+    file: Path | None = None,
+    lang: str | None = None,
+    backend: str | None = None,
+    mode: str = DEFAULT_MODE,
+    comments: bool = False,
+    export: str = "none",
+    no_summary: bool = False,
+    config: Path = DEFAULT_CONFIG,
+    generate_frames: bool = True,
+    sample_seconds: int | None = None,
+    json_output: bool = False,
+    jsonl_output: bool = False,
+    task_id: str | None = None,
+    task_store: CliTaskStore | None = None,
+    resumed: bool = False,
+) -> int:
+    try:
+        emitter = CliEmitter("resume" if resumed else "analyze", json_output=json_output, jsonl_output=jsonl_output)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return int(ExitCode.USAGE_OR_CONFIG)
+
+    store = task_store or CliTaskStore(CLI_TASK_ROOT)
+    resolved_task_id = task_id or uuid.uuid4().hex[:12]
+    source_type = "url" if url else "file"
+    source = str(url or file or "")
+    options = {
+        "lang": lang,
+        "backend": backend,
+        "mode": mode,
+        "comments": comments,
+        "export": export,
+        "no_summary": no_summary,
+        "config": str(config),
+        "generate_frames": generate_frames,
+        "sample_seconds": sample_seconds,
+    }
+    try:
+        if resumed:
+            record = store.load(resolved_task_id)
+            record.status = "running"
+            record.exit_code = None
+            record.error_code = ""
+            record.error_message = ""
+        else:
+            record = CliTaskRecord(
+                task_id=resolved_task_id,
+                source_type=source_type,
+                source=source,
+                options=options,
+                status="running",
+            )
+        store.save(record)
+    except (OSError, UserFacingError, ValueError) as exc:
+        emitter.failure(ExitCode.USAGE_OR_CONFIG, str(exc), task_id=resolved_task_id)
+        return int(ExitCode.USAGE_OR_CONFIG)
+
+    emitter.event("task_created", task_id=resolved_task_id, resumed=resumed, source_type=source_type)
+    try:
+        data = run_pipeline(
+            url=url,
+            file=file,
+            lang=lang,
+            backend=backend,
+            mode=mode,
+            comments=comments,
+            export=export,
+            no_summary=no_summary,
+            config=config,
+            generate_frames=generate_frames,
+            sample_seconds=sample_seconds,
+            task_id=resolved_task_id,
+            emitter=emitter,
+        )
+    except ExitWithCode as exc:
+        code = ExitCode(exc.code)
+        record.status = "failed"
+        record.exit_code = int(code)
+        record.error_code = code.name.lower()
+        record.error_message = sanitize_message(exc.message)
+        try:
+            store.save(record)
+        except OSError as store_error:
+            emitter.diagnostic(f"任务记录保存失败：{store_error}")
+        emitter.failure(code, exc.message, task_id=resolved_task_id)
+        return int(code)
+
+    record.status = "completed"
+    record.output_dir = str(data["output_dir"])
+    record.knowledge_id = str(data["knowledge_id"])
+    record.exit_code = int(ExitCode.SUCCESS)
+    try:
+        store.save(record)
+    except OSError as exc:
+        message = f"任务已完成，但任务记录保存失败：{exc}"
+        emitter.diagnostic(message)
+        emitter.event("warning", task_id=resolved_task_id, stage="task_record", message=message)
+    emitter.event("task_completed", task_id=resolved_task_id, result=data)
+    emitter.result(data)
+    return int(ExitCode.SUCCESS)
+
+
+def execute_resume(
+    task_id: str,
+    *,
+    json_output: bool = False,
+    jsonl_output: bool = False,
+    task_store: CliTaskStore | None = None,
+) -> int:
+    store = task_store or CliTaskStore(CLI_TASK_ROOT)
+    try:
+        record = store.load(task_id)
+    except UserFacingError as exc:
+        emitter = CliEmitter("resume", json_output=json_output, jsonl_output=jsonl_output)
+        code = classify_error(str(exc)) if "损坏" in str(exc) or "Schema" in str(exc) else ExitCode.INPUT_INACCESSIBLE
+        emitter.failure(code, str(exc), task_id=task_id)
+        return int(code)
+    if record.status == "completed":
+        emitter = CliEmitter("resume", json_output=json_output, jsonl_output=jsonl_output)
+        emitter.failure(ExitCode.USAGE_OR_CONFIG, "已完成任务不需要恢复。", task_id=task_id)
+        return int(ExitCode.USAGE_OR_CONFIG)
+    options = record.options
+    return execute_analyze(
+        url=record.source if record.source_type == "url" else None,
+        file=Path(record.source) if record.source_type == "file" else None,
+        lang=_optional_string(options.get("lang")),
+        backend=_optional_string(options.get("backend")),
+        mode=str(options.get("mode") or DEFAULT_MODE),
+        comments=bool(options.get("comments", False)),
+        export=str(options.get("export") or "none"),
+        no_summary=bool(options.get("no_summary", False)),
+        config=Path(str(options.get("config") or DEFAULT_CONFIG)),
+        generate_frames=bool(options.get("generate_frames", True)),
+        sample_seconds=_optional_int(options.get("sample_seconds")),
+        json_output=json_output,
+        jsonl_output=jsonl_output,
+        task_id=task_id,
+        task_store=store,
+        resumed=True,
+    )
+
+
+def _optional_string(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def export_existing_knowledge(
@@ -177,8 +351,10 @@ def export_existing_knowledge(
 
 
 class ExitWithCode(Exception):
-    def __init__(self, code: int) -> None:
-        self.code = code
+    def __init__(self, code: int | ExitCode, message: str = "") -> None:
+        super().__init__(message)
+        self.code = int(code)
+        self.message = message
 
 
 def _run_argparse() -> None:
@@ -250,6 +426,40 @@ def _run_argparse() -> None:
 
 
 if typer:
+    @app.command("analyze")  # type: ignore[union-attr]
+    def analyze_command(
+        url: Optional[str] = typer.Option(None, "--url", help="公开视频链接。"),
+        file: Optional[Path] = typer.Option(None, "--file", help="本地音视频文件。"),
+        lang: Optional[str] = typer.Option(None, "--lang"),
+        backend: Optional[str] = typer.Option(None, "--backend"),
+        mode: str = typer.Option(DEFAULT_MODE, "--mode"),
+        comments: bool = typer.Option(False, "--comments", help="已停用的兼容参数。"),
+        export: str = typer.Option("none", "--export"),
+        no_summary: bool = typer.Option(False, "--no-summary"),
+        config: Path = typer.Option(DEFAULT_CONFIG, "--config"),
+        no_frames: bool = typer.Option(False, "--no-frames"),
+        sample_seconds: Optional[int] = typer.Option(None, "--sample-seconds"),
+        json_output: bool = typer.Option(False, "--json", help="输出单个 JSON 结果。"),
+        jsonl_output: bool = typer.Option(False, "--jsonl", help="逐行输出 JSON 事件。"),
+    ) -> None:
+        code = execute_analyze(
+            url=url,
+            file=file,
+            lang=lang,
+            backend=backend,
+            mode=mode,
+            comments=comments,
+            export=export,
+            no_summary=no_summary,
+            config=config,
+            generate_frames=not no_frames,
+            sample_seconds=sample_seconds,
+            json_output=json_output,
+            jsonl_output=jsonl_output,
+        )
+        raise typer.Exit(code=code)
+
+
     @app.command("inspect")  # type: ignore[union-attr]
     def inspect_command(
         package: Path = typer.Argument(..., help="知识包目录。"),
@@ -267,63 +477,131 @@ if typer:
         order: str = typer.Option("", "--order"),
         overwrite: bool = typer.Option(False, "--overwrite"),
         json_output: bool = typer.Option(False, "--json"),
-        config: Path = typer.Option(Path("config.example.json"), "--config"),
+        config: Path = typer.Option(DEFAULT_CONFIG, "--config"),
     ) -> None:
+        emitter = CliEmitter("export", json_output=json_output)
         try:
-            result = export_existing_knowledge(knowledge_id, format_name=format_name, preset=preset, sections=sections, order=order, overwrite=overwrite, config=config)
-            print(json.dumps(result, ensure_ascii=False, indent=2) if json_output else result["file_path"])
+            result = export_existing_knowledge(
+                knowledge_id,
+                format_name=format_name,
+                preset=preset,
+                sections=sections,
+                order=order,
+                overwrite=overwrite,
+                config=config,
+            )
+            emitter.result(result)
         except UserFacingError as exc:
-            print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False) if json_output else str(exc))
-            raise typer.Exit(code=2) from exc
+            code = classify_error(str(exc))
+            emitter.failure(code, str(exc))
+            raise typer.Exit(code=int(code)) from exc
+
+
+    @app.command("resume")  # type: ignore[union-attr]
+    def resume_command(
+        task_id: str = typer.Argument(..., help="由 analyze 返回的 task_id。"),
+        json_output: bool = typer.Option(False, "--json"),
+        jsonl_output: bool = typer.Option(False, "--jsonl"),
+    ) -> None:
+        raise typer.Exit(code=execute_resume(task_id, json_output=json_output, jsonl_output=jsonl_output))
+
+
+    @app.command("doctor")  # type: ignore[union-attr]
+    def doctor_command(
+        config: Path = typer.Option(DEFAULT_CONFIG, "--config"),
+        json_output: bool = typer.Option(False, "--json"),
+    ) -> None:
+        emitter = CliEmitter("doctor", json_output=json_output)
+        try:
+            result = run_doctor(load_config(config), project_root=PROJECT_ROOT)
+        except UserFacingError as exc:
+            emitter.failure(ExitCode.USAGE_OR_CONFIG, str(exc))
+            raise typer.Exit(code=int(ExitCode.USAGE_OR_CONFIG)) from exc
+        healthy = bool(result["healthy"])
+        emitter.result(
+            result,
+            success=healthy,
+            error=None if healthy else error_object(ExitCode.EXTERNAL_TOOL_MISSING, "环境诊断发现必需依赖缺失。"),
+        )
+        raise typer.Exit(code=int(ExitCode.SUCCESS if healthy else ExitCode.EXTERNAL_TOOL_MISSING))
+
+
+    @app.command("config")  # type: ignore[union-attr]
+    def config_command(
+        config: Path = typer.Option(DEFAULT_CONFIG, "--config"),
+        json_output: bool = typer.Option(False, "--json"),
+    ) -> None:
+        emitter = CliEmitter("config", json_output=json_output)
+        try:
+            resolved = config.expanduser().resolve()
+            cfg = load_config(config)
+        except UserFacingError as exc:
+            emitter.failure(ExitCode.USAGE_OR_CONFIG, str(exc))
+            raise typer.Exit(code=int(ExitCode.USAGE_OR_CONFIG)) from exc
+        emitter.result({"config_path": str(resolved), "exists": resolved.is_file(), "values": cfg.model_dump(mode="json")})
 
 
     @app.callback(invoke_without_command=True)  # type: ignore[union-attr]
     def run(
         ctx: typer.Context,
-        version: bool = typer.Option(
-            False,
-            "--version",
-            callback=_version_callback,
-            is_eager=True,
-            help="显示版本并退出。",
-        ),
-        url: Optional[str] = typer.Option(None, "--url", help="公开视频链接，例如 B站 / YouTube。"),
-        file: Optional[Path] = typer.Option(None, "--file", help="本地视频文件路径。"),
-        lang: Optional[str] = typer.Option(None, "--lang", help="字幕或转写语言，例如 zh / en。"),
-        backend: Optional[str] = typer.Option(None, "--backend", help="AI 分析后端：仅支持 deepseek。"),
-        mode: str = typer.Option(
-            DEFAULT_MODE,
-            "--mode",
-            help="分析模式：summary / tutorial / viral / close-reading。",
-        ),
-        comments: bool = typer.Option(False, "--comments", help="已停用；保留此参数仅用于旧命令兼容。"),
-        export: str = typer.Option("none", "--export", help="导出方式：none / obsidian。"),
-        no_summary: bool = typer.Option(False, "--no-summary", help="只生成 transcript.md，不调用 LLM。"),
-        config: Path = typer.Option(Path("config.example.json"), "--config", help="配置文件路径。"),
-        no_frames: bool = typer.Option(False, "--no-frames", help="跳过关键帧生成。"),
-        sample_seconds: Optional[int] = typer.Option(None, "--sample-seconds", help="仅处理开头指定秒数，用于快速链路验证。"),
+        version: bool = typer.Option(False, "--version", callback=_version_callback, is_eager=True, help="显示版本并退出。"),
+        url: Optional[str] = typer.Option(None, "--url", help="旧用法兼容；请改用 analyze --url。"),
+        file: Optional[Path] = typer.Option(None, "--file", help="旧用法兼容；请改用 analyze --file。"),
+        lang: Optional[str] = typer.Option(None, "--lang"),
+        backend: Optional[str] = typer.Option(None, "--backend"),
+        mode: str = typer.Option(DEFAULT_MODE, "--mode"),
+        comments: bool = typer.Option(False, "--comments", help="已停用的兼容参数。"),
+        export: str = typer.Option("none", "--export"),
+        no_summary: bool = typer.Option(False, "--no-summary"),
+        config: Path = typer.Option(DEFAULT_CONFIG, "--config"),
+        no_frames: bool = typer.Option(False, "--no-frames"),
+        sample_seconds: Optional[int] = typer.Option(None, "--sample-seconds"),
+        json_output: bool = typer.Option(False, "--json"),
+        jsonl_output: bool = typer.Option(False, "--jsonl"),
     ) -> None:
         if ctx.invoked_subcommand:
             return
-        try:
-            run_pipeline(url, file, lang, backend, mode, comments, export, no_summary, config, not no_frames, sample_seconds)
-        except ExitWithCode as exc:
-            raise typer.Exit(code=exc.code) from exc
+        if not url and not file:
+            typer.echo(ctx.get_help())
+            return
+        print("警告：根级 analyze 参数已废弃；请使用 `python -m src.main analyze ...`。", file=sys.stderr)
+        code = execute_analyze(
+            url=url,
+            file=file,
+            lang=lang,
+            backend=backend,
+            mode=mode,
+            comments=comments,
+            export=export,
+            no_summary=no_summary,
+            config=config,
+            generate_frames=not no_frames,
+            sample_seconds=sample_seconds,
+            json_output=json_output,
+            jsonl_output=jsonl_output,
+        )
+        raise typer.Exit(code=code)
 
 
 def _print_inspection(package: Path, json_output: bool) -> int:
     report = inspect_knowledge_package(package)
+    emitter = CliEmitter("inspect", json_output=json_output)
     if json_output:
-        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+        invalid = report.level == "invalid"
+        emitter.result(
+            report.to_dict(),
+            success=not invalid,
+            error=error_object(ExitCode.KNOWLEDGE_PACKAGE_DAMAGED, "知识包检查未通过。") if invalid else None,
+        )
     else:
-        console.print(f"知识包：{report.package_path}")
-        console.print(f"完整性：{report.level}")
-        console.print(f"Manifest：{report.manifest_status or 'unknown'}")
-        console.print(f"分析：{report.analysis_status or 'unknown'}")
-        console.print(f"有效字幕段：{report.transcript_segments}")
+        print(f"package_path: {report.package_path}")
+        print(f"level: {report.level}")
+        print(f"manifest_status: {report.manifest_status or 'unknown'}")
+        print(f"analysis_status: {report.analysis_status or 'unknown'}")
+        print(f"transcript_segments: {report.transcript_segments}")
         for issue in report.issues:
-            console.print(f"[{issue.severity}] {issue.code}: {issue.message}")
-    return 0 if report.level == "valid" else 1 if report.level == "warning" else 2
+            print(f"[{issue.severity}] {issue.code}: {issue.message}", file=sys.stderr)
+    return int(ExitCode.SUCCESS if report.level == "valid" else ExitCode.EXECUTION_FAILED if report.level == "warning" else ExitCode.KNOWLEDGE_PACKAGE_DAMAGED)
 
 
 if __name__ == "__main__":

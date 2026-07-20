@@ -18,6 +18,7 @@ from ..timeline import build_timeline, extract_frames
 from ..transcripts import group_segments, parse_subtitle_file, read_jsonl, write_grouped_markdown, write_jsonl, write_legacy_transcript
 from ..transcripts.normalizer import normalize_segments
 from ..utils import UserFacingError, ensure_dir, load_json, sanitize_filename, save_json, write_text
+from ..cli_contract import sanitize_message
 from .context import PipelineContext
 from .stages import STAGES
 
@@ -34,6 +35,8 @@ class PipelineOrchestrator:
         sample_seconds: int | None = None,
         export_legacy_note: bool = False,
         log_callback=None,
+        event_callback=None,
+        task_id: str | None = None,
     ) -> None:
         self.config = config
         self.backend = backend or config.summary_backend
@@ -43,9 +46,11 @@ class PipelineOrchestrator:
         self.sample_seconds = sample_seconds
         self.export_legacy_note = export_legacy_note
         self.log_callback = log_callback
+        self.event_callback = event_callback
+        self.task_id = task_id
 
     def run(self, input_value: str, is_url: bool) -> KnowledgePackage:
-        task_id = uuid.uuid4().hex[:12]
+        task_id = self.task_id or uuid.uuid4().hex[:12]
         source_adapter = YtdlpSource() if is_url else LocalMediaSource()
         context = PipelineContext(
             config=self.config,
@@ -243,6 +248,8 @@ class PipelineOrchestrator:
                 files = export_knowledge_package(package, self.export_legacy_note)
                 context.manifest.output_files = [path.name for path in files] + ["transcript.raw.jsonl", "transcript.grouped.md", "transcript.md"]
                 self._save_manifest(context)
+                for name in context.manifest.output_files:
+                    self._emit("artifact_created", task_id=context.manifest.task_id, stage="export_knowledge_package", artifact=str(context.output_dir / name))
                 inspection = inspect_knowledge_package(context.output_dir)
                 if not inspection.valid:
                     messages = [issue.message for issue in inspection.issues if issue.severity == "error"]
@@ -263,15 +270,23 @@ class PipelineOrchestrator:
         except Exception as exc:
             if context.manifest:
                 context.manifest.status = "failed"
-                context.manifest.errors.append(str(exc))
+                context.manifest.errors.append(sanitize_message(str(exc)))
                 self._save_manifest(context)
             raise UserFacingError(f"处理管线失败：{exc}") from exc
 
     def _stage(self, context: PipelineContext, name: str, action, soft_fail: bool = False) -> None:
         assert context.manifest
+        stage_index = STAGES.index(name) if name in STAGES else 0
+        total_stages = len(STAGES)
         context.manifest.current_stage = name
         context.manifest.stage_status[name] = "running"
         context.log(f"阶段：{name}")
+        self._emit(
+            "stage_started",
+            task_id=context.manifest.task_id,
+            stage=name,
+            progress=stage_index / total_stages,
+        )
         self._save_manifest(context)
         try:
             action()
@@ -280,7 +295,7 @@ class PipelineOrchestrator:
             else:
                 context.manifest.stage_status[name] = "completed"
         except Exception as exc:
-            message = f"阶段 {name} 失败：{exc}"
+            message = sanitize_message(f"阶段 {name} 失败：{exc}")
             context.manifest.errors.append(message)
             if name == "run_analysis":
                 context.manifest.stage_status[name] = "failed"
@@ -290,7 +305,25 @@ class PipelineOrchestrator:
             if not soft_fail:
                 raise UserFacingError(message) from exc
             context.log(message)
+            self._emit("warning", task_id=context.manifest.task_id, stage=name, message=message)
         self._save_manifest(context)
+        self._emit(
+            "stage_completed",
+            task_id=context.manifest.task_id,
+            stage=name,
+            status=context.manifest.stage_status[name],
+            progress=(stage_index + 1) / total_stages,
+        )
+        self._emit(
+            "progress",
+            task_id=context.manifest.task_id,
+            stage=name,
+            progress=(stage_index + 1) / total_stages,
+        )
+
+    def _emit(self, event: str, **payload) -> None:
+        if self.event_callback:
+            self.event_callback(event, **payload)
 
     @staticmethod
     def _save_manifest(context: PipelineContext) -> None:
