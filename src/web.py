@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
 from . import __version__
+from .cli_contract import sanitize_message
 from .analysis.retry import reanalyze_knowledge_package
 from .chat import answer_question
 from .chat_store import ChatStore
@@ -79,7 +80,7 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
     if export not in SUPPORTED_EXPORTS:
         raise ValueError("export 参数不合法。")
 
-    command = [python_executable, "-m", "src.main"]
+    command = [python_executable, "-m", "src.main", "analyze"]
     command.extend(["--url" if source_type == "url" else "--file", source])
     if lang:
         command.extend(["--lang", lang])
@@ -99,6 +100,7 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
         if sample_value <= 0:
             raise ValueError("sampleSeconds 必须是正整数。")
         command.extend(["--sample-seconds", str(sample_value)])
+    command.append("--jsonl")
     return command
 
 
@@ -148,12 +150,13 @@ def _run_job(job: Job) -> None:
         )
         assert process.stdout is not None
         for line in process.stdout:
-            _append_log(job, line.rstrip())
+            _handle_cli_output_line(job, line.rstrip())
         job.returncode = process.wait()
-        job.output_dir = _find_new_output_dir(before)
+        if not job.output_dir:
+            job.output_dir = _find_new_output_dir(before)
         job.knowledge_id = Path(job.output_dir).name if job.output_dir else ""
         job.status = "success" if job.returncode == 0 else "failed"
-        if job.returncode != 0:
+        if job.returncode != 0 and not job.error:
             job.error = f"CLI 退出码：{job.returncode}"
     except Exception as exc:
         job.status = "failed"
@@ -162,6 +165,34 @@ def _run_job(job: Job) -> None:
     finally:
         job.finished_at = time.time()
         _persist_job(job)
+
+
+def _handle_cli_output_line(job: Job, line: str) -> None:
+    if not line:
+        return
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError:
+        _append_log(job, line)
+        return
+    if not isinstance(payload, dict) or not payload.get("event"):
+        _append_log(job, line)
+        return
+    event = str(payload.get("event"))
+    if event == "task_created":
+        job.cli_task_id = str(payload.get("task_id") or "")
+    elif event == "task_completed" and isinstance(payload.get("result"), dict):
+        result = payload["result"]
+        job.output_dir = str(result.get("output_dir") or "")
+        job.knowledge_id = str(result.get("knowledge_id") or "")
+    elif event == "task_failed" and isinstance(payload.get("error"), dict):
+        job.error = str(payload["error"].get("message") or "")
+    stage = str(payload.get("stage") or "")
+    progress = payload.get("progress")
+    detail = f"{event}{' ' + stage if stage else ''}"
+    if isinstance(progress, (int, float)):
+        detail += f" {float(progress):.0%}"
+    _append_log(job, detail)
 
 
 def _append_runtime_logs(job: Job) -> None:
@@ -212,6 +243,7 @@ def _is_project_venv_python(python_executable: str | None = None) -> bool:
 def _append_log(job: Job, line: str) -> None:
     if not line:
         return
+    line = sanitize_message(line)
     with JOBS_LOCK:
         job.logs.append(line)
         if len(job.logs) > 400:
@@ -272,6 +304,7 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "finishedAt": job.finished_at,
         "status": job.status,
         "returncode": job.returncode,
+        "cliTaskId": job.cli_task_id,
         "logs": job.logs,
         "knowledgeId": job.knowledge_id,
         "outputDir": job.output_dir,
