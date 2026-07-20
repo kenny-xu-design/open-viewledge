@@ -16,6 +16,7 @@ class WebUiContractTests(unittest.TestCase):
         cls.js = (WEB_UI / "app.js").read_text(encoding="utf-8")
 
     def test_three_pane_and_mobile_view_contracts_exist(self) -> None:
+        self.assertIn('/static/app.workspace-', self.html)
         for element_id in (
             "sidebar",
             "resultPane",
@@ -112,6 +113,33 @@ class WebUiContractTests(unittest.TestCase):
     def test_invalid_knowledge_package_is_not_rendered_as_success(self) -> None:
         self.assertIn('status === "failed" || status === "invalid"', self.js)
         self.assertIn('invalid: "知识包异常"', self.js)
+
+    def test_failed_analysis_can_be_retried_without_reprocessing_media(self) -> None:
+        self.assertIn('id="retryAnalysis"', self.html)
+        self.assertIn("function retryAnalysis()", self.js)
+        self.assertIn("/analysis/retry`", self.js)
+        self.assertIn("仅重新执行 AI 分析", self.js)
+
+    def test_library_records_support_confirmed_multi_delete(self) -> None:
+        self.assertIn("<span>资源库</span>", self.html)
+        self.assertIn("<span>产出库</span>", self.html)
+        self.assertNotIn("知 · 资源库", self.html)
+        self.assertNotIn("行 · 产出物", self.html)
+        self.assertIn('id="toggleDeleteMode"', self.html)
+        self.assertIn('id="deleteKnowledgeDialog"', self.html)
+        self.assertIn('id="confirmDeleteKnowledge"', self.html)
+        self.assertIn("function toggleKnowledgeDeleteSelection", self.js)
+        self.assertIn('method: "DELETE"', self.js)
+        self.assertIn("确认永久删除", self.html)
+
+    def test_original_export_panel_supports_preview_download_and_vault(self) -> None:
+        self.assertIn('id="exportKnowledgeDialog"', self.html)
+        self.assertIn('data-export-preset="summary-chat"', self.html)
+        self.assertIn('id="exportMarkdownPreview"', self.html)
+        self.assertIn("function previewKnowledgeExport()", self.js)
+        self.assertIn("function downloadKnowledgeExport()", self.js)
+        self.assertIn("function saveKnowledgeExportToVault()", self.js)
+        self.assertIn("/api/knowledge/${encodeURIComponent(state.selectedKnowledgeId)}/export", self.js)
 
     def test_unavailable_features_are_explicitly_disabled(self) -> None:
         self.assertRegex(self.html, r'data-media="capture"[^>]*disabled')

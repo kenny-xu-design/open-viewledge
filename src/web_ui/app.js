@@ -1,8 +1,12 @@
 "use strict";
 
+document.documentElement.dataset.uiVersion = "workspace-15";
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const DEFAULT_MODULE_ORDER = ["result", "media", "collaboration"];
+const EXPORT_SECTION_LABELS = { metadata: "基本信息", summary: "摘要", highlights: "亮点", prerequisites: "前置条件", steps: "操作步骤", glossary: "关键术语", thoughts: "思考", action_items: "可执行动作", warnings: "注意事项", chapters: "章节", keyframes: "关键帧", chat: "AI 对话", user_notes: "我的笔记", source_materials: "原文资料" };
+const EXPORT_PRESETS = { light: ["metadata", "summary", "highlights", "chapters"], "summary-chat": ["metadata", "summary", "highlights", "chat", "user_notes"], full: Object.keys(EXPORT_SECTION_LABELS) };
 const SETTINGS = {
   moduleOrder: "vs.moduleOrder",
   moduleWidths: "vs.moduleWidths",
@@ -31,6 +35,12 @@ const state = {
   scrollPositions: { summary: 0, transcript: 0 },
   noteStateByKnowledgeId: {},
   providerStatuses: {},
+  deleteMode: false,
+  selectedDeleteIds: new Set(),
+  deleting: false,
+  exportPreset: "full",
+  exportSections: new Set(EXPORT_PRESETS.full),
+  exportMarkdown: "",
 };
 
 const knowledgeCache = new Map();
@@ -242,6 +252,8 @@ function bindEvents() {
   $("#focusSearch").addEventListener("click", focusSidebarSearch);
   $("#librarySearch").addEventListener("input", renderLibrary);
   $("#refreshLibrary").addEventListener("click", refreshLibrary);
+  $("#toggleDeleteMode").addEventListener("click", handleDeleteAction);
+  $("#confirmDeleteKnowledge").addEventListener("click", confirmDeleteKnowledge);
   $("#reloadKnowledge").addEventListener("click", () => state.selectedKnowledgeId && loadKnowledge(state.selectedKnowledgeId, true));
   $("#toggleSidebar").addEventListener("click", toggleSidebar);
   $("#collapseSidebar").addEventListener("click", toggleSidebar);
@@ -253,7 +265,13 @@ function bindEvents() {
   $("#downloadSource").addEventListener("click", () => downloadFile("index.md"));
   $("#copyResult").addEventListener("click", copyCurrentResult);
   $("#downloadResult").addEventListener("click", () => downloadFile(state.activeResultTab === "summary" ? "index.md" : "transcript.grouped.md"));
-  $("#exportResult").addEventListener("click", () => downloadFile("export_note.md", "index.md"));
+  $("#exportResult").addEventListener("click", openKnowledgeExport);
+  $("#previewKnowledgeExport").addEventListener("click", previewKnowledgeExport);
+  $("#downloadKnowledgeExport").addEventListener("click", downloadKnowledgeExport);
+  $("#copyKnowledgeExport").addEventListener("click", copyKnowledgeExport);
+  $("#vaultKnowledgeExport").addEventListener("click", saveKnowledgeExportToVault);
+  $$('[data-export-preset]').forEach((button) => button.addEventListener("click", () => setExportPreset(button.dataset.exportPreset)));
+  $("#retryAnalysis").addEventListener("click", retryAnalysis);
   $("#chapterDirectory").addEventListener("click", () => $(".chapter", $("#summaryView"))?.scrollIntoView({ behavior: "smooth" }));
   $("#readTranscript").addEventListener("click", () => setResultTab(state.activeResultTab === "summary" ? "transcript" : "summary"));
   $("#backToTop").addEventListener("click", () => $("#resultScroll").scrollTo({ top: 0, behavior: "smooth" }));
@@ -283,7 +301,9 @@ function bindEvents() {
 
   $("#libraryList").addEventListener("click", (event) => {
     const item = event.target.closest("[data-knowledge-id]");
-    if (item) loadKnowledge(item.dataset.knowledgeId);
+    if (!item) return;
+    if (state.deleteMode) toggleKnowledgeDeleteSelection(item.dataset.knowledgeId);
+    else loadKnowledge(item.dataset.knowledgeId);
   });
   $("#summaryView").addEventListener("click", handleResultClick);
   $("#transcriptGroups").addEventListener("click", handleTranscriptClick);
@@ -359,6 +379,8 @@ async function refreshLibrary() {
   try {
     const data = await api("/api/library");
     state.libraryItems = data.items || [];
+    const availableIds = new Set(state.libraryItems.map((item) => item.id));
+    state.selectedDeleteIds = new Set([...state.selectedDeleteIds].filter((id) => availableIds.has(id)));
     updateLibraryCounts();
     renderLibrary();
     if (!state.selectedKnowledgeId && state.libraryItems.length) {
@@ -388,14 +410,22 @@ function renderLibrary() {
   if (!items.length) {
     list.innerHTML = '<div class="library-empty">暂无处理记录<br><button class="quiet-button" data-empty-new>新总结</button></div>';
     $("[data-empty-new]", list)?.addEventListener("click", openNewTask);
+    updateDeleteAction();
     return;
   }
-  list.innerHTML = items.map((item) => `
-    <button class="library-item ${item.id === state.selectedKnowledgeId ? "active" : ""}" data-knowledge-id="${escapeAttr(item.id)}" aria-current="${item.id === state.selectedKnowledgeId ? "true" : "false"}">
-      <span class="record-icon"><svg><use href="#${item.sourceType === "web_page" ? "i-file" : "i-video"}"/></svg></span>
+  list.innerHTML = items.map((item) => {
+    const deleteSelected = state.selectedDeleteIds.has(item.id);
+    const leading = state.deleteMode
+      ? `<span class="record-selector ${deleteSelected ? "selected" : ""}" aria-hidden="true">${deleteSelected ? '<svg><use href="#i-check"/></svg>' : ""}</span>`
+      : `<span class="record-icon"><svg><use href="#${item.sourceType === "web_page" ? "i-file" : "i-video"}"/></svg></span>`;
+    return `
+    <button class="library-item ${!state.deleteMode && item.id === state.selectedKnowledgeId ? "active" : ""} ${deleteSelected ? "delete-selected" : ""}" data-knowledge-id="${escapeAttr(item.id)}" aria-current="${!state.deleteMode && item.id === state.selectedKnowledgeId ? "true" : "false"}" ${state.deleteMode ? `aria-pressed="${deleteSelected ? "true" : "false"}"` : ""}>
+      ${leading}
       <span class="record-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(platformLabel(item.platform))} · ${formatRelativeDate(item.updatedAt)}</small></span>
       <span class="record-state ${escapeAttr(item.status)}" aria-label="${escapeAttr(statusLabel(item.status))}"></span>
-    </button>`).join("");
+    </button>`;
+  }).join("");
+  updateDeleteAction();
 }
 
 function updateLibraryCounts() {
@@ -462,7 +492,180 @@ function renderKnowledge(knowledge) {
   $("#modelBadge").textContent = model ? `${providerLabel(provider)} · ${model}` : "未运行 AI 分析";
   $("#modelBadge").title = model ? `本知识包实际使用模型：${model}` : "当前知识包未记录分析模型";
   $("#chapterCount").textContent = (knowledge.analysis?.chapters?.length || knowledge.timeline?.length || 0);
+  renderAnalysisRetry(knowledge);
   renderLibrary();
+}
+
+function handleDeleteAction() {
+  if (!state.deleteMode) {
+    if (!state.libraryItems.length) { showToast("没有可删除的知识记录"); return; }
+    state.deleteMode = true;
+    state.selectedDeleteIds.clear();
+    renderLibrary();
+    return;
+  }
+  if (!state.selectedDeleteIds.size) {
+    setDeleteMode(false);
+    return;
+  }
+  openDeleteConfirmation();
+}
+
+function setDeleteMode(enabled) {
+  state.deleteMode = enabled;
+  if (!enabled) state.selectedDeleteIds.clear();
+  renderLibrary();
+}
+
+function toggleKnowledgeDeleteSelection(knowledgeId) {
+  if (state.selectedDeleteIds.has(knowledgeId)) state.selectedDeleteIds.delete(knowledgeId);
+  else state.selectedDeleteIds.add(knowledgeId);
+  renderLibrary();
+}
+
+function updateDeleteAction() {
+  const button = $("#toggleDeleteMode");
+  if (!button) return;
+  const count = state.selectedDeleteIds.size;
+  const confirming = state.deleteMode && count > 0;
+  $("#deleteActionIcon")?.setAttribute("href", confirming ? "#i-check" : "#i-trash");
+  $("#recordHeadingLabel").textContent = state.deleteMode ? `已选择 ${count} 项` : "知识记录";
+  button.classList.toggle("delete-confirm-action", confirming);
+  button.disabled = state.deleting || (!state.deleteMode && !state.libraryItems.length);
+  const label = confirming ? `确认删除已选择的 ${count} 条记录` : (state.deleteMode ? "退出删除模式" : "选择要删除的记录");
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+
+function openDeleteConfirmation() {
+  const selectedItems = state.libraryItems.filter((item) => state.selectedDeleteIds.has(item.id));
+  if (!selectedItems.length) return;
+  $("#deleteConfirmSummary").textContent = `即将永久删除 ${selectedItems.length} 条知识记录：`;
+  $("#deleteConfirmList").innerHTML = selectedItems.map((item) => `<li>${escapeHtml(item.title || item.id)}</li>`).join("");
+  $("#deleteKnowledgeDialog").showModal();
+}
+
+async function confirmDeleteKnowledge() {
+  const knowledgeIds = [...state.selectedDeleteIds];
+  if (!knowledgeIds.length || state.deleting) return;
+  state.deleting = true;
+  const button = $("#confirmDeleteKnowledge");
+  button.disabled = true;
+  button.textContent = "正在删除…";
+  updateDeleteAction();
+  try {
+    await Promise.all(knowledgeIds.map((id) => flushNoteSave(id)));
+    const data = await api("/api/library", {
+      method: "DELETE",
+      body: JSON.stringify({ knowledge_ids: knowledgeIds }),
+    });
+    knowledgeIds.forEach((id) => {
+      knowledgeCache.delete(id);
+      delete state.chatStateByKnowledgeId[id];
+      delete state.noteStateByKnowledgeId[id];
+    });
+    $("#deleteKnowledgeDialog").close();
+    if (knowledgeIds.includes(state.selectedKnowledgeId)) history.replaceState(null, "", location.pathname);
+    showToast(`已删除 ${data.count || knowledgeIds.length} 条知识记录`);
+    window.setTimeout(() => window.location.reload(), 450);
+  } catch (error) {
+    showToast(`删除失败：${error.message}`);
+  } finally {
+    state.deleting = false;
+    button.disabled = false;
+    button.textContent = "确认永久删除";
+    updateDeleteAction();
+  }
+}
+
+function openKnowledgeExport() {
+  if (!state.selectedKnowledgeId) { showToast("请先选择知识记录"); return; }
+  renderExportSections();
+  $("#exportKnowledgeDialog").showModal();
+  previewKnowledgeExport();
+}
+
+function setExportPreset(preset) {
+  state.exportPreset = EXPORT_PRESETS[preset] ? preset : "full";
+  state.exportSections = new Set(EXPORT_PRESETS[state.exportPreset]);
+  $$('[data-export-preset]').forEach((button) => button.classList.toggle("active", button.dataset.exportPreset === state.exportPreset));
+  renderExportSections();
+  previewKnowledgeExport();
+}
+
+function renderExportSections() {
+  const root = $("#exportSections");
+  root.innerHTML = Object.entries(EXPORT_SECTION_LABELS).map(([key, label]) => `<label><input type="checkbox" data-export-section="${key}" ${state.exportSections.has(key) ? "checked" : ""}>${label}</label>`).join("");
+  $$('[data-export-section]', root).forEach((input) => input.addEventListener("change", () => {
+    if (input.checked) state.exportSections.add(input.dataset.exportSection); else state.exportSections.delete(input.dataset.exportSection);
+    state.exportPreset = "custom";
+    $$('[data-export-preset]').forEach((button) => button.classList.remove("active"));
+  }));
+}
+
+function exportRequest(destination) {
+  return { preset: state.exportPreset === "custom" ? "full" : state.exportPreset, sections: [...state.exportSections], order: [...state.exportSections], destination };
+}
+
+async function previewKnowledgeExport() {
+  if (!state.selectedKnowledgeId || !state.exportSections.size) return;
+  $("#exportMarkdownPreview").textContent = "正在生成预览…";
+  try {
+    const data = await api(`/api/knowledge/${encodeURIComponent(state.selectedKnowledgeId)}/export`, { method: "POST", body: JSON.stringify(exportRequest("preview")) });
+    state.exportMarkdown = data.markdown || "";
+    $("#exportMarkdownPreview").textContent = state.exportMarkdown || "没有可导出的内容。";
+  } catch (error) { $("#exportMarkdownPreview").textContent = `预览失败：${error.message}`; }
+}
+
+async function downloadKnowledgeExport() {
+  const response = await fetch(`/api/knowledge/${encodeURIComponent(state.selectedKnowledgeId)}/export`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(exportRequest("download")) });
+  if (!response.ok) { const data = await response.json(); showToast(`下载失败：${data.error || response.status}`); return; }
+  const blob = await response.blob(); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "video-note.md"; anchor.click(); URL.revokeObjectURL(url);
+}
+
+async function copyKnowledgeExport() { if (!state.exportMarkdown) await previewKnowledgeExport(); if (state.exportMarkdown) copyText(state.exportMarkdown); }
+
+async function saveKnowledgeExportToVault() {
+  try {
+    const data = await api(`/api/knowledge/${encodeURIComponent(state.selectedKnowledgeId)}/export`, { method: "POST", body: JSON.stringify(exportRequest("obsidian-open")) });
+    $("#exportVaultState").textContent = `已保存：${data.relative_vault_path}`;
+    if (data.obsidian_uri) window.location.href = data.obsidian_uri;
+  } catch (error) { $("#exportVaultState").textContent = `保存失败：${error.message}`; }
+}
+
+function renderAnalysisRetry(knowledge) {
+  const button = $("#retryAnalysis");
+  const failed = knowledge.analysis?.status === "failed" || knowledge.inspection?.analysis_status === "invalid";
+  button.classList.toggle("hidden", !failed);
+  button.disabled = !failed;
+  button.removeAttribute("aria-busy");
+}
+
+async function retryAnalysis() {
+  const knowledgeId = state.selectedKnowledgeId;
+  if (!knowledgeId) return;
+  const button = $("#retryAnalysis");
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.title = "正在重新生成摘要";
+  showToast("正在重新生成摘要，仅重新执行 AI 分析…");
+  try {
+    const data = await api(`/api/library/${encodeURIComponent(knowledgeId)}/analysis/retry`, {
+      method: "POST",
+      body: "{}",
+    });
+    knowledgeCache.set(knowledgeId, data.knowledge);
+    state.activeSource = data.knowledge;
+    renderKnowledge(data.knowledge);
+    showToast("摘要已重新生成");
+  } catch (error) {
+    knowledgeCache.delete(knowledgeId);
+    showToast(`重新生成摘要失败：${error.message}`);
+    await loadKnowledge(knowledgeId, true);
+  } finally {
+    button.title = "重新生成摘要";
+    button.removeAttribute("aria-busy");
+  }
 }
 
 function renderMedia(knowledge) {
@@ -1320,7 +1523,13 @@ async function copyText(text) {
 function handleKeyboard(event) {
   const editing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
   if (event.ctrlKey && event.key.toLowerCase() === "k") { event.preventDefault(); focusSidebarSearch(); return; }
-  if (event.key === "Escape") { closeDrawer(); $$("dialog[open]").forEach((dialog) => dialog.close()); return; }
+  if (event.key === "Escape") {
+    closeDrawer();
+    const openDialogs = $$("dialog[open]");
+    if (openDialogs.length) openDialogs.forEach((dialog) => dialog.close());
+    else if (state.deleteMode) setDeleteMode(false);
+    return;
+  }
   if (editing) return;
   if (event.code === "Space") { event.preventDefault(); togglePlay(); }
   if (event.key === "ArrowLeft") { event.preventDefault(); seekTo(Math.max(0, (mediaController?.getCurrentTime() || 0) - 5)); }

@@ -14,9 +14,11 @@ from src import __version__
 from src.web import (
     PROJECT_ROOT,
     VideoSummaryHandler,
+    VideoSummaryServer,
     _is_project_venv_python,
     _runtime_python_warning,
     build_cli_command,
+    delete_knowledge_packages,
     list_library_items,
     load_knowledge_package,
     load_transcript_groups,
@@ -260,6 +262,31 @@ class WebLibraryTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     resolve_library_file("demo", "secret.txt")
 
+    def test_library_batch_delete_validates_all_targets_before_removal(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first = self._write_package(root, "first")
+            second = self._write_package(root, "second")
+            with patch("src.web.OUTPUT_ROOT", root):
+                deleted = delete_knowledge_packages(["first"])
+                with self.assertRaises(FileNotFoundError):
+                    delete_knowledge_packages(["second", "missing"])
+
+            self.assertEqual(deleted, ["first"])
+            self.assertFalse(first.exists())
+            self.assertTrue(second.exists())
+
+    def test_library_delete_rejects_processing_record(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            (package / "manifest.json").write_text('{"status":"processing"}', encoding="utf-8")
+            with patch("src.web.OUTPUT_ROOT", root):
+                with self.assertRaisesRegex(ValueError, "仍在处理中"):
+                    delete_knowledge_packages(["demo"])
+
+            self.assertTrue(package.exists())
+
     def test_completed_manifest_with_empty_analysis_is_exposed_as_invalid(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -302,6 +329,34 @@ class WebApiTests(unittest.TestCase):
             urlopen(f"{self.base_url}/api/library/definitely-missing", timeout=3)
         self.assertEqual(context.exception.code, 404)
 
+    def test_web_ui_assets_require_cache_revalidation(self) -> None:
+        with urlopen(f"{self.base_url}/", timeout=3) as response:
+            self.assertEqual(response.headers.get("Cache-Control"), "no-cache")
+        with urlopen(f"{self.base_url}/static/app.workspace-14.js", timeout=3) as response:
+            source = response.read().decode("utf-8")
+            self.assertEqual(response.headers.get("Cache-Control"), "no-cache")
+            self.assertIn("function handleDeleteAction()", source)
+
+    def test_web_server_does_not_reuse_an_active_port(self) -> None:
+        self.assertFalse(VideoSummaryServer.allow_reuse_address)
+        self.assertFalse(VideoSummaryServer.allow_reuse_port)
+
+    @patch("src.web.delete_knowledge_packages")
+    def test_library_delete_endpoint_returns_deleted_ids(self, delete_packages) -> None:
+        delete_packages.return_value = ["first", "second"]
+        request = Request(
+            f"{self.base_url}/api/library",
+            data=json.dumps({"knowledge_ids": ["first", "second"]}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="DELETE",
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        delete_packages.assert_called_once_with(["first", "second"])
+        self.assertEqual(payload, {"deleted": ["first", "second"], "count": 2})
+
     @patch("src.web.chat_with_knowledge")
     def test_chat_endpoint_returns_grounded_response(self, mocked_chat) -> None:
         mocked_chat.return_value = {
@@ -330,6 +385,47 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("tools", payload)
         self.assertIn("providers", payload)
         self.assertIn("inProjectVenv", payload)
+
+    @patch("src.web.load_knowledge_package")
+    @patch("src.web.reanalyze_knowledge_package")
+    @patch("src.web.resolve_library_dir")
+    def test_analysis_retry_endpoint_returns_refreshed_knowledge(
+        self,
+        resolve_directory,
+        reanalyze,
+        load_knowledge,
+    ) -> None:
+        resolve_directory.return_value = Path("demo")
+        load_knowledge.return_value = {"id": "demo", "analysis": {"status": "success"}}
+        request = Request(
+            f"{self.base_url}/api/library/demo/analysis/retry",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        resolve_directory.assert_called_once_with("demo")
+        reanalyze.assert_called_once()
+        self.assertEqual(payload["knowledge"]["analysis"]["status"], "success")
+
+    @patch("src.web.render_directory_export")
+    @patch("src.web.resolve_library_dir")
+    def test_knowledge_export_preview_uses_structured_renderer(self, resolve_directory, render_export) -> None:
+        resolve_directory.return_value = Path("demo")
+        render_export.return_value = ("# Export\n", "demo.md")
+        request = Request(
+            f"{self.base_url}/api/knowledge/demo/export",
+            data=json.dumps({"preset": "summary-chat", "destination": "preview"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(payload["markdown"], "# Export\n")
+        self.assertIn("chat", payload["included_sections"])
 
     @patch("src.web.answer_question")
     @patch("src.web.ProviderRegistry")

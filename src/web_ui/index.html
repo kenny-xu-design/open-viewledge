@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Video Summary Workspace</title>
-  <link rel="stylesheet" href="/static/app.css?v=workspace-4">
+  <link rel="stylesheet" href="/static/app.workspace-6.css">
 </head>
 <body>
   <svg class="icon-sprite" aria-hidden="true">
@@ -33,6 +33,7 @@
     <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 13v7H4V6h7"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></symbol>
     <symbol id="i-warning" viewBox="0 0 24 24"><path d="m12 3 10 18H2zM12 9v5M12 18h.01"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
     <symbol id="i-send" viewBox="0 0 24 24"><path d="m3 11 18-8-7 18-3-7zM11 14l4-4"/></symbol>
@@ -72,7 +73,7 @@
       </div>
       <nav class="nav-groups">
         <details open>
-          <summary><svg><use href="#i-library"/></svg><span>知 · 资源库</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
+          <summary><svg><use href="#i-library"/></svg><span>资源库</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
           <div class="nav-items sidebar-only-expanded" id="resourceFilters">
             <button class="active" data-filter="all">全部记录 <span id="countAll">0</span></button>
             <button data-filter="video">视频 <span id="countVideo">0</span></button>
@@ -81,7 +82,7 @@
           </div>
         </details>
         <details>
-          <summary><svg><use href="#i-box"/></svg><span>行 · 产出物</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
+          <summary><svg><use href="#i-box"/></svg><span>产出库</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
           <div class="nav-items sidebar-only-expanded muted-nav">
             <button disabled>行动建议 <span>0</span></button>
             <button disabled>写作素材 <span>0</span></button>
@@ -89,7 +90,13 @@
           </div>
         </details>
       </nav>
-      <div class="record-heading sidebar-only-expanded"><span>知识记录</span><button class="icon-button small" id="refreshLibrary" aria-label="刷新记录"><svg><use href="#i-refresh"/></svg></button></div>
+      <div class="record-heading sidebar-only-expanded">
+        <span id="recordHeadingLabel">知识记录</span>
+        <div class="record-heading-actions">
+          <button class="icon-button small" id="toggleDeleteMode" type="button" title="选择要删除的记录" aria-label="选择要删除的记录"><svg><use id="deleteActionIcon" href="#i-trash"/></svg></button>
+          <button class="icon-button small" id="refreshLibrary" type="button" aria-label="刷新记录"><svg><use href="#i-refresh"/></svg></button>
+        </div>
+      </div>
       <div class="library-list" id="libraryList" aria-live="polite"></div>
       <div class="sidebar-footer">
         <div class="local-user"><span class="avatar">L</span><span class="sidebar-only-expanded"><strong>本地用户</strong><small>Private workspace</small></span></div>
@@ -110,6 +117,7 @@
             <button class="icon-button small" id="copyResult" aria-label="复制当前内容"><svg><use href="#i-copy"/></svg></button>
             <button class="icon-button small" id="downloadResult" aria-label="下载当前内容"><svg><use href="#i-download"/></svg></button>
             <button class="icon-button small" id="exportResult" aria-label="导出 Markdown"><svg><use href="#i-external"/></svg></button>
+            <button class="icon-button small hidden" id="retryAnalysis" title="重新生成摘要" aria-label="重新生成摘要"><svg><use href="#i-refresh"/></svg></button>
             <button class="icon-button small" disabled title="分享功能待开发" aria-label="分享功能待开发"><svg><use href="#i-globe"/></svg></button>
           </div>
         </div>
@@ -222,11 +230,33 @@
     </form>
   </dialog>
 
+  <dialog id="deleteKnowledgeDialog" class="settings-dialog delete-dialog">
+    <form method="dialog">
+      <header><div><span class="dialog-kicker danger-kicker">PERMANENT DELETE</span><h2>确认删除知识记录</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header>
+      <div class="delete-dialog-body">
+        <p id="deleteConfirmSummary"></p>
+        <ul id="deleteConfirmList"></ul>
+        <p class="delete-warning">删除后，对应知识包、字幕、摘要、笔记和导出文件将无法恢复。</p>
+      </div>
+      <footer><button type="button" class="secondary-button" data-close-dialog>取消</button><button type="button" class="danger-button" id="confirmDeleteKnowledge">确认永久删除</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="exportKnowledgeDialog" class="export-dialog">
+    <div class="export-panel">
+      <header><div><span class="dialog-kicker">KNOWLEDGE EXPORT</span><h2>导出知识笔记</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header>
+      <section><h3>导出预设</h3><div class="export-presets"><button type="button" data-export-preset="light">轻量摘要</button><button type="button" data-export-preset="summary-chat">摘要与对话</button><button type="button" data-export-preset="full" class="active">完整知识笔记</button></div></section>
+      <section><h3>内容栏目</h3><div class="export-sections" id="exportSections"></div></section>
+      <section><h3>导出目标</h3><div class="export-targets"><button type="button" id="previewKnowledgeExport">刷新预览</button><button type="button" id="downloadKnowledgeExport">下载 Markdown</button><button type="button" id="copyKnowledgeExport">复制 Markdown</button><button type="button" id="vaultKnowledgeExport">保存至 Obsidian</button></div><p class="export-vault-state" id="exportVaultState">Vault 状态将在导出时校验；本地路径不会显示在页面中。</p></section>
+      <section class="export-preview"><h3>Markdown 预览</h3><pre id="exportMarkdownPreview">选择预设后生成预览。</pre></section>
+    </div>
+  </dialog>
+
   <dialog id="settingsDialog" class="settings-dialog"><form method="dialog"><header><h2>总结设置</h2><button class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list"><label>分析模式<select id="settingsMode"><option>summary</option><option>tutorial</option><option>viral</option><option>close-reading</option></select></label><label>字幕分组<select disabled><option>60秒</option></select></label><label class="switch-label"><input id="settingsFrames" type="checkbox" checked>生成关键帧</label><div class="runtime-info" id="settingsRuntime">正在读取 Python 运行环境…</div></div><footer><button class="primary-button" value="close">完成</button></footer></form></dialog>
   <dialog id="layoutDialog" class="settings-dialog"><form method="dialog"><header><h2>工作台布局</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list layout-settings"><p>设置三个工作区从左到右的位置，修改后立即生效。</p><label>左栏<select id="layoutPosition1"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label><label>中栏<select id="layoutPosition2"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label><label>右栏<select id="layoutPosition3"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label></div><footer><button type="button" class="secondary-button" id="resetLayout">恢复默认</button><button class="primary-button" value="close">完成</button></footer></form></dialog>
   <dialog id="imageDialog" class="image-dialog"><button class="icon-button image-close" data-close-dialog aria-label="关闭预览"><svg><use href="#i-close"/></svg></button><img id="imagePreview" alt="关键帧预览"></dialog>
   <div class="drawer-scrim" id="drawerScrim"></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js?v=workspace-6" defer></script>
+  <script src="/static/app.workspace-15.js" defer></script>
 </body>
 </html>

@@ -5,6 +5,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -18,10 +19,11 @@ from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
 from . import __version__
+from .analysis.retry import reanalyze_knowledge_package
 from .chat import answer_question
 from .chat_store import ChatStore
 from .config import load_config
-from .exporters import refresh_compatible_export
+from .exporters import export_directory_to_vault, refresh_compatible_export, render_directory_export, selection_for_request
 from .job_store import Job, JobStore
 from .knowledge_validation import inspect_knowledge_package
 from .note_store import NoteConflictError, NoteStore
@@ -530,6 +532,36 @@ def resolve_library_dir(knowledge_id: str) -> Path:
     return candidate
 
 
+def delete_knowledge_packages(knowledge_ids: list[str]) -> list[str]:
+    if not isinstance(knowledge_ids, list) or not knowledge_ids:
+        raise ValueError("请至少选择一条知识记录。")
+    if len(knowledge_ids) > 100:
+        raise ValueError("单次最多删除 100 条知识记录。")
+
+    normalized_ids: list[str] = []
+    targets: list[Path] = []
+    seen: set[str] = set()
+    for value in knowledge_ids:
+        if not isinstance(value, str):
+            raise ValueError("知识包 ID 必须是字符串。")
+        knowledge_id = unquote(value).strip()
+        if knowledge_id in seen:
+            continue
+        directory = resolve_library_dir(knowledge_id)
+        manifest = _load_json_file(directory / "manifest.json")
+        if str(manifest.get("status") or "") in {"created", "queued", "running", "processing"}:
+            raise ValueError(f"知识记录“{knowledge_id}”仍在处理中，不能删除。")
+        seen.add(knowledge_id)
+        normalized_ids.append(knowledge_id)
+        targets.append(directory)
+
+    # Resolve and validate every target before removing the first directory so
+    # malformed IDs cannot cause a partially applied batch deletion.
+    for directory in targets:
+        shutil.rmtree(directory)
+    return normalized_ids
+
+
 def resolve_library_file(knowledge_id: str, relative_name: str) -> Path:
     directory = resolve_library_dir(knowledge_id)
     decoded = unquote(relative_name).replace("\\", "/").strip("/")
@@ -610,7 +642,17 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path == "/":
+        if parsed.path.startswith("/api/knowledge/") and parsed.path.endswith("/export/preview"):
+            knowledge_id = unquote(parsed.path[len("/api/knowledge/") : -len("/export/preview")].strip("/"))
+            try:
+                selection = selection_for_request(knowledge_id, {"preset": "full", "destination": "preview"})
+                markdown, filename = render_directory_export(resolve_library_dir(knowledge_id), selection)
+                self._send_json({"knowledge_id": knowledge_id, "filename": filename, "markdown": markdown, "included_sections": selection.normalized_sections()})
+            except (ValueError, UserFacingError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError:
+                self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
+        elif parsed.path == "/":
             self._send_path(WEB_UI_ROOT / "index.html")
         elif parsed.path.startswith("/static/"):
             self._send_static(parsed.path[len("/static/") :])
@@ -641,6 +683,47 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/knowledge/") and parsed.path.endswith("/export"):
+            knowledge_id = unquote(parsed.path[len("/api/knowledge/") : -len("/export")].strip("/"))
+            try:
+                payload = self._read_json_body()
+                selection = selection_for_request(knowledge_id, payload)
+                directory = resolve_library_dir(knowledge_id)
+                if selection.destination in {"vault", "obsidian-open"}:
+                    config = load_config(PROJECT_ROOT / "config.example.json")
+                    result = export_directory_to_vault(directory, selection, vault_path=config.obsidian_vault_path, vault_name=config.obsidian_vault_name, subdir=config.obsidian_export_subdir)
+                    self._send_json(result)
+                else:
+                    markdown, filename = render_directory_export(directory, selection)
+                    if selection.destination == "download":
+                        self._send_markdown(markdown, filename)
+                    else:
+                        self._send_json({"knowledge_id": knowledge_id, "filename": filename, "markdown": markdown, "included_sections": selection.normalized_sections()})
+            except (ValueError, UserFacingError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError:
+                self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
+            except OSError:
+                self._send_json({"error": "导出写入失败，请检查本地配置和目录权限。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path.startswith("/api/library/") and parsed.path.endswith("/analysis/retry"):
+            knowledge_id = unquote(
+                parsed.path[len("/api/library/") : -len("/analysis/retry")].strip("/")
+            )
+            try:
+                directory = resolve_library_dir(knowledge_id)
+                config = load_config(PROJECT_ROOT / "config.example.json")
+                reanalyze_knowledge_package(directory, config)
+                self._send_json({"knowledge": load_knowledge_package(knowledge_id)})
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError:
+                self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
+            except UserFacingError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+            except OSError:
+                self._send_json({"error": "重新分析结果写入失败，请检查输出目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path.startswith("/api/library/") and parsed.path.endswith("/chat"):
             try:
                 knowledge_id = unquote(parsed.path[len("/api/library/") : -len("/chat")].strip("/"))
@@ -724,6 +807,21 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/library":
+            try:
+                payload = self._read_json_body()
+                knowledge_ids = payload.get("knowledge_ids")
+                if not isinstance(knowledge_ids, list):
+                    raise ValueError("knowledge_ids 必须是数组。")
+                deleted = delete_knowledge_packages(knowledge_ids)
+                self._send_json({"deleted": deleted, "count": len(deleted)})
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError:
+                self._send_json({"error": "选择的知识记录不存在或已被删除。"}, HTTPStatus.NOT_FOUND)
+            except OSError:
+                self._send_json({"error": "知识记录删除失败，请检查输出目录是否可写。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path.startswith("/api/library/") and parsed.path.endswith("/chat"):
             try:
                 knowledge_id = unquote(parsed.path[len("/api/library/") : -len("/chat")].strip("/"))
@@ -791,6 +889,9 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def _send_static(self, relative_name: str) -> None:
         decoded = unquote(relative_name).replace("\\", "/").strip("/")
+        fingerprinted = re.fullmatch(r"app\.workspace-\d+\.(js|css)", decoded)
+        if fingerprinted:
+            decoded = f"app.{fingerprinted.group(1)}"
         if not decoded or ".." in Path(decoded).parts or "/" in decoded:
             self._send_json({"error": "静态资源路径不合法。"}, HTTPStatus.BAD_REQUEST)
             return
@@ -827,6 +928,8 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(length))
         self.send_header("X-Content-Type-Options", "nosniff")
+        if path.parent == WEB_UI_ROOT.resolve():
+            self.send_header("Cache-Control", "no-cache")
         if allow_range:
             self.send_header("Accept-Ranges", "bytes")
         if status == HTTPStatus.PARTIAL_CONTENT:
@@ -848,6 +951,17 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_markdown(self, markdown: str, filename: str) -> None:
+        data = markdown.encode("utf-8")
+        ascii_name = re.sub(r"[^A-Za-z0-9._-]", "_", filename) or "video-note.md"
+        disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/markdown; charset=utf-8")
+        self.send_header("Content-Disposition", disposition)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -1204,6 +1318,14 @@ INDEX_HTML = r"""<!doctype html>
 """
 
 
+class VideoSummaryServer(ThreadingHTTPServer):
+    # HTTPServer enables SO_REUSEADDR by default. On Windows that can let
+    # several long-running UI processes share port 5188 and receive requests
+    # unpredictably, including processes that still have older code loaded.
+    allow_reuse_address = False
+    allow_reuse_port = False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Start the video-summary-skill web UI.")
     parser.add_argument("--version", action="version", version=f"video-summary-skill {__version__}")
@@ -1212,7 +1334,7 @@ def main() -> None:
     parser.add_argument("--open", action="store_true", help="Open the browser after starting.")
     args = parser.parse_args()
 
-    server = ThreadingHTTPServer((args.host, args.port), VideoSummaryHandler)
+    server = VideoSummaryServer((args.host, args.port), VideoSummaryHandler)
     url = f"http://{args.host}:{args.port}"
     print(f"Video Summary Web UI: {url}")
     print(f"Python executable: {sys.executable}")
