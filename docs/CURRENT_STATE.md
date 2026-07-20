@@ -7,8 +7,8 @@ This document describes the implementation that currently exists. Planned work b
 ## Repository
 
 - Formal repository: `E:\AGT\git\video-summary-skill`
-- Stable baseline: `main` at `0583a89` (`v1.2.1`)
-- Release tag: `v1.2.1`
+- Stable baseline: `main` (`v1.2.1`)
+- Release commit and tag: `0583a89` / `v1.2.1`
 - Package version: `1.2.1`
 
 ## v1.2.1 export increment
