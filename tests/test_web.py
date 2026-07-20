@@ -11,6 +11,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from src import __version__
+from src.job_store import Job
 from src.web import (
     PROJECT_ROOT,
     VideoSummaryHandler,
@@ -26,10 +27,32 @@ from src.web import (
     runtime_status_payload,
     _timestamp_seconds,
     _external_player_descriptor,
+    _handle_cli_output_line,
 )
 
 
 class WebCommandTests(unittest.TestCase):
+    def test_web_reads_public_cli_jsonl_completion(self) -> None:
+        job = Job(id="job", command=[])
+        _handle_cli_output_line(
+            job,
+            json.dumps({"schema_version": "1.0", "event": "task_created", "task_id": "task"}),
+        )
+        _handle_cli_output_line(
+            job,
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "event": "task_completed",
+                    "task_id": "task",
+                    "result": {"output_dir": "output/demo", "knowledge_id": "demo"},
+                }
+            ),
+        )
+        self.assertEqual(job.output_dir, "output/demo")
+        self.assertEqual(job.knowledge_id, "demo")
+        self.assertEqual(job.cli_task_id, "task")
+
     def test_official_external_player_descriptors(self) -> None:
         self.assertEqual(
             _external_player_descriptor("https://www.youtube.com/watch?v=BqF6PUAXY1M"),
@@ -59,6 +82,7 @@ class WebCommandTests(unittest.TestCase):
                 python_executable,
                 "-m",
                 "src.main",
+                "analyze",
                 "--url",
                 "https://www.bilibili.com/video/BV123",
                 "--backend",
@@ -67,6 +91,7 @@ class WebCommandTests(unittest.TestCase):
                 "viral",
                 "--export",
                 "obsidian",
+                "--jsonl",
             ],
         )
 
@@ -110,6 +135,7 @@ class WebCommandTests(unittest.TestCase):
                 python_executable,
                 "-m",
                 "src.main",
+                "analyze",
                 "--file",
                 r"E:\Downloads_E\video.mp4",
                 "--lang",
@@ -119,6 +145,7 @@ class WebCommandTests(unittest.TestCase):
                 "--mode",
                 "summary",
                 "--no-summary",
+                "--jsonl",
             ],
         )
 
@@ -165,7 +192,7 @@ class WebCommandTests(unittest.TestCase):
             python_executable=r"C:\test\.venv\Scripts\python.exe",
         )
 
-        self.assertEqual(command[-2:], ["--sample-seconds", "30"])
+        self.assertEqual(command[-3:], ["--sample-seconds", "30", "--jsonl"])
 
     def test_rejects_retired_backend(self) -> None:
         with self.assertRaisesRegex(ValueError, "只能是 deepseek"):

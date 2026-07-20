@@ -157,6 +157,6 @@ class KnowledgeValidationTests(unittest.TestCase):
             package = self._package(Path(temp))
             (package / "analysis.json").write_text("{}", encoding="utf-8")
             result = CliRunner().invoke(app, ["inspect", str(package), "--json"])
-        self.assertEqual(result.exit_code, 2)
+        self.assertEqual(result.exit_code, 6)
         payload = json.loads(result.stdout)
-        self.assertEqual(payload["level"], "invalid")
+        self.assertEqual(payload["data"]["level"], "invalid")

@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from src.job_store import Job, JobStore
+from src.utils import UserFacingError
 
 
 class JobStoreTests(unittest.TestCase):
@@ -48,6 +49,13 @@ class JobStoreTests(unittest.TestCase):
             path = Path(temp_dir) / "web_jobs.json"
             path.write_text("{not-json", encoding="utf-8")
             self.assertEqual(JobStore(path).load_jobs(), [])
+
+    def test_newer_web_task_store_schema_fails_explicitly(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "web_jobs.json"
+            path.write_text('{"schema_version":"2.0","jobs":[]}', encoding="utf-8")
+            with self.assertRaisesRegex(UserFacingError, "不支持"):
+                JobStore(path).load_jobs()
 
 
 if __name__ == "__main__":
