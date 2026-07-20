@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased] - 1.3.0
+
+### Added
+
+- Stable public `analyze`, `inspect`, `export`, `resume`, `doctor`, and `config` commands.
+- Versioned JSON result envelopes and JSONL task/stage/artifact lifecycle events.
+- Central exit-code contract and secret-free resumable CLI task records.
+- Doctor checks for runtime tools, local models, Providers, storage, and Schema versions.
+- Explicit Schema compatibility rules for configuration, tasks, manifests, analysis, and export requests.
+- CLI contract, exit-code, Schema, lifecycle, migration, release, security, and privacy documentation.
+
+### Changed
+
+- Web processing now invokes the public `analyze --jsonl` command and consumes lifecycle events.
+- Agent Skill now documents only public CLI usage and result/error handling.
+- Pipeline and local Whisper diagnostics are routed to stderr while stdout remains machine-readable.
+- Root-level analyze options remain as an explicitly deprecated compatibility path.
+
 ## [1.2.1] - 2026-07-20
 
 ### Added

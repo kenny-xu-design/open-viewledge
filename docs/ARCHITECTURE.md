@@ -12,9 +12,21 @@ src.web
 .agents/skills/video-summary/SKILL.md
 ```
 
-- `src.main` validates CLI input and runs `PipelineOrchestrator`.
-- `src.web` serves the local Web UI and starts CLI processing as a subprocess using `sys.executable`.
-- The Agent Skill invokes the existing CLI and does not duplicate business logic.
+- `src.main` exposes the stable public CLI and runs `PipelineOrchestrator`.
+- `src.web` serves the local Web UI and starts `src.main analyze --jsonl` as a subprocess using `sys.executable`.
+- The Agent Skill invokes only the public CLI and does not duplicate business logic.
+
+### CLI Contract Layer
+
+```text
+Web / Agent / automation
+-> python -m src.main <command>
+-> versioned JSON result or JSONL lifecycle events on stdout
+-> diagnostics and warnings on stderr
+-> PipelineOrchestrator / inspection / export / diagnostics
+```
+
+`src/cli_contract.py` owns exit codes, result/event envelopes, stream separation, and error redaction. `src/cli_tasks.py` stores small secret-free invocation records below `.local/cli_tasks/` so failed synchronous tasks can be resumed. This is not the v1.4 queue or Worker model.
 
 ### Processing Pipeline
 
@@ -192,6 +204,8 @@ Responsibilities:
 - Chat endpoints and storage.
 
 Long processing remains in a background thread that starts the core CLI subprocess. The request thread does not execute the full media pipeline.
+
+The Web subprocess consumes public JSONL events. It records the CLI task ID and completed output location instead of inferring success from unstructured log text.
 
 Local Web state is deliberately small and file based:
 

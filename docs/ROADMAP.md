@@ -34,7 +34,7 @@ Goal: finish the existing local product without redesigning it.
 
 ### 4. Local Persistence
 
-Status: completed on `feat/v1.2-product-completion`.
+Status: released in `v1.2.1`.
 
 - Persist user notes by knowledge ID.
 - Include notes in compatible export.
@@ -43,7 +43,7 @@ Status: completed on `feat/v1.2-product-completion`.
 
 ### 5. Disabled Routes And Product Limits
 
-Status: completed on `feat/v1.2-product-completion`.
+Status: released in `v1.2.1`.
 
 - Remove or archive unreachable comment and legacy runtime paths.
 - Document Bilibili player control limits.
@@ -52,7 +52,7 @@ Status: completed on `feat/v1.2-product-completion`.
 
 ### 6. Gemini Image Boundary
 
-Status: completed on `feat/v1.2-product-completion`; mock verified, real API unverified.
+Status: released in `v1.2.1`; mock verified, real API unverified.
 
 - Implement image-input requests in the Gemini Provider.
 - Skip calls when there are no frames.
@@ -61,7 +61,7 @@ Status: completed on `feat/v1.2-product-completion`; mock verified, real API unv
 
 ### 7. Release Completion
 
-Status: completed on `feat/v1.2-product-completion`.
+Status: released in `v1.2.1`.
 
 - Complete CLI inspection and validation commands.
 - Align Web and CLI contracts.
@@ -100,3 +100,25 @@ Candidate work:
 - Deployment, monitoring, and support tooling.
 
 No SaaS infrastructure belongs in the v1.2 local product completion branch.
+
+## v1.3 Agent And CLI Contract
+
+- Stable `analyze`, `inspect`, `export`, `resume`, `doctor`, and `config` commands.
+- JSON results, JSONL lifecycle events, centralized exit codes, and versioned Schemas.
+- Public CLI as the only Web/Agent automation boundary.
+- Backward-compatible legacy CLI entry during the deprecation window.
+
+## v1.4 Scale Foundation
+
+- Durable local queue and worker leases behind abstractions.
+- Idempotency, retries, stage-specific concurrency, cost ledger, batches, and observability.
+- Preserve the complete v1.3 CLI contract.
+
+## v1.5 Local Product
+
+- No registration, login, or email verification.
+- Default local workspace and skippable first-run API wizard.
+- Shared Provider Catalog and credential service for Web, CLI, and Worker.
+- Independent text, visual, and ASR Provider setup.
+- Windows Credential Manager/system Keyring, masked status, connection test, Key update/delete.
+- OpenAI-compatible custom Providers only in advanced settings.

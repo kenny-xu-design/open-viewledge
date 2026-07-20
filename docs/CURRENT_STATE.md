@@ -9,7 +9,23 @@ This document describes the implementation that currently exists. Planned work b
 - Formal repository: `E:\AGT\git\video-summary-skill`
 - Stable baseline: `main` (`v1.2.1`)
 - Release commit and tag: `0583a89` / `v1.2.1`
-- Package version: `1.2.1`
+- Development branch: `feat/v1.3-agent-cli`
+- Package version on the development branch: `1.3.0`
+
+## v1.3 Agent and CLI contract
+
+- Public commands: `analyze`, `inspect`, `export`, `resume`, `doctor`, and `config`.
+- Every command supports versioned JSON output; long tasks support JSONL lifecycle events.
+- stdout is reserved for results/events; diagnostics and warnings use stderr.
+- Exit codes `0` through `8` are centralized and locked by tests.
+- Secret-free CLI task records support recovery by `task_id`.
+- Web starts `analyze --jsonl` and reads public lifecycle events.
+- The Agent Skill calls only public CLI commands.
+- Configuration, task, manifest, analysis, and export request Schemas have explicit compatibility checks.
+- A real local video completed a 30-second no-LLM Agent CLI flow and passed `inspect`.
+- A real external-tool failure was repaired and resumed with the same task ID.
+- Latest verification: 170 unit tests plus compile/help/JavaScript checks all pass.
+- `doctor --json` is healthy on the audited machine: 11 checks pass, with optional warnings for unconfigured Gemini and Obsidian only.
 
 ## v1.2.1 export increment
 

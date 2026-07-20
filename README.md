@@ -2,7 +2,7 @@
 
 `video-summary-skill` 是一个本地优先的视频与音频知识提取工具。它把用户提供的本地媒体或公开在线视频转换为带时间戳、可追溯的知识包，并提供 Web 浏览和基于当前知识包字幕的 AI 对话。
 
-当前稳定版本为 `1.2.1`。范围仍不包含 Scale 或 SaaS。
+当前稳定版本为 `1.2.1`；`feat/v1.3-agent-cli` 的开发版本为 `1.3.0`，正在固定 Agent 与 CLI 调用契约。范围仍不包含 Scale 或 SaaS。
 
 ## 当前能力
 
@@ -147,6 +147,14 @@ FFPROBE_PATH=
 
 ## CLI
 
+v1.3 公开命令统一为：
+
+```text
+analyze / inspect / export / resume / doctor / config
+```
+
+所有命令支持 `--json`；长任务 `analyze`、`resume` 额外支持 `--jsonl`。stdout 只输出结果或 JSON，诊断与人工日志写入 stderr。旧的根级 `--url` / `--file` 用法在 v1.3 保留兼容并明确提示废弃。
+
 查看帮助：
 
 ```powershell
@@ -171,12 +179,12 @@ FFPROBE_PATH=
 .\.venv\Scripts\python.exe -m src.main inspect "output\<knowledge-id>" --json
 ```
 
-检查命令不会修改历史输出。返回码：`0` 表示有效，`1` 表示存在兼容性警告，`2` 表示知识包无效。
+检查命令不会修改历史输出。返回码：`0` 表示有效，`1` 表示存在兼容性警告，`6` 表示知识包无效或损坏。
 
 本地视频完整处理：
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.main `
+.\.venv\Scripts\python.exe -m src.main analyze `
   --file "E:\path\to\video.mp4" `
   --backend deepseek `
   --mode summary
@@ -185,7 +193,7 @@ FFPROBE_PATH=
 只生成字幕，不调用 LLM：
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.main `
+.\.venv\Scripts\python.exe -m src.main analyze `
   --file "E:\path\to\video.mp4" `
   --no-summary
 ```
@@ -193,7 +201,7 @@ FFPROBE_PATH=
 30 秒链路验证：
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.main `
+.\.venv\Scripts\python.exe -m src.main analyze `
   --file "E:\path\to\video.mp4" `
   --no-summary `
   --sample-seconds 30
@@ -202,7 +210,7 @@ FFPROBE_PATH=
 YouTube 或通用公开视频：
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.main `
+.\.venv\Scripts\python.exe -m src.main analyze `
   --url "https://www.youtube.com/watch?v=VIDEO_ID" `
   --backend deepseek `
   --mode tutorial
@@ -211,7 +219,7 @@ YouTube 或通用公开视频：
 B站：
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.main `
+.\.venv\Scripts\python.exe -m src.main analyze `
   --url "https://www.bilibili.com/video/BV..." `
   --backend deepseek `
   --mode summary
@@ -220,7 +228,7 @@ B站：
 Obsidian 兼容 Markdown 副本：
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.main `
+.\.venv\Scripts\python.exe -m src.main analyze `
   --url "公开视频链接" `
   --backend deepseek `
   --export obsidian
@@ -240,6 +248,21 @@ Obsidian 兼容 Markdown 副本：
 - `--no-frames`：跳过关键帧生成。
 - `--export obsidian`：生成 Obsidian 兼容 Markdown 副本。
 - `--comments`：仅为旧命令兼容保留；不会获取或分析评论。
+- `--json`：输出带 Schema 版本的单个 JSON 结果。
+- `--jsonl`：长任务逐行输出生命周期事件。
+
+环境诊断与有效配置：
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main doctor --json
+.\.venv\Scripts\python.exe -m src.main config --json
+```
+
+失败任务可使用 `analyze` 返回的 `task_id` 恢复：
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main resume "<task-id>" --jsonl
+```
 
 ## Web UI
 
