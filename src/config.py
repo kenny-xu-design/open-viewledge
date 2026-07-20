@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 from pydantic import BaseModel
 
@@ -29,8 +30,21 @@ class AppConfig(BaseModel):
     generate_frames: bool = True
     transcript_group_seconds: int = 60
     transcript_group_max_segments: int = 12
+    obsidian_vault_path: str = ""
+    obsidian_vault_name: str = ""
+    obsidian_export_subdir: str = "外源/视频"
+    obsidian_export_overwrite: bool = False
 
 
 def load_config(config_path: Path) -> AppConfig:
     data = load_json(config_path) if config_path.exists() else {}
+    env_values = {
+        "obsidian_vault_path": os.getenv("OBSIDIAN_VAULT_PATH", ""),
+        "obsidian_vault_name": os.getenv("OBSIDIAN_VAULT_NAME", ""),
+        "obsidian_export_subdir": os.getenv("OBSIDIAN_EXPORT_SUBDIR", ""),
+        "obsidian_export_overwrite": os.getenv("OBSIDIAN_EXPORT_OVERWRITE", "").lower() in {"1", "true", "yes"},
+    }
+    for key, value in env_values.items():
+        if value not in {"", False}:
+            data[key] = value
     return AppConfig(**data)

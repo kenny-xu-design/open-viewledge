@@ -4,16 +4,15 @@ import os
 import tempfile
 from pathlib import Path
 
+from .models import selection_from_preset
+
 
 def refresh_compatible_export(directory: Path) -> Path:
-    index_path = directory / "index.md"
-    if not index_path.is_file():
+    from .service import render_directory_export
+
+    if not (directory / "index.md").is_file():
         raise FileNotFoundError("index.md")
-    content = index_path.read_text(encoding="utf-8").rstrip()
-    notes_path = directory / "user_notes.md"
-    notes = notes_path.read_text(encoding="utf-8").strip() if notes_path.is_file() else ""
-    if notes:
-        content = f"{content}\n\n## 自写笔记\n\n{notes}"
+    content, _ = render_directory_export(directory, selection_from_preset(directory.name, "full"))
     output_path = directory / "export_note.md"
     _atomic_write_text(output_path, content.rstrip() + "\n")
     return output_path

@@ -5,6 +5,7 @@ import re
 
 from ..domain.models import AnalysisResult
 from ..utils import UserFacingError
+from .entities import normalize_analysis_entities
 
 
 def parse_analysis_response(
@@ -36,7 +37,7 @@ def parse_analysis_response(
         result = AnalysisResult.model_validate(payload)
         _validate_meaningful_content(result)
         _validate_timestamps(result, max_duration)
-        return result
+        return normalize_analysis_entities(result)
     except (json.JSONDecodeError, ValueError) as exc:
         result = AnalysisResult(
             status="failed",
@@ -77,6 +78,14 @@ def _normalize_analysis_payload(payload: dict) -> dict:
     if isinstance(actions, list):
         normalized["actions"] = [text for item in actions if (text := _normalize_action(item))]
 
+    if "glossary" not in normalized and isinstance(normalized.get("terminology"), list):
+        normalized["glossary"] = [
+            {"term": str(item.get("term") or item.get("name") or ""), "definition": str(item.get("definition") or item.get("description") or "")}
+            for item in normalized["terminology"] if isinstance(item, dict) and (item.get("term") or item.get("name"))
+        ]
+    if "action_items" not in normalized and isinstance(normalized.get("actions"), list):
+        normalized["action_items"] = [{"text": str(item), "timestamp": None} for item in normalized["actions"] if str(item).strip()]
+
     return normalized
 
 
@@ -106,6 +115,9 @@ def _validate_timestamps(result: AnalysisResult, max_duration: float | None) -> 
         values.extend([(f"chapters[{index}].start", item.start), (f"chapters[{index}].end", item.end)])
         if item.end < item.start:
             raise ValueError(f"chapters[{index}] 的结束时间早于开始时间")
+    for collection_name in ("action_items", "prerequisites", "steps", "warnings"):
+        for index, item in enumerate(getattr(result, collection_name)):
+            values.append((f"{collection_name}[{index}].timestamp", item.timestamp))
     for field, value in values:
         if value is None:
             continue
@@ -123,6 +135,11 @@ def _validate_meaningful_content(result: AnalysisResult) -> None:
             result.chapters,
             result.terminology,
             result.actions,
+            result.glossary,
+            result.action_items,
+            result.prerequisites,
+            result.steps,
+            result.warnings,
         )
     ):
         raise ValueError("结构化分析没有包含任何有效内容")

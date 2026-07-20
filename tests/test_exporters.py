@@ -69,6 +69,6 @@ class ExporterTests(unittest.TestCase):
     def test_compatible_export_includes_user_notes(self) -> None:
         self._render(export_legacy_note=True, user_note="这是用户自己的判断。")
         text = (Path(self.temp.name) / "export_note.md").read_text(encoding="utf-8")
-        self.assertIn("## 自写笔记", text)
+        self.assertIn("## 我的笔记", text)
         self.assertIn("这是用户自己的判断。", text)
 

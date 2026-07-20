@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from urllib.parse import urlparse
+from .timestamps import build_timestamp_target, format_timestamp
 
 
 TIMESTAMP_RE = re.compile(
@@ -89,12 +90,7 @@ def format_transcript_segment(start: float, end: float, text: str, source_url: s
 
 
 def seconds_to_timestamp(seconds: float) -> str:
-    total = int(seconds)
-    hours, remainder = divmod(total, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
+    return format_timestamp(seconds)
 
 
 def timestamp_to_seconds(value: str) -> int:
@@ -123,17 +119,7 @@ def format_timestamped_line(timestamp_range: str, text: str, source_url: str = "
 
 
 def build_timestamp_link(source_url: str, seconds: int) -> str:
-    if not source_url:
-        return ""
-    host = urlparse(source_url).netloc.lower()
-    if "bilibili.com" in host or "b23.tv" in host:
-        suffix = str(seconds)
-    elif "youtube.com" in host or "youtu.be" in host:
-        suffix = f"{seconds}s"
-    else:
-        return ""
-    separator = "&" if "?" in source_url else "?"
-    return f"{source_url}{separator}t={suffix}"
+    return build_timestamp_target(source_url, seconds)
 
 
 def _compact_timestamp(value: str) -> str:

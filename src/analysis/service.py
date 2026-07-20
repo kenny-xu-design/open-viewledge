@@ -75,6 +75,11 @@ def _build_request(groups: list[TranscriptGroup], instruction: str, source_url: 
         "chapters": [{"title": "章节", "start": 0, "end": 0, "summary": "总结", "source_link": ""}],
         "terminology": [],
         "actions": [],
+        "glossary": [{"term": "术语", "definition": "视频语境中的简短解释"}],
+        "action_items": [{"text": "可执行动作", "timestamp": 0}],
+        "prerequisites": [{"text": "明确前置条件", "timestamp": 0}],
+        "steps": [{"title": "操作步骤", "description": "操作说明", "timestamp": 0, "expected_result": "预期结果"}],
+        "warnings": [{"text": "视频明确说明的注意事项", "timestamp": 0}],
     }
     return (
         f"分析要求：{instruction}\n"

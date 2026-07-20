@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.analysis import KeyframeAnalysisService
 from src.providers.llm import GeminiProvider, ProviderRegistry
@@ -73,7 +74,8 @@ class GeminiProviderTests(unittest.TestCase):
                 }
             )
 
-        provider = GeminiProvider(api_key="test-key", model_name="gemini-test", opener=opener)
+        with patch.dict("os.environ", {"GEMINI_MODEL": ""}):
+            provider = GeminiProvider(api_key="test-key", model_name="gemini-test", opener=opener)
         result = provider.complete([{"role": "system", "content": "受控"}, {"role": "user", "content": "问题"}])
         self.assertEqual(result.content, "真实回答")
         self.assertEqual(result.model, "gemini-test")

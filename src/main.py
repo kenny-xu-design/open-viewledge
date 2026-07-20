@@ -19,13 +19,15 @@ except ImportError:
 
 from . import __version__
 from .config import load_config
+from .exporters import export_directory_to_vault, render_directory_export, selection_for_request
+from .exporters.obsidian_exporter import safe_export_filename
 from .knowledge_validation import inspect_knowledge_package
 from .pipeline import PipelineOrchestrator
 from .utils import UserFacingError
 
 
 DEFAULT_MODE = "summary"
-SUPPORTED_MODES = ("summary", "tutorial", "viral", "close-reading")
+SUPPORTED_MODES = ("auto", "summary", "tutorial", "interview", "lecture", "review", "viral", "close-reading")
 SUPPORTED_EXPORTS = ("none", "obsidian")
 
 if typer:
@@ -130,6 +132,50 @@ def run_pipeline(
         console.print(f"export_note.md: {package.output_dir / 'export_note.md'}")
 
 
+def export_existing_knowledge(
+    knowledge_id: str,
+    *,
+    format_name: str = "markdown",
+    preset: str = "full",
+    sections: str = "",
+    order: str = "",
+    overwrite: bool = False,
+    config: Path = Path("config.example.json"),
+) -> dict[str, object]:
+    cfg = load_config(config)
+    root = (Path(cfg.output_dir) if Path(cfg.output_dir).is_absolute() else Path.cwd() / cfg.output_dir).resolve()
+    directory = (root / knowledge_id).resolve()
+    if directory.parent != root or not (directory / "metadata.json").is_file():
+        raise UserFacingError("知识包不存在。")
+    payload: dict[str, object] = {"preset": preset, "overwrite": overwrite}
+    if sections:
+        payload["sections"] = [value.strip() for value in sections.split(",") if value.strip()]
+    if order:
+        payload["order"] = [value.strip() for value in order.split(",") if value.strip()]
+    selection = selection_for_request(knowledge_id, payload)
+    if format_name == "obsidian":
+        result = export_directory_to_vault(
+            directory,
+            selection,
+            vault_path=cfg.obsidian_vault_path,
+            vault_name=cfg.obsidian_vault_name,
+            subdir=cfg.obsidian_export_subdir,
+        )
+    elif format_name == "markdown":
+        markdown, filename = render_directory_export(directory, selection)
+        target = directory / (Path(filename).stem + ".export.md")
+        if target.exists() and not overwrite:
+            counter = 2
+            while target.exists():
+                target = directory / (Path(filename).stem + f".export ({counter}).md")
+                counter += 1
+        target.write_text(markdown, encoding="utf-8")
+        result = {"success": True, "knowledge_id": knowledge_id, "format": "markdown", "file_path": str(target), "included_sections": selection.normalized_sections()}
+    else:
+        raise UserFacingError("format 只能是 markdown 或 obsidian。")
+    return result
+
+
 class ExitWithCode(Exception):
     def __init__(self, code: int) -> None:
         self.code = code
@@ -144,6 +190,24 @@ def _run_argparse() -> None:
         inspect_parser.add_argument("--json", action="store_true", dest="json_output", help="输出 JSON。")
         args = inspect_parser.parse_args(sys.argv[2:])
         raise SystemExit(_print_inspection(args.package, args.json_output))
+    if len(sys.argv) > 1 and sys.argv[1] == "export":
+        export_parser = argparse.ArgumentParser(prog="python -m src.main export")
+        export_parser.add_argument("--knowledge-id", required=True)
+        export_parser.add_argument("--format", choices=("markdown", "obsidian"), default="markdown", dest="format_name")
+        export_parser.add_argument("--preset", choices=("light", "summary-chat", "full"), default="full")
+        export_parser.add_argument("--sections", default="")
+        export_parser.add_argument("--order", default="")
+        export_parser.add_argument("--overwrite", action="store_true")
+        export_parser.add_argument("--json", action="store_true", dest="json_output")
+        export_parser.add_argument("--config", type=Path, default=Path("config.example.json"))
+        args = export_parser.parse_args(sys.argv[2:])
+        try:
+            result = export_existing_knowledge(args.knowledge_id, format_name=args.format_name, preset=args.preset, sections=args.sections, order=args.order, overwrite=args.overwrite, config=args.config)
+            print(json.dumps(result, ensure_ascii=False, indent=2) if args.json_output else result["file_path"])
+            raise SystemExit(0)
+        except UserFacingError as exc:
+            print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False) if args.json_output else str(exc))
+            raise SystemExit(2) from exc
 
     parser = argparse.ArgumentParser(
         prog="python -m src.main",
@@ -192,6 +256,25 @@ if typer:
         json_output: bool = typer.Option(False, "--json", help="输出机器可读 JSON。"),
     ) -> None:
         raise typer.Exit(code=_print_inspection(package, json_output))
+
+
+    @app.command("export")  # type: ignore[union-attr]
+    def export_command(
+        knowledge_id: str = typer.Option(..., "--knowledge-id"),
+        format_name: str = typer.Option("markdown", "--format"),
+        preset: str = typer.Option("full", "--preset"),
+        sections: str = typer.Option("", "--sections"),
+        order: str = typer.Option("", "--order"),
+        overwrite: bool = typer.Option(False, "--overwrite"),
+        json_output: bool = typer.Option(False, "--json"),
+        config: Path = typer.Option(Path("config.example.json"), "--config"),
+    ) -> None:
+        try:
+            result = export_existing_knowledge(knowledge_id, format_name=format_name, preset=preset, sections=sections, order=order, overwrite=overwrite, config=config)
+            print(json.dumps(result, ensure_ascii=False, indent=2) if json_output else result["file_path"])
+        except UserFacingError as exc:
+            print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False) if json_output else str(exc))
+            raise typer.Exit(code=2) from exc
 
 
     @app.callback(invoke_without_command=True)  # type: ignore[union-attr]

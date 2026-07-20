@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 from ..analysis import AnalysisService
+from ..analysis.profiles import resolve_analysis_profile
 from ..audio import extract_audio
 from ..config import AppConfig
 from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, ProcessingManifest, ProviderAttempt, utc_now
@@ -133,6 +134,14 @@ class PipelineOrchestrator:
                 write_grouped_markdown(context.output_dir / "transcript.grouped.md", context.groups, context.source.source_url)
 
             self._stage(context, "group_transcript", group)
+            resolved_profile = resolve_analysis_profile(
+                self.analysis_profile,
+                title=context.source.title,
+                transcript="\n".join(item.text for item in context.groups),
+            )
+            context.analysis_profile = resolved_profile
+            context.source.analysis_profile = resolved_profile
+            context.manifest.analysis_profile = resolved_profile
             self._stage(context, "build_timeline", lambda: setattr(context, "timeline", build_timeline(context.groups, context.source)))
 
             def frames() -> None:
@@ -151,7 +160,7 @@ class PipelineOrchestrator:
 
             def analyze() -> None:
                 if self.no_analysis:
-                    context.analysis = AnalysisResult(status="skipped", analysis_profile=self.analysis_profile)
+                    context.analysis = AnalysisResult(status="skipped", analysis_profile=context.analysis_profile)
                     context.manifest.analysis_status = "skipped"
                     context.manifest.analysis_error = ""
                     return
@@ -171,7 +180,7 @@ class PipelineOrchestrator:
                     context.analysis = AnalysisResult(
                         status="failed",
                         error="未配置 DEEPSEEK_API_KEY。",
-                        analysis_profile=self.analysis_profile,
+                        analysis_profile=context.analysis_profile,
                         provider=provider.name,
                         model=provider.model_name,
                     )
@@ -183,7 +192,7 @@ class PipelineOrchestrator:
                     context.manifest.provider_attempts.append(attempt)
                     raise UserFacingError("未检测到 DEEPSEEK_API_KEY，请在项目 .env 中配置后重试。")
                 try:
-                    context.analysis = AnalysisService(provider).analyze(context.groups, self.analysis_profile, context)
+                    context.analysis = AnalysisService(provider).analyze(context.groups, context.analysis_profile, context)
                     context.manifest.llm_model = context.analysis.model or provider.model_name
                     context.manifest.analysis_status = "completed"
                     context.manifest.analysis_error = ""
@@ -194,7 +203,7 @@ class PipelineOrchestrator:
                         context.analysis = AnalysisResult(
                             status="failed",
                             error=str(exc),
-                            analysis_profile=self.analysis_profile,
+                            analysis_profile=context.analysis_profile,
                             provider=provider.name,
                             model=provider.model_name,
                         )
@@ -213,7 +222,7 @@ class PipelineOrchestrator:
                 context.analysis = AnalysisResult(
                     status="failed",
                     error="分析阶段未生成结果。",
-                    analysis_profile=self.analysis_profile,
+                    analysis_profile=context.analysis_profile,
                 )
                 context.manifest.analysis_status = "failed"
                 context.manifest.analysis_error = context.analysis.error

@@ -27,6 +27,7 @@ class SourceRecord(BaseModel):
     thumbnail: str = ""
     language: str = ""
     chapters: list[dict[str, Any]] = Field(default_factory=list)
+    analysis_profile: str = "summary"
 
 
 class TranscriptSegment(BaseModel):
@@ -86,6 +87,23 @@ class ChapterSummary(BaseModel):
     source_link: str = ""
 
 
+class GlossaryItem(BaseModel):
+    term: str
+    definition: str = ""
+
+
+class TimedTextItem(BaseModel):
+    text: str
+    timestamp: float | None = None
+
+
+class TutorialStep(BaseModel):
+    title: str
+    description: str = ""
+    timestamp: float | None = None
+    expected_result: str = ""
+
+
 class AnalysisResult(BaseModel):
     status: Literal["success", "failed", "skipped"] = "skipped"
     error: str = ""
@@ -97,6 +115,11 @@ class AnalysisResult(BaseModel):
     chapters: list[ChapterSummary] = Field(default_factory=list)
     terminology: list[dict[str, Any]] = Field(default_factory=list)
     actions: list[str] = Field(default_factory=list)
+    glossary: list[GlossaryItem] = Field(default_factory=list)
+    action_items: list[TimedTextItem] = Field(default_factory=list)
+    prerequisites: list[TimedTextItem] = Field(default_factory=list)
+    steps: list[TutorialStep] = Field(default_factory=list)
+    warnings: list[TimedTextItem] = Field(default_factory=list)
     raw_response: str = ""
     analysis_profile: str = "summary"
     provider: str = ""
@@ -132,6 +155,7 @@ class ProcessingManifest(BaseModel):
     analysis_status: Literal["pending", "completed", "failed", "skipped"] = "pending"
     analysis_error: str = ""
     prompt_version: str = "1"
+    analysis_profile: str = "summary"
     errors: list[str] = Field(default_factory=list)
     output_files: list[str] = Field(default_factory=list)
     stage_status: dict[str, str] = Field(default_factory=dict)
