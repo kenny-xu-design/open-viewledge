@@ -2,7 +2,7 @@
 
 `video-summary-skill` 是一个本地优先的视频与音频知识提取工具。它把用户提供的本地媒体或公开在线视频转换为带时间戳、可追溯的知识包，并提供 Web 浏览和基于当前知识包字幕的 AI 对话。
 
-当前开发版本为 `1.2.0`，稳定主分支基线仍为 `v1.1`。`v1.2` 已完成本地产品收尾，范围不包含 Scale 或 SaaS。
+当前功能分支开发版本为 `1.2.1`，基于 v1.2 worktree 连续开发。范围仍不包含 Scale 或 SaaS。
 
 ## 当前能力
 
@@ -278,14 +278,36 @@ Web 当前支持：
 - 使用 YouTube 官方 IFrame API 预览。
 - 使用 B站官方 iframe 预览。
 - 对当前知识包进行字幕检索和 AI 对话。
+- AI 分析失败时，使用结果区的“重新生成摘要”按钮复用已有字幕，只重跑 AI 分析。
+- 在资源库中进入删除模式，多选知识记录并经过最终确认后永久删除对应知识包。
 - 按 `knowledge_id` 加载和保存 `chat.json`。
 - 按 `knowledge_id` 加载和原子保存 `user_notes.md`。
 - 查看服务重启后仍保留的最近任务；异常中断任务显示为 `interrupted`。
 - 调整三栏模块顺序和宽度。
+- 通过原创纵向导出面板预览、复制或下载 Markdown，并按本地配置安全写入 Obsidian Vault。
 
 笔记编辑区在停止输入 800 ms 后保存，切换知识包前也会尝试完成保存。保存笔记时会同步刷新 `export_note.md`。
 
 B站预览使用官方 iframe。应用不会声称可以可靠控制其播放时间；点击摘要、字幕或聊天引用中的时间戳时，会改为在原网站打开对应时间链接。
+
+“重新生成摘要”仅在分析失败或知识包分析状态异常时显示。使用前需在项目 `.env` 中配置 `DEEPSEEK_API_KEY`；重试不会重新下载媒体、提取字幕或生成关键帧。
+
+## 分析类型与知识笔记导出
+
+`summary` 使用公共摘要结构；`tutorial` 在可靠内容存在时增加前置条件、操作步骤、关键术语、可执行动作和注意事项。Profile 统一按“用户显式选择 → 知识包已有值 → 自动识别 → summary”解析，识别失败不会导致任务失败。
+
+时间戳由统一模块格式化并生成平台链接：YouTube 和 B站链接保留既有查询参数并替换 `t`；本地媒体由 Web 播放器使用原始秒数 seek。B站 iframe 仍不承诺可靠程序化同步。
+
+导出产物是普通 UTF-8 `.md` 文件；`.obsidian` 是 Vault 配置目录，程序不会写入其中。下载 Markdown 不要求安装 Obsidian。Vault 直接写入仅适用于本地部署，服务端只读取本地配置，前端不能提交任意路径。首版组合导出支持摘要、AI 对话和原始用户笔记；关键帧只读取既有产物，不重新调用模型。
+
+CLI 示例：
+
+```powershell
+python -m src.main export --knowledge-id "<id>" --format markdown --preset summary-chat --json
+python -m src.main export --knowledge-id "<id>" --format obsidian --preset full --json
+```
+
+知识记录删除是永久操作。Web UI 会先显示可勾选标记，再要求在确认弹窗中确认；正在处理中的记录不会被删除。
 
 ## 知识包结构
 

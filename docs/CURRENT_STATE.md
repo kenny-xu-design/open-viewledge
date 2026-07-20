@@ -9,7 +9,15 @@ This document describes the implementation that currently exists. Planned work b
 - Formal repository: `E:\AGT\git\video-summary-skill`
 - Stable baseline: `main` at `33a4cc7` (`v1.1`)
 - v1.2 development branch: `feat/v1.2-product-completion`
-- Package version on the feature branch: `1.2.0`
+- Package version on the feature branch: `1.2.1`
+
+## v1.2.1 export increment
+
+- Summary and tutorial profiles share a common schema; tutorial adds optional prerequisites, steps, glossary, action items, and warnings.
+- Profile priority is explicit selection, existing package profile, heuristic recognition, then summary fallback.
+- Markdown export can combine analysis, safe chat fields, unchanged `user_notes.md`, and source links without model calls.
+- Local Vault export writes `.md` atomically, never targets `.obsidian`, and returns an encoded Obsidian URI.
+- Notion, Readwise, cloud Vault synchronization, SaaS access to local Vaults, and new media ingestion paths remain out of scope.
 - Remote: `origin`
 - Python: 3.12.13 in the project `.venv`
 

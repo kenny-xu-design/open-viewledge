@@ -1,5 +1,9 @@
 # Decisions
 
+## 2026-07-18: Structured local Markdown export
+
+Analysis profile resolution happens once before analysis. Markdown templates do not infer profile, tags, timestamps, or entities. Obsidian notes are `.md`; `.obsidian` is forbidden as an export destination. Vault paths come only from local server configuration, and SaaS deployments cannot write a user's local Vault.
+
 This file records durable product and architecture decisions. Historical experiments belong in `docs/archive/`.
 
 ## D001: One Core Pipeline

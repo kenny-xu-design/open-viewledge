@@ -1,5 +1,11 @@
 # Roadmap
 
+- [x] v1.2.1 structured tutorial profile and backward-compatible analysis fields.
+- [x] Unified Markdown/Obsidian export with summary, chat, and user-note selection.
+- [x] Safe local Vault writes and Obsidian URI generation.
+- [ ] Keyframe export enrichment beyond existing artifacts.
+- [ ] Notion/Readwise and cloud Vault synchronization remain explicitly deferred.
+
 The roadmap is split into local product completion, later Scale work, and possible SaaS work.
 
 ## v1.2 Product Completion

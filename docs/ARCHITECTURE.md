@@ -211,7 +211,7 @@ output/<knowledge_id>/chat.json
 
 The package exporter writes JSON and Markdown, including a Jinja2-rendered `index.md`.
 
-`export_note.md` is an Obsidian-compatible Markdown copy. It is not a Vault integration.
+The export flow is `KnowledgePackage -> ExportSelection -> Markdown Renderer -> Export Target`. `index.md`, previews, downloads, and compatible exports share structured rendering. Local targets may atomically write `.md` below a configured Vault and return an Obsidian URI; browser clients never supply an absolute destination path. Export reads existing chat, notes, timeline, and keyframe artifacts and never calls a model.
 
 ### Knowledge-Package Validation
 

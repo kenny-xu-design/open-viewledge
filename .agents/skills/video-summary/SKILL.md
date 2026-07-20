@@ -164,7 +164,9 @@ Obsidian-compatible Markdown copy:
   --export obsidian
 ```
 
-This export creates `export_note.md`. Saved `user_notes.md` content is included in the compatible export. It does not synchronize an Obsidian Vault.
+The export layer creates UTF-8 Markdown and can include selected summary, chat, and unchanged `user_notes.md` content. Local deployments may write below a configured Obsidian Vault; `.obsidian` is a configuration directory and is never a note target. Export never invokes an LLM or re-extracts keyframes.
+
+Profiles: `summary` uses the shared note structure. `tutorial` adds optional prerequisites, steps, glossary, action items, and warnings. Resolution priority is explicit selection, existing package profile, automatic recognition, then `summary` fallback.
 
 ## Web UI
 
