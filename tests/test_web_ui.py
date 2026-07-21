@@ -100,6 +100,123 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("window.matchMedia(REDUCED_MOTION_QUERY).matches", self.js)
         self.assertNotIn('behavior: "smooth"', self.js)
 
+    def test_cupertino_component_primitives_and_states_exist(self) -> None:
+        component_css = re.search(
+            r"/\* Cupertino component primitives\.(?P<body>.*?)/\* End Cupertino component primitives\. \*/",
+            self.css,
+            re.S,
+        )
+        self.assertIsNotNone(component_css)
+        body = component_css.group("body")
+        for component in (
+            ".ui-button",
+            ".ui-icon-button",
+            ".ui-field",
+            ".ui-text-field",
+            ".ui-select",
+            ".ui-segmented-control",
+            ".ui-toggle",
+            ".ui-status-badge",
+            ".ui-inline-status",
+            ".ui-progress",
+            ".ui-spinner",
+            ".ui-empty-state",
+            ".ui-error-state",
+        ):
+            self.assertIn(component, body, component)
+        for state in (
+            ".ui-button--primary",
+            ".ui-button--secondary",
+            ".ui-button--tertiary",
+            ".ui-button--destructive",
+            '[aria-busy="true"]',
+            ":disabled",
+            '[aria-invalid="true"]',
+            '[aria-checked="true"]',
+            ".ui-status-badge--info",
+            ".ui-status-badge--success",
+            ".ui-status-badge--warning",
+            ".ui-status-badge--danger",
+            ".ui-progress--indeterminate",
+        ):
+            self.assertIn(state, body, state)
+        self.assertIsNone(re.search(r"#[0-9a-fA-F]{3,8}|rgba?\(", body))
+        self.assertNotIn("transition: all", body)
+        self.assertNotIn("scale(0)", body)
+
+    def test_migrated_button_field_select_and_status_contracts(self) -> None:
+        self.assertRegex(self.html, r'class="[^"]*ui-button--primary[^"]*" id="startTask" aria-busy="false"')
+        self.assertRegex(self.html, r'class="[^"]*ui-button--secondary[^"]*" data-close-dialog')
+        self.assertRegex(self.html, r'class="[^"]*ui-button--destructive[^"]*" id="confirmDeleteKnowledge"')
+        self.assertIn('class="icon-button ui-icon-button" id="refreshJobs"', self.html)
+        self.assertIn('aria-label="刷新任务历史"', self.html)
+        self.assertIn('id="taskSourceField" data-invalid="false"', self.html)
+        self.assertIn('class="ui-field__label" for="taskSource"', self.html)
+        self.assertIn('aria-describedby="taskSourceDescription"', self.html)
+        self.assertIn('aria-errormessage="taskSourceError"', self.html)
+        self.assertIn('id="taskSourceError" role="alert" hidden', self.html)
+        self.assertIn('class="ui-select" id="taskMode"', self.html)
+        self.assertIn("function setTaskSourceError(invalid)", self.js)
+        self.assertIn('input.setAttribute("aria-invalid", String(invalid))', self.js)
+        self.assertIn('id="modelBadge" role="status"', self.html)
+        self.assertIn('id="processingStatus" role="status" aria-live="polite"', self.html)
+
+    def test_segmented_control_has_radio_semantics_and_keyboard_navigation(self) -> None:
+        self.assertIn('role="radiogroup" aria-label="来源类型" data-segmented-control', self.html)
+        self.assertRegex(self.html, r'role="radio" aria-checked="true" tabindex="0" data-source-type="url"')
+        self.assertRegex(self.html, r'role="radio" aria-checked="false" tabindex="-1" data-source-type="file"')
+        handler = re.search(
+            r"function handleSegmentedControlKeydown\(event\) \{(?P<body>.*?)\n\}",
+            self.js,
+            re.S,
+        )
+        self.assertIsNotNone(handler)
+        for key in ("ArrowLeft", "ArrowRight", "Home", "End"):
+            self.assertIn(f'"{key}"', handler.group("body"))
+        self.assertIn("event.preventDefault()", handler.group("body"))
+        self.assertIn("options[nextIndex].focus()", handler.group("body"))
+        self.assertIn("options[nextIndex].click()", handler.group("body"))
+        self.assertIn('button.setAttribute("aria-checked", String(selected))', self.js)
+        self.assertIn("button.tabIndex = selected ? 0 : -1", self.js)
+
+    def test_toggle_keeps_native_checkbox_keyboard_behavior(self) -> None:
+        self.assertRegex(
+            self.html,
+            r'<label class="ui-toggle"><input id="taskFrames" type="checkbox" checked><span class="ui-toggle__track" aria-hidden="true"></span><span>生成关键帧</span></label>',
+        )
+        self.assertIn('.ui-toggle input:focus-visible + .ui-toggle__track', self.css)
+        self.assertIn('.ui-toggle input:disabled ~ *', self.css)
+        self.assertIn('if (event.defaultPrevented) return;', self.js)
+        self.assertIn('const editing = ["INPUT", "TEXTAREA", "SELECT"]', self.js)
+
+    def test_progress_loading_and_empty_state_are_accessible(self) -> None:
+        self.assertIn('id="taskProgress" role="status" aria-live="polite"', self.html)
+        self.assertIn('id="taskProgressBar" role="progressbar" aria-label="任务处理进度"', self.html)
+        self.assertIn('aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"', self.html)
+        self.assertIn('setAttribute("aria-valuenow", String(percent))', self.js)
+        self.assertIn('setAttribute("aria-valuetext", $("#taskStatusText").textContent)', self.js)
+        self.assertIn('function setTaskButtonLoading(loading)', self.js)
+        self.assertIn('button.setAttribute("aria-busy", String(loading))', self.js)
+        self.assertIn('class="result-empty ui-empty-state"', self.html)
+        self.assertIn('class="ui-empty-state__title"', self.html)
+        self.assertIn('class="ui-empty-state__description"', self.html)
+
+    def test_component_motion_has_reduced_motion_fallbacks(self) -> None:
+        reduced = re.search(
+            r"@media \(prefers-reduced-motion: reduce\)\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.S,
+        )
+        self.assertIsNotNone(reduced)
+        self.assertIn("--motion-spinner: 0ms", reduced.group("body"))
+        self.assertIn("--motion-progress: 0ms", reduced.group("body"))
+        self.assertIn(".ui-progress--indeterminate .ui-progress__bar", reduced.group("body"))
+
+    def test_frontend_remains_framework_free(self) -> None:
+        self.assertNotRegex(self.html, r'https?://[^"\']+(react|vue|svelte|bootstrap|material|shadcn)')
+        self.assertEqual(self.html.count("<script "), 1)
+        self.assertEqual(self.html.count('rel="stylesheet"'), 1)
+
     def test_workspace_order_is_configurable(self) -> None:
         self.assertIn('id="layoutDialog"', self.html)
         self.assertIn('id="layoutPosition1"', self.html)

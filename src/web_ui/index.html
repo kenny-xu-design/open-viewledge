@@ -56,7 +56,7 @@
         <button role="tab" data-mobile-tab="collaboration" aria-selected="false">协作</button>
       </div>
       <div class="header-actions">
-        <span class="model-badge" id="modelBadge">模型待选择</span>
+        <span class="model-badge ui-status-badge" id="modelBadge" role="status">模型待选择</span>
         <button class="settings-button" id="layoutSettings"><svg><use href="#i-box"/></svg><span>布局</span></button>
         <button class="settings-button" id="summarySettings"><svg><use href="#i-sliders"/></svg><span>总结设置</span></button>
       </div>
@@ -121,11 +121,11 @@
             <button class="icon-button small" disabled title="分享功能待开发" aria-label="分享功能待开发"><svg><use href="#i-globe"/></svg></button>
           </div>
         </div>
-        <div class="processing-status" id="processingStatus"><svg><use href="#i-check"/></svg><span>等待选择记录</span></div>
+        <div class="processing-status ui-inline-status" id="processingStatus" role="status" aria-live="polite"><svg aria-hidden="true"><use href="#i-check"/></svg><span>等待选择记录</span></div>
       </header>
 
       <div class="result-scroll" id="resultScroll">
-        <div id="summaryView" class="result-view"><div class="result-empty"><h2>知识结果</h2><p>处理完成后，摘要和章节会显示在这里。</p></div></div>
+        <div id="summaryView" class="result-view"><div class="result-empty ui-empty-state"><h2 class="ui-empty-state__title">知识结果</h2><p class="ui-empty-state__description">处理完成后，摘要和章节会显示在这里。</p></div></div>
         <div id="transcriptView" class="result-view hidden">
           <div class="transcript-tools"><div class="search-wrap"><svg><use href="#i-search"/></svg><input id="transcriptSearch" type="search" placeholder="搜索分组字幕" aria-label="搜索分组字幕"></div><label class="switch-label"><input id="followPlayback" type="checkbox">跟随播放</label><button class="quiet-button" id="backToTop">回到顶部</button></div>
           <div id="transcriptGroups"></div>
@@ -209,24 +209,29 @@
   <dialog id="newTaskDialog" class="task-dialog">
     <form id="newTaskForm" method="dialog">
       <header><div><span class="dialog-kicker">PROCESS</span><h2>新总结</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header>
-      <div class="source-tabs" role="tablist"><button type="button" class="active" data-source-type="url">公开视频链接</button><button type="button" data-source-type="file">本地文件路径</button></div>
-      <label class="field"><span id="taskSourceLabel">视频链接</span><input id="taskSource" name="source" required placeholder="https://www.bilibili.com/video/BV…"></label>
+      <div class="source-tabs ui-segmented-control" role="radiogroup" aria-label="来源类型" data-segmented-control><button type="button" class="active" role="radio" aria-checked="true" tabindex="0" data-source-type="url">公开视频链接</button><button type="button" role="radio" aria-checked="false" tabindex="-1" data-source-type="file">本地文件路径</button></div>
+      <div class="field ui-field" id="taskSourceField" data-invalid="false">
+        <label class="ui-field__label" for="taskSource"><span id="taskSourceLabel">视频链接</span><span class="ui-field__required" aria-hidden="true">*</span></label>
+        <p class="ui-field__description" id="taskSourceDescription">输入公开媒体链接，或切换为本地文件路径。</p>
+        <input class="ui-text-field" id="taskSource" name="source" required aria-describedby="taskSourceDescription" aria-errormessage="taskSourceError" aria-invalid="false" placeholder="https://www.bilibili.com/video/BV…">
+        <p class="ui-field__error" id="taskSourceError" role="alert" hidden>请输入视频链接。</p>
+      </div>
       <div class="form-grid">
-        <label class="field"><span>分析模式</span><select id="taskMode"><option value="summary">summary</option><option value="tutorial">tutorial</option><option value="viral">viral</option><option value="close-reading">close-reading</option></select></label>
+        <label class="field"><span>分析模式</span><select class="ui-select" id="taskMode"><option value="summary">summary</option><option value="tutorial">tutorial</option><option value="viral">viral</option><option value="close-reading">close-reading</option></select></label>
         <label class="field"><span>AI 分析</span><input value="DeepSeek" disabled><input id="taskBackend" type="hidden" value="deepseek"></label>
         <label class="field"><span>字幕语言</span><select id="taskLanguage"><option value="">默认 zh</option><option value="zh">zh</option><option value="zh-Hans">zh-Hans</option><option value="en">en</option></select></label>
         <label class="field"><span>字幕分组</span><select disabled><option>60秒（当前配置）</option></select></label>
         <label class="field"><span>样本秒数</span><input id="taskSampleSeconds" type="number" min="1" placeholder="留空处理完整媒体"></label>
         <label class="field"><span>导出</span><select id="taskExport"><option value="none">知识包</option><option value="obsidian">兼容 Obsidian</option></select></label>
       </div>
-      <div class="toggle-list"><label><input id="taskFrames" type="checkbox" checked>生成关键帧</label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
+      <div class="toggle-list"><label class="ui-toggle"><input id="taskFrames" type="checkbox" checked><span class="ui-toggle__track" aria-hidden="true"></span><span>生成关键帧</span></label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
       <div class="runtime-info" id="taskRuntime" aria-live="polite">正在读取 Python 运行环境…</div>
-      <div class="task-progress hidden" id="taskProgress" aria-live="polite"><div><span id="taskStatusText">正在创建任务…</span><span id="taskPercent"></span></div><div class="progress-track"><span id="progressBar"></span></div><pre id="taskLogs"></pre></div>
+      <div class="task-progress hidden" id="taskProgress" role="status" aria-live="polite"><div><span id="taskStatusText">正在创建任务…</span><span id="taskPercent"></span></div><div class="progress-track ui-progress" id="taskProgressBar" role="progressbar" aria-label="任务处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="ui-progress__bar" id="progressBar"></span></div><pre id="taskLogs"></pre></div>
       <section class="task-history" aria-labelledby="taskHistoryTitle">
-        <header><strong id="taskHistoryTitle">最近任务</strong><button class="icon-button" id="refreshJobs" type="button" title="刷新任务历史"><svg><use href="#i-refresh"/></svg></button></header>
+        <header><strong id="taskHistoryTitle">最近任务</strong><button class="icon-button ui-icon-button" id="refreshJobs" type="button" aria-label="刷新任务历史"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button></header>
         <div id="jobHistory"><div class="task-history-empty">打开面板后读取历史任务</div></div>
       </section>
-      <footer><button type="button" class="secondary-button" data-close-dialog>取消</button><button type="submit" class="primary-button" id="startTask">开始处理</button></footer>
+      <footer><button type="button" class="secondary-button ui-button ui-button--secondary" data-close-dialog>取消</button><button type="submit" class="primary-button ui-button ui-button--primary" id="startTask" aria-busy="false">开始处理</button></footer>
     </form>
   </dialog>
 
@@ -238,7 +243,7 @@
         <ul id="deleteConfirmList"></ul>
         <p class="delete-warning">删除后，对应知识包、字幕、摘要、笔记和导出文件将无法恢复。</p>
       </div>
-      <footer><button type="button" class="secondary-button" data-close-dialog>取消</button><button type="button" class="danger-button" id="confirmDeleteKnowledge">确认永久删除</button></footer>
+      <footer><button type="button" class="secondary-button" data-close-dialog>取消</button><button type="button" class="danger-button ui-button ui-button--destructive" id="confirmDeleteKnowledge">确认永久删除</button></footer>
     </form>
   </dialog>
 

@@ -252,6 +252,7 @@ function applyPersistedLayout() {
 }
 
 function bindEvents() {
+  bindSegmentedControls();
   $("#newSummary").addEventListener("click", openNewTask);
   $("#refreshJobs").addEventListener("click", loadJobHistory);
   $("#focusSearch").addEventListener("click", focusSidebarSearch);
@@ -330,6 +331,10 @@ function bindEvents() {
   $$('[id^="layoutPosition"]').forEach((select) => select.addEventListener("change", updateLayoutFromControls));
   $("#resetLayout").addEventListener("click", resetWorkspaceLayout);
   $("#newTaskForm").addEventListener("submit", submitTask);
+  $("#taskSource").addEventListener("invalid", () => setTaskSourceError(true));
+  $("#taskSource").addEventListener("input", () => {
+    if ($("#taskSource").validity.valid) setTaskSourceError(false);
+  });
   $("#paneResizer").addEventListener("pointerdown", startResize);
   $("#rightPaneResizer").addEventListener("pointerdown", startResize);
   $$(".pane-resizer").forEach((resizer) => resizer.addEventListener("dblclick", resetModuleWidths));
@@ -340,6 +345,44 @@ function bindEvents() {
     clearInterval(taskPoller);
     flushPendingNotesOnUnload();
   });
+}
+
+function bindSegmentedControls() {
+  $$('[data-segmented-control]').forEach((control) => {
+    control.addEventListener("keydown", handleSegmentedControlKeydown);
+  });
+}
+
+function handleSegmentedControlKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const options = $$('[role="radio"]:not(:disabled)', event.currentTarget);
+  if (!options.length) return;
+  const currentIndex = Math.max(0, options.indexOf(document.activeElement));
+  let nextIndex = currentIndex;
+  if (event.key === "Home") nextIndex = 0;
+  else if (event.key === "End") nextIndex = options.length - 1;
+  else if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + options.length) % options.length;
+  else nextIndex = (currentIndex + 1) % options.length;
+  event.preventDefault();
+  options[nextIndex].focus();
+  options[nextIndex].click();
+}
+
+function setTaskSourceError(invalid) {
+  const input = $("#taskSource");
+  const field = $("#taskSourceField");
+  const error = $("#taskSourceError");
+  field.dataset.invalid = String(invalid);
+  input.setAttribute("aria-invalid", String(invalid));
+  input.setAttribute("aria-describedby", invalid ? "taskSourceDescription taskSourceError" : "taskSourceDescription");
+  error.hidden = !invalid;
+}
+
+function setTaskButtonLoading(loading) {
+  const button = $("#startTask");
+  button.disabled = loading;
+  button.setAttribute("aria-busy", String(loading));
+  button.textContent = loading ? "正在处理…" : "开始处理";
 }
 
 async function api(path, options = {}) {
@@ -794,7 +837,14 @@ function renderStatus(manifest) {
   else if (status === "completed_with_warnings") className = "warning";
   else if (status === "failed" || status === "invalid") className = "error";
   const errors = Array.isArray(manifest.errors) && manifest.errors.length ? ` · ${manifest.errors[0]}` : "";
-  element.className = `processing-status ${className}`;
+  const semanticClass = className === "success"
+    ? "ui-inline-status--success"
+    : className === "warning"
+      ? "ui-inline-status--warning"
+      : className === "error"
+        ? "ui-inline-status--danger"
+        : "";
+  element.className = `processing-status ui-inline-status ${semanticClass}`.trim();
   element.innerHTML = `<svg><use href="#${className === "error" || className === "warning" ? "i-warning" : "i-check"}"/></svg><span>${escapeHtml(statusLabel(status))}${manifest.current_stage ? ` · ${escapeHtml(stageLabel(manifest.current_stage))}` : ""}${escapeHtml(errors)}</span>`;
 }
 
@@ -1119,6 +1169,8 @@ function openNewTask() {
   $("#taskProgress").classList.add("hidden");
   $("#newTaskForm").reset();
   $("#taskFrames").checked = true;
+  setTaskSourceError(false);
+  setTaskButtonLoading(false);
   setTaskSourceType("url");
   $("#newTaskDialog").showModal();
   loadJobHistory();
@@ -1126,9 +1178,15 @@ function openNewTask() {
 
 function setTaskSourceType(type) {
   activeSourceType = type === "file" ? "file" : "url";
-  $$("[data-source-type]").forEach((button) => button.classList.toggle("active", button.dataset.sourceType === activeSourceType));
+  $$("[data-source-type]").forEach((button) => {
+    const selected = button.dataset.sourceType === activeSourceType;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-checked", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
   $("#taskSourceLabel").textContent = activeSourceType === "url" ? "视频链接" : "本地文件路径";
   $("#taskSource").placeholder = activeSourceType === "url" ? "https://www.bilibili.com/video/BV…" : "E:\\Downloads_E\\video.mp4";
+  $("#taskSourceError").textContent = activeSourceType === "url" ? "请输入视频链接。" : "请输入本地文件路径。";
 }
 
 async function submitTask(event) {
@@ -1144,8 +1202,7 @@ async function submitTask(event) {
     noSummary: $("#taskNoSummary").checked,
     sampleSeconds: $("#taskSampleSeconds").value,
   };
-  const button = $("#startTask");
-  button.disabled = true;
+  setTaskButtonLoading(true);
   try {
     const data = await api("/api/process", { method: "POST", body: JSON.stringify(payload) });
     state.taskStatus = data.job;
@@ -1153,7 +1210,7 @@ async function submitTask(event) {
     pollTask(data.job.id);
   } catch (error) {
     showToast(error.message);
-    button.disabled = false;
+    setTaskButtonLoading(false);
   }
 }
 
@@ -1166,7 +1223,7 @@ function pollTask(jobId) {
       renderTaskProgress(data.job);
       if (["success", "failed", "interrupted"].includes(data.job.status)) {
         clearInterval(taskPoller);
-        $("#startTask").disabled = false;
+        setTaskButtonLoading(false);
         if (data.job.status === "success") {
           await refreshLibrary();
           const outputId = (data.job.outputDir || "").split("/").pop();
@@ -1176,6 +1233,7 @@ function pollTask(jobId) {
       }
     } catch (error) {
       clearInterval(taskPoller);
+      setTaskButtonLoading(false);
       showToast(error.message);
     }
   };
@@ -1200,6 +1258,8 @@ function renderTaskProgress(job) {
         : stageLabel(stage || "queued");
   $("#taskPercent").textContent = `${percent}%`;
   $("#progressBar").style.width = `${percent}%`;
+  $("#taskProgressBar").setAttribute("aria-valuenow", String(percent));
+  $("#taskProgressBar").setAttribute("aria-valuetext", $("#taskStatusText").textContent);
   $("#taskLogs").textContent = logs.slice(-10).join("\n") || "等待任务日志…";
 }
 
@@ -1483,8 +1543,8 @@ function setLibraryFilter(filter, button) {
 function setLoadingState() {
   $("#sourceInfo").innerHTML = '<h1>正在加载记录…</h1><p>请稍候</p>';
   $("#summaryView").innerHTML = '<div class="result-empty"><p>正在读取知识包…</p></div>';
-  $("#processingStatus").className = "processing-status";
-  $("#processingStatus").innerHTML = '<svg><use href="#i-refresh"/></svg><span>加载中</span>';
+  $("#processingStatus").className = "processing-status ui-inline-status ui-inline-status--info";
+  $("#processingStatus").innerHTML = '<span class="ui-spinner" aria-hidden="true"></span><span>加载中</span>';
 }
 
 function renderLoadError(message) {
@@ -1526,6 +1586,7 @@ async function copyText(text) {
 }
 
 function handleKeyboard(event) {
+  if (event.defaultPrevented) return;
   const editing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
   if (event.ctrlKey && event.key.toLowerCase() === "k") { event.preventDefault(); focusSidebarSearch(); return; }
   if (event.key === "Escape") {
