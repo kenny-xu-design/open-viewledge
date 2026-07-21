@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import mimetypes
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -57,6 +59,16 @@ MEDIA_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m
 JOB_STORE = JobStore(LOCAL_STATE_ROOT / "web_jobs.json")
 JOBS: dict[str, Job] = {job.id: job for job in JOB_STORE.load_jobs()}
 JOBS_LOCK = threading.RLock()
+LOGGER = logging.getLogger(__name__)
+
+
+class KnowledgeDeletionError(RuntimeError):
+    def __init__(self, code: str, message: str, target: Path, cause: OSError, deleted: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.target = target
+        self.cause = cause
+        self.deleted = list(deleted or [])
 
 
 def build_cli_command(payload: dict[str, Any], python_executable: str | None = None) -> list[str]:
@@ -284,9 +296,11 @@ def _find_new_output_dir(before: dict[Path, float]) -> str:
 
 def job_to_dict(job: Job) -> dict[str, Any]:
     output_files: list[dict[str, str]] = []
+    output_available = False
     if job.output_dir:
         output_path = (PROJECT_ROOT / job.output_dir).resolve()
         if output_path.exists():
+            output_available = True
             output_files = [
                 {
                     "name": path.name,
@@ -306,8 +320,8 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "returncode": job.returncode,
         "cliTaskId": job.cli_task_id,
         "logs": job.logs,
-        "knowledgeId": job.knowledge_id,
-        "outputDir": job.output_dir,
+        "knowledgeId": job.knowledge_id if output_available else "",
+        "outputDir": job.output_dir if output_available else "",
         "outputFiles": output_files,
         "error": job.error,
     }
@@ -450,10 +464,14 @@ def _external_player_descriptor(source_url: str) -> dict[str, str] | None:
     if host in {"bilibili.com", "www.bilibili.com", "m.bilibili.com", "b23.tv"}:
         match = re.search(r"(?i)(BV[0-9A-Za-z]{10})", source_url)
         if match:
+            from urllib.parse import parse_qs
+
+            page = parse_qs(parsed.query).get("p", ["1"])[0]
+            page = page if page.isdigit() and int(page) > 0 else "1"
             return {
                 "provider": "bilibili",
                 "videoId": match.group(1),
-                "url": f"https://player.bilibili.com/player.html?bvid={match.group(1)}&p=1&danmaku=0",
+                "url": f"https://player.bilibili.com/player.html?bvid={match.group(1)}&p={page}&danmaku=0",
             }
     return None
 
@@ -590,9 +608,76 @@ def delete_knowledge_packages(knowledge_ids: list[str]) -> list[str]:
 
     # Resolve and validate every target before removing the first directory so
     # malformed IDs cannot cause a partially applied batch deletion.
-    for directory in targets:
-        shutil.rmtree(directory)
+    deleted: list[str] = []
+    for knowledge_id, directory in zip(normalized_ids, targets, strict=True):
+        try:
+            _remove_knowledge_directory(directory)
+        except OSError as exc:
+            error = _classify_delete_error(directory, exc, deleted)
+            LOGGER.error(
+                "knowledge_delete_failed code=%s exception=%s winerror=%s target=%s",
+                error.code,
+                type(exc).__name__,
+                getattr(exc, "winerror", None),
+                directory,
+            )
+            raise error from exc
+        deleted.append(knowledge_id)
     return normalized_ids
+
+
+def _remove_knowledge_directory(directory: Path) -> None:
+    output_root = OUTPUT_ROOT.resolve()
+    target = directory.resolve()
+    try:
+        relative = target.relative_to(output_root)
+    except ValueError as exc:
+        raise ValueError("知识包路径超出允许的输出目录。") from exc
+    if len(relative.parts) != 1 or target == output_root:
+        raise ValueError("知识包路径不符合安全删除规则。")
+    if not target.exists():
+        raise FileNotFoundError(target)
+    if not target.is_dir():
+        raise ValueError("知识包目标不是目录。")
+    shutil.rmtree(target, onexc=_retry_readonly_delete)
+
+
+def _retry_readonly_delete(function: Any, path: str, exc: BaseException) -> None:
+    if not isinstance(exc, PermissionError):
+        raise exc
+    target = Path(path)
+    try:
+        target.chmod(target.stat().st_mode | stat.S_IWRITE | stat.S_IREAD)
+        function(path)
+    except OSError:
+        raise exc
+
+
+def _classify_delete_error(target: Path, exc: OSError, deleted: list[str]) -> KnowledgeDeletionError:
+    winerror = getattr(exc, "winerror", None)
+    if winerror in {32, 33}:
+        return KnowledgeDeletionError(
+            "knowledge_package_locked",
+            "知识包文件正在被播放器、编辑器、同步软件或其他进程占用。请关闭相关程序后重试。",
+            target,
+            exc,
+            deleted,
+        )
+    if isinstance(exc, PermissionError) or winerror == 5:
+        return KnowledgeDeletionError(
+            "knowledge_package_access_denied",
+            "无法删除知识包。请检查输出目录 ACL、只读属性、同步软件保护，以及 Web 服务的运行权限。",
+            target,
+            exc,
+            deleted,
+        )
+    return KnowledgeDeletionError(
+        "knowledge_package_delete_io_error",
+        "删除知识包时发生文件系统错误，请检查磁盘和同步软件状态后重试。",
+        target,
+        exc,
+        deleted,
+    )
 
 
 def resolve_library_file(knowledge_id: str, relative_name: str) -> Path:
@@ -852,8 +937,17 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except FileNotFoundError:
                 self._send_json({"error": "选择的知识记录不存在或已被删除。"}, HTTPStatus.NOT_FOUND)
-            except OSError:
-                self._send_json({"error": "知识记录删除失败，请检查输出目录是否可写。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            except KnowledgeDeletionError as exc:
+                status = HTTPStatus.LOCKED if exc.code == "knowledge_package_locked" else HTTPStatus.FORBIDDEN if exc.code == "knowledge_package_access_denied" else HTTPStatus.INTERNAL_SERVER_ERROR
+                self._send_json(
+                    {
+                        "error": str(exc),
+                        "code": exc.code,
+                        "deleted": exc.deleted,
+                        "retryable": exc.code in {"knowledge_package_locked", "knowledge_package_access_denied"},
+                    },
+                    status,
+                )
             return
         if parsed.path.startswith("/api/library/") and parsed.path.endswith("/chat"):
             try:

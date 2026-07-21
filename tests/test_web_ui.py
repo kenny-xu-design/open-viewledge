@@ -15,7 +15,7 @@ class WebUiContractTests(unittest.TestCase):
         cls.css = (WEB_UI / "app.css").read_text(encoding="utf-8")
         cls.js = (WEB_UI / "app.js").read_text(encoding="utf-8")
 
-    def test_three_pane_and_mobile_view_contracts_exist(self) -> None:
+    def test_app_shell_and_responsive_view_contracts_exist(self) -> None:
         self.assertIn('/static/app.workspace-', self.html)
         for element_id in (
             "sidebar",
@@ -29,8 +29,98 @@ class WebUiContractTests(unittest.TestCase):
         ):
             self.assertIn(f'id="{element_id}"', self.html)
         self.assertIn('class="workspace-header"', self.html)
-        self.assertIn("@media (max-width: 1179px)", self.css)
+        self.assertIn("Authoritative Cupertino AppShell", self.css)
+        self.assertIn("@media (min-width: 1280px)", self.css)
+        self.assertIn("@media (max-width: 1279px)", self.css)
+        self.assertIn("@media (max-width: 959px)", self.css)
         self.assertIn('data-mobile-view="result"', self.html)
+
+    def test_legacy_layout_generation_is_removed(self) -> None:
+        for legacy_contract in (
+            "sidebar-collapsed",
+            "@media (max-width: 979px)",
+            "@media (max-width: 620px)",
+            "drawer-open",
+            "grid-template-columns: var(--sidebar-width) minmax(500px, var(--center-width))",
+        ):
+            self.assertNotIn(legacy_contract, self.css + self.js, legacy_contract)
+
+    def test_sidebar_and_inspector_have_accessible_sheet_controls(self) -> None:
+        self.assertRegex(self.html, r'id="toggleSidebar"[^>]+aria-controls="sidebar"[^>]+aria-expanded="true"')
+        self.assertRegex(self.html, r'id="toggleInspector"[^>]+aria-controls="collaborationPane"[^>]+aria-expanded="true"')
+        self.assertIn('id="closeInspector" aria-label="关闭检查器"', self.html)
+        self.assertIn('id="sidebar" aria-label="知识记录导航" tabindex="-1"', self.html)
+        self.assertIn('id="collaborationPane" data-module="collaboration" aria-label="检查器" tabindex="-1"', self.html)
+        self.assertIn("function syncShellAccessibility()", self.js)
+        self.assertIn("function trapLayerFocus(event)", self.js)
+        self.assertIn('layer.setAttribute("aria-modal", "true")', self.js)
+        self.assertIn("sidebar.inert = !sidebarExpanded", self.js)
+        self.assertIn("lastSidebarTrigger", self.js)
+        self.assertIn("lastInspectorTrigger", self.js)
+
+    def test_sidebar_navigation_exposes_current_and_expanded_state(self) -> None:
+        self.assertIn('data-filter="all" aria-current="page"', self.html)
+        self.assertIn('<summary aria-expanded="true">', self.html)
+        self.assertIn('<summary aria-expanded="false">', self.html)
+        self.assertIn('item.setAttribute("aria-current", "page")', self.js)
+        self.assertIn('setAttribute("aria-expanded", String(details.open))', self.js)
+
+    def test_split_view_dividers_support_pointer_keyboard_and_values(self) -> None:
+        for divider_id in ("paneResizer", "rightPaneResizer"):
+            divider = re.search(rf'id="{divider_id}"[^>]+', self.html)
+            self.assertIsNotNone(divider)
+            for attribute in ('role="separator"', 'aria-orientation="vertical"', 'aria-valuemin=', 'aria-valuemax=', 'aria-valuenow=', 'tabindex="0"'):
+                self.assertIn(attribute, divider.group(0))
+        self.assertIn("function startResize(event)", self.js)
+        self.assertIn("function handleDividerKeydown(event)", self.js)
+        self.assertIn('event.shiftKey ? 48 : 16', self.js)
+        self.assertIn('setAttribute("aria-valuenow"', self.js)
+        self.assertIn(".pane-resizer:focus-visible::after", self.css)
+        self.assertNotRegex(self.css, r"\.pane-resizer[^}]*transition\s*:\s*[^;]*(width|flex)")
+
+    def test_divider_bounds_follow_panel_constraints_and_viewport_changes(self) -> None:
+        self.assertIn("function moduleMinimumWidth(module)", self.js)
+        self.assertIn("function moduleMaximumWidth(module)", self.js)
+        self.assertIn("function reconcileLayoutWidths()", self.js)
+        self.assertIn("requestAnimationFrame(reconcileLayoutWidths)", self.js)
+        self.assertIn('max-width: min(520px, 48vw)', self.css)
+        self.assertIn(".header-actions > * { flex: 0 0 auto; }", self.css)
+
+    def test_preview_seek_keeps_bilibili_inside_the_embed(self) -> None:
+        self.assertIn("function seekPreview(seconds)", self.js)
+        self.assertIn('url.searchParams.set("bvid", this.videoId)', self.js)
+        self.assertIn('url.searchParams.set("t", String(Math.floor(state.currentTime)))', self.js)
+        self.assertIn("supportsSeek() { return true; }", self.js)
+        seek_preview = re.search(r"function seekPreview\(seconds\)\s*\{(?P<body>.*?)\n\}", self.js, re.S)
+        self.assertIsNotNone(seek_preview)
+        self.assertNotIn("openExternally", seek_preview.group("body"))
+        self.assertIn("event.preventDefault()", self.js)
+
+    def test_local_video_display_ratios_do_not_apply_to_iframes(self) -> None:
+        for value in ("original", "16/9", "4/3", "1/1", "9/16"):
+            self.assertIn(f'value="{value}"', self.html)
+        self.assertIn('id="videoObjectFit"', self.html)
+        self.assertIn('value="contain" selected', self.html)
+        self.assertIn('value="cover"', self.html)
+        self.assertIn("video.videoWidth", self.js)
+        self.assertIn("video.videoHeight", self.js)
+        self.assertIn("mediaController instanceof LocalVideoController", self.js)
+        self.assertIn('surface.style.setProperty("--media-aspect", String(selectedRatio))', self.js)
+        self.assertIn(".media-surface.local-video-surface", self.css)
+        self.assertIn("video.style.objectFit = fitSetting", self.js)
+
+    def test_one_summary_region_uses_reading_surface(self) -> None:
+        self.assertEqual(self.html.count("reading-surface"), 1)
+        self.assertIn('id="summaryView" class="result-view reading-surface"', self.html)
+        self.assertIn(".reading-surface", self.css)
+        self.assertIn("width: min(calc(100% - 24px), 760px)", self.css)
+        self.assertIn("border-radius: var(--radius-group)", self.css)
+
+    def test_toolbar_has_visible_page_hierarchy(self) -> None:
+        self.assertIn('class="workspace-heading"', self.html)
+        self.assertIn('<small>视频知识工作台</small>', self.html)
+        self.assertIn(".workspace-heading", self.css)
+        self.assertIn("--workspace-header-height: 56px", self.css)
 
     def test_cupertino_design_token_categories_exist(self) -> None:
         required_tokens = {
@@ -233,7 +323,7 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("class LocalAudioController", self.js)
         self.assertIn("supportsSeek()", self.js)
         self.assertIn("mediaController?.destroy()", self.js)
-        self.assertIn("mediaController?.openExternally", self.js)
+        self.assertIn("function openOriginal()", self.js)
 
     def test_chat_uses_real_endpoint_and_has_no_simulated_answer(self) -> None:
         self.assertIn('api("/api/chat"', self.js)
@@ -265,6 +355,8 @@ class WebUiContractTests(unittest.TestCase):
                 "vs.activeResultTab",
                 "vs.transcriptFollowMode",
                 "vs.playbackRate",
+                "vs.videoAspectRatio",
+                "vs.videoObjectFit",
             },
         )
         self.assertNotIn("vs.note", self.js)
@@ -331,11 +423,12 @@ class WebUiContractTests(unittest.TestCase):
         self.assertRegex(self.html, r'id="captureNote"[^>]*disabled')
         self.assertIn("Obsidian 兼容 Markdown", self.html)
 
-    def test_bilibili_controls_do_not_claim_programmatic_sync(self) -> None:
+    def test_bilibili_timestamp_seek_reloads_the_embedded_player(self) -> None:
         self.assertIn("function syncMediaControls()", self.js)
         self.assertIn("mediaController instanceof BilibiliEmbedController", self.js)
-        self.assertIn("当前平台播放器需在播放器内控制", self.js)
-        self.assertIn("mediaController?.openExternally", self.js)
+        self.assertIn("请在 B站播放器内点击播放", self.js)
+        self.assertIn("this.element.src = url.toString()", self.js)
+        self.assertIn("function openOriginal()", self.js)
 
     def test_raw_transcript_is_only_loaded_on_explicit_action(self) -> None:
         self.assertNotIn("transcript.raw.jsonl", self.html)

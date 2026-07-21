@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Video Summary Workspace</title>
-  <link rel="stylesheet" href="/static/app.workspace-6.css">
+  <link rel="stylesheet" href="/static/app.workspace-16.css">
 </head>
 <body>
   <svg class="icon-sprite" aria-hidden="true">
@@ -40,29 +40,32 @@
     <symbol id="i-clip" viewBox="0 0 24 24"><path d="m9 17 7-7a3 3 0 0 0-4-4l-8 8a5 5 0 0 0 7 7l9-9"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+    <symbol id="i-inspector" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
   </svg>
 
   <div id="app" class="app-shell" data-mobile-view="result">
     <header class="workspace-header">
       <div class="header-leading">
-        <button class="icon-button desktop-menu" id="toggleSidebar" aria-label="打开知识库"><svg><use href="#i-menu"/></svg></button>
-        <button class="icon-button mobile-menu" id="mobileMenu" aria-label="打开知识库"><svg><use href="#i-menu"/></svg></button>
-        <button class="new-summary" id="newSummary"><svg><use href="#i-plus"/></svg><span>新总结</span></button>
-        <span class="workspace-title" id="workspaceTitle">视频知识工作台</span>
+        <button type="button" class="icon-button" id="toggleSidebar" aria-label="隐藏知识库" aria-controls="sidebar" aria-expanded="true"><svg><use href="#i-menu"/></svg></button>
+        <button type="button" class="new-summary" id="newSummary" aria-label="新总结"><svg><use href="#i-plus"/></svg><span>新总结</span></button>
+        <div class="workspace-heading">
+          <small>视频知识工作台</small>
+          <span class="workspace-title" id="workspaceTitle">选择一条知识记录</span>
+        </div>
       </div>
       <div class="mobile-tabs" role="tablist" aria-label="工作区视图">
-        <button role="tab" data-mobile-tab="result" aria-selected="true">摘要</button>
-        <button role="tab" data-mobile-tab="media" aria-selected="false">视频</button>
-        <button role="tab" data-mobile-tab="collaboration" aria-selected="false">协作</button>
+        <button type="button" id="mobileResultTab" role="tab" data-mobile-tab="result" aria-controls="resultPane" aria-selected="true" tabindex="0">摘要</button>
+        <button type="button" id="mobileMediaTab" role="tab" data-mobile-tab="media" aria-controls="centerPane" aria-selected="false" tabindex="-1">视频</button>
       </div>
       <div class="header-actions">
         <span class="model-badge ui-status-badge" id="modelBadge" role="status">模型待选择</span>
-        <button class="settings-button" id="layoutSettings"><svg><use href="#i-box"/></svg><span>布局</span></button>
-        <button class="settings-button" id="summarySettings"><svg><use href="#i-sliders"/></svg><span>总结设置</span></button>
+        <button type="button" class="icon-button" id="toggleInspector" aria-label="隐藏检查器" aria-controls="collaborationPane" aria-expanded="true"><svg><use href="#i-inspector"/></svg></button>
+        <button type="button" class="settings-button" id="layoutSettings" aria-label="工作台布局"><svg><use href="#i-box"/></svg><span>布局</span></button>
+        <button type="button" class="settings-button" id="summarySettings" aria-label="总结设置"><svg><use href="#i-sliders"/></svg><span>总结设置</span></button>
       </div>
     </header>
 
-    <aside class="sidebar" id="sidebar" aria-label="知识记录导航">
+    <aside class="sidebar" id="sidebar" aria-label="知识记录导航" tabindex="-1">
       <div class="sidebar-top">
         <strong>知识记录</strong>
         <button class="icon-button sidebar-only-expanded" id="focusSearch" aria-label="搜索记录"><svg><use href="#i-search"/></svg></button>
@@ -73,16 +76,16 @@
       </div>
       <nav class="nav-groups">
         <details open>
-          <summary><svg><use href="#i-library"/></svg><span>资源库</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
+          <summary aria-expanded="true"><svg><use href="#i-library"/></svg><span>资源库</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
           <div class="nav-items sidebar-only-expanded" id="resourceFilters">
-            <button class="active" data-filter="all">全部记录 <span id="countAll">0</span></button>
-            <button data-filter="video">视频 <span id="countVideo">0</span></button>
-            <button data-filter="processing">待处理 <span id="countProcessing">0</span></button>
-            <button data-filter="completed">已完成 <span id="countCompleted">0</span></button>
+            <button type="button" class="active" data-filter="all" aria-current="page">全部记录 <span id="countAll">0</span></button>
+            <button type="button" data-filter="video">视频 <span id="countVideo">0</span></button>
+            <button type="button" data-filter="processing">待处理 <span id="countProcessing">0</span></button>
+            <button type="button" data-filter="completed">已完成 <span id="countCompleted">0</span></button>
           </div>
         </details>
         <details>
-          <summary><svg><use href="#i-box"/></svg><span>产出库</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
+          <summary aria-expanded="false"><svg><use href="#i-box"/></svg><span>产出库</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
           <div class="nav-items sidebar-only-expanded muted-nav">
             <button disabled>行动建议 <span>0</span></button>
             <button disabled>写作素材 <span>0</span></button>
@@ -100,7 +103,7 @@
       <div class="library-list" id="libraryList" aria-live="polite"></div>
       <div class="sidebar-footer">
         <div class="local-user"><span class="avatar">L</span><span class="sidebar-only-expanded"><strong>本地用户</strong><small>Private workspace</small></span></div>
-        <button class="icon-button" id="collapseSidebar" aria-label="关闭知识库"><svg><use href="#i-collapse"/></svg></button>
+        <button type="button" class="icon-button" id="collapseSidebar" aria-label="关闭知识库" aria-controls="sidebar"><svg><use href="#i-collapse"/></svg></button>
       </div>
     </aside>
 
@@ -125,7 +128,7 @@
       </header>
 
       <div class="result-scroll" id="resultScroll">
-        <div id="summaryView" class="result-view"><div class="result-empty ui-empty-state"><h2 class="ui-empty-state__title">知识结果</h2><p class="ui-empty-state__description">处理完成后，摘要和章节会显示在这里。</p></div></div>
+        <div id="summaryView" class="result-view reading-surface"><div class="result-empty ui-empty-state"><h2 class="ui-empty-state__title">知识结果</h2><p class="ui-empty-state__description">处理完成后，摘要和章节会显示在这里。</p></div></div>
         <div id="transcriptView" class="result-view hidden">
           <div class="transcript-tools"><div class="search-wrap"><svg><use href="#i-search"/></svg><input id="transcriptSearch" type="search" placeholder="搜索分组字幕" aria-label="搜索分组字幕"></div><label class="switch-label"><input id="followPlayback" type="checkbox">跟随播放</label><button class="quiet-button" id="backToTop">回到顶部</button></div>
           <div id="transcriptGroups"></div>
@@ -134,7 +137,7 @@
       <footer class="result-footer"><button class="quiet-button" id="readTranscript">阅读全文</button><label class="switch-label"><input id="footerFollow" type="checkbox">跟随播放</label><span class="data-layer-label">AI 结果 · 源数据</span></footer>
     </section>
 
-    <div class="pane-resizer" id="paneResizer" role="separator" aria-label="调整左侧与中间栏宽度" aria-orientation="vertical" tabindex="0"></div>
+    <div class="pane-resizer" id="paneResizer" role="separator" aria-label="调整摘要与视频栏宽度" aria-orientation="vertical" aria-controls="resultPane centerPane" aria-valuemin="300" aria-valuemax="900" aria-valuenow="480" tabindex="0"></div>
 
     <main class="center-pane workspace-module" id="centerPane" data-module="media">
       <div class="pane-toolbar center-toolbar">
@@ -164,6 +167,10 @@
               <button class="icon-button" data-media="capture" disabled title="截图保存后端待开发" aria-label="截图保存待开发"><svg><use href="#i-camera"/></svg></button>
               <button class="icon-button" data-media="fullscreen" aria-label="全屏"><svg><use href="#i-full"/></svg></button>
             </div>
+            <div class="local-video-display hidden" id="localVideoDisplay" aria-label="本地视频显示设置">
+              <label>比例<select id="videoAspectRatio" aria-label="视频显示比例"><option value="original" selected>原始比例</option><option value="16/9">16:9</option><option value="4/3">4:3</option><option value="1/1">1:1</option><option value="9/16">9:16</option></select></label>
+              <label>显示<select id="videoObjectFit" aria-label="视频显示模式"><option value="contain" selected>适应</option><option value="cover">填充</option></select></label>
+            </div>
             <div class="time-display"><span id="currentTime">00:00</span><span>/</span><span id="durationTime">00:00</span></div>
           </div>
           <div class="source-info" id="sourceInfo">
@@ -179,9 +186,14 @@
       </div>
     </main>
 
-    <div class="pane-resizer" id="rightPaneResizer" role="separator" aria-label="调整中间栏与右侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
+    <div class="pane-resizer" id="rightPaneResizer" role="separator" aria-label="调整主内容与检查器宽度" aria-orientation="vertical" aria-controls="centerPane collaborationPane" aria-valuemin="300" aria-valuemax="900" aria-valuenow="360" tabindex="0"></div>
 
-    <section class="collaboration-pane workspace-module" id="collaborationPane" data-module="collaboration">
+    <aside class="collaboration-pane workspace-module inspector" id="collaborationPane" data-module="collaboration" aria-label="检查器" tabindex="-1">
+      <header class="inspector-toolbar">
+        <strong>检查器</strong>
+        <button type="button" class="icon-button small" id="closeInspector" aria-label="关闭检查器" aria-controls="collaborationPane"><svg><use href="#i-close"/></svg></button>
+      </header>
+      <div class="inspector-content">
       <section class="chat-pane" id="chatPane">
         <header><div><strong>AI 对话</strong><span class="available-dot" id="chatProviderDot" title="模型状态"></span><span class="module-status" id="chatProviderStatus">字幕检索</span></div><div class="chat-header-actions"><button class="quiet-button" id="clearChat">清空</button><button class="icon-button small" id="expandChat" aria-label="展开对话"><svg><use href="#i-full"/></svg></button></div></header>
         <div class="chat-history" id="chatHistory"><div class="chat-empty">针对当前视频提问，回答会附带可跳转的字幕时间引用。</div></div>
@@ -202,7 +214,8 @@
         </div>
         <textarea id="noteEditor" placeholder="记录你的想法、判断和待办…" aria-label="自写笔记"></textarea>
       </section>
-    </section>
+      </div>
+    </aside>
     </div>
   </div>
 
@@ -258,10 +271,10 @@
   </dialog>
 
   <dialog id="settingsDialog" class="settings-dialog"><form method="dialog"><header><h2>总结设置</h2><button class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list"><label>分析模式<select id="settingsMode"><option>summary</option><option>tutorial</option><option>viral</option><option>close-reading</option></select></label><label>字幕分组<select disabled><option>60秒</option></select></label><label class="switch-label"><input id="settingsFrames" type="checkbox" checked>生成关键帧</label><div class="runtime-info" id="settingsRuntime">正在读取 Python 运行环境…</div></div><footer><button class="primary-button" value="close">完成</button></footer></form></dialog>
-  <dialog id="layoutDialog" class="settings-dialog"><form method="dialog"><header><h2>工作台布局</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list layout-settings"><p>设置三个工作区从左到右的位置，修改后立即生效。</p><label>左栏<select id="layoutPosition1"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label><label>中栏<select id="layoutPosition2"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label><label>右栏<select id="layoutPosition3"><option value="result">摘要与原文</option><option value="media">视频与高光</option><option value="collaboration">对话与笔记</option></select></label></div><footer><button type="button" class="secondary-button" id="resetLayout">恢复默认</button><button class="primary-button" value="close">完成</button></footer></form></dialog>
+  <dialog id="layoutDialog" class="settings-dialog"><form method="dialog"><header><h2>工作台布局</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list layout-settings"><p>设置两个主内容栏的位置；检查器固定在桌面右侧，并在中小屏作为 Sheet 打开。</p><label>左主栏<select id="layoutPosition1"><option value="result">摘要与原文</option><option value="media">视频与高光</option></select></label><label>右主栏<select id="layoutPosition2"><option value="media">视频与高光</option><option value="result">摘要与原文</option></select></label><label>检查器<select id="layoutPosition3" disabled><option value="collaboration">AI 对话与自写笔记</option></select></label></div><footer><button type="button" class="secondary-button" id="resetLayout">恢复默认</button><button class="primary-button" value="close">完成</button></footer></form></dialog>
   <dialog id="imageDialog" class="image-dialog"><button class="icon-button image-close" data-close-dialog aria-label="关闭预览"><svg><use href="#i-close"/></svg></button><img id="imagePreview" alt="关键帧预览"></dialog>
   <div class="drawer-scrim" id="drawerScrim"></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.workspace-15.js" defer></script>
+  <script src="/static/app.workspace-16.js" defer></script>
 </body>
 </html>

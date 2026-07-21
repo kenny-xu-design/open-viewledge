@@ -1,6 +1,6 @@
 "use strict";
 
-document.documentElement.dataset.uiVersion = "workspace-15";
+document.documentElement.dataset.uiVersion = "workspace-16";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -13,8 +13,12 @@ const SETTINGS = {
   activeResultTab: "vs.activeResultTab",
   transcriptFollowMode: "vs.transcriptFollowMode",
   playbackRate: "vs.playbackRate",
+  videoAspectRatio: "vs.videoAspectRatio",
+  videoObjectFit: "vs.videoObjectFit",
 };
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const WIDE_SHELL_QUERY = "(min-width: 1280px)";
+const SINGLE_PANE_QUERY = "(max-width: 959px)";
 
 function uiScrollBehavior() {
   return typeof window.matchMedia === "function" && window.matchMedia(REDUCED_MOTION_QUERY).matches ? "auto" : "smooth";
@@ -53,6 +57,8 @@ let mediaController = null;
 let toastTimer = 0;
 let taskPoller = 0;
 let activeSourceType = "url";
+let lastSidebarTrigger = null;
+let lastInspectorTrigger = null;
 
 class MediaController {
   load(source) { this.source = source; }
@@ -149,11 +155,18 @@ class YouTubeMediaController extends MediaController {
 }
 
 class BilibiliEmbedController extends MediaController {
-  constructor(element, videoId, source) { super(); this.element = element; this.videoId = videoId; this.load(source); }
+  constructor(element, videoId, source, embedUrl) { super(); this.element = element; this.videoId = videoId; this.embedUrl = embedUrl; this.load(source); }
   destroy() { this.element.src = "about:blank"; }
   play() { showToast("请在播放器内点击播放"); }
-  seek() {}
+  seek(seconds) {
+    state.currentTime = Math.max(0, Number(seconds) || 0);
+    const url = new URL(this.embedUrl, window.location.href);
+    url.searchParams.set("bvid", this.videoId);
+    url.searchParams.set("t", String(Math.floor(state.currentTime)));
+    this.element.src = url.toString();
+  }
   getCurrentTime() { return state.currentTime; }
+  supportsSeek() { return true; }
   fullscreen() { this.element.requestFullscreen?.(); }
 }
 
@@ -206,6 +219,8 @@ document.addEventListener("DOMContentLoaded", init);
 async function init() {
   applyPersistedLayout();
   bindEvents();
+  syncShellAccessibility();
+  requestAnimationFrame(reconcileLayoutWidths);
   loadRuntimeInfo();
   loadProviderStatuses();
   setResultTab(state.activeResultTab, false);
@@ -261,10 +276,11 @@ function bindEvents() {
   $("#toggleDeleteMode").addEventListener("click", handleDeleteAction);
   $("#confirmDeleteKnowledge").addEventListener("click", confirmDeleteKnowledge);
   $("#reloadKnowledge").addEventListener("click", () => state.selectedKnowledgeId && loadKnowledge(state.selectedKnowledgeId, true));
-  $("#toggleSidebar").addEventListener("click", toggleSidebar);
-  $("#collapseSidebar").addEventListener("click", toggleSidebar);
-  $("#mobileMenu").addEventListener("click", () => $("#app").classList.add("drawer-open"));
-  $("#drawerScrim").addEventListener("click", closeDrawer);
+  $("#toggleSidebar").addEventListener("click", (event) => toggleSidebar(event.currentTarget));
+  $("#collapseSidebar").addEventListener("click", () => closeSidebar(true));
+  $("#toggleInspector").addEventListener("click", (event) => toggleInspector(event.currentTarget));
+  $("#closeInspector").addEventListener("click", () => closeInspector(true));
+  $("#drawerScrim").addEventListener("click", () => closeActiveSheet(true));
   $("#summarySettings").addEventListener("click", () => $("#settingsDialog").showModal());
   $("#layoutSettings").addEventListener("click", openLayoutSettings);
   $("#openExternal").addEventListener("click", openOriginal);
@@ -292,14 +308,17 @@ function bindEvents() {
   $("#chatInput").addEventListener("keydown", (event) => {
     if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); sendChat(); }
   });
-  $("#expandChat").addEventListener("click", () => { setMobileView("collaboration"); $("#chatPane").scrollIntoView({ behavior: uiScrollBehavior(), block: "start" }); });
+  $("#expandChat").addEventListener("click", (event) => { openInspector(event.currentTarget); $("#chatPane").scrollIntoView({ behavior: uiScrollBehavior(), block: "start" }); });
   $("#playbackRate").addEventListener("change", (event) => setPlaybackRate(Number(event.target.value)));
+  $("#videoAspectRatio").addEventListener("change", applyLocalVideoDisplay);
+  $("#videoObjectFit").addEventListener("change", applyLocalVideoDisplay);
   $("#followPlayback").addEventListener("change", (event) => setFollowMode(event.target.checked));
   $("#footerFollow").addEventListener("change", (event) => setFollowMode(event.target.checked));
   $("#resultScroll").addEventListener("scroll", () => state.scrollPositions[state.activeResultTab] = $("#resultScroll").scrollTop, { passive: true });
 
   $$("[data-result-tab]").forEach((button) => button.addEventListener("click", () => setResultTab(button.dataset.resultTab)));
   $$("[data-mobile-tab]").forEach((button) => button.addEventListener("click", () => setMobileView(button.dataset.mobileTab)));
+  $(".mobile-tabs").addEventListener("keydown", handleWorkspaceTabKeydown);
   $$("[data-media]").forEach((button) => button.addEventListener("click", () => handleMediaAction(button.dataset.media)));
   $$("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
   $$("[data-filter]").forEach((button) => button.addEventListener("click", () => setLibraryFilter(button.dataset.filter, button)));
@@ -319,16 +338,19 @@ function bindEvents() {
   });
   $("#insightContent").addEventListener("click", (event) => {
     const target = event.target.closest("[data-seek]");
-    if (target) seekTo(Number(target.dataset.seek));
+    if (target) { event.preventDefault(); seekPreview(Number(target.dataset.seek)); }
   });
   $("#chatHistory").addEventListener("click", (event) => {
     const target = event.target.closest("[data-seek]");
-    if (target) seekTo(Number(target.dataset.seek));
+    if (target) { event.preventDefault(); seekPreview(Number(target.dataset.seek)); }
     if (event.target.closest("[data-regenerate]")) regenerateLastAnswer();
   });
   $("#noteEditor").addEventListener("input", saveNoteDraft);
   $("#insertTimestamp").addEventListener("click", insertNoteTimestamp);
   $$('[id^="layoutPosition"]').forEach((select) => select.addEventListener("change", updateLayoutFromControls));
+  $$(".nav-groups details").forEach((details) => details.addEventListener("toggle", () => {
+    $("summary", details)?.setAttribute("aria-expanded", String(details.open));
+  }));
   $("#resetLayout").addEventListener("click", resetWorkspaceLayout);
   $("#newTaskForm").addEventListener("submit", submitTask);
   $("#taskSource").addEventListener("invalid", () => setTaskSourceError(true));
@@ -337,10 +359,13 @@ function bindEvents() {
   });
   $("#paneResizer").addEventListener("pointerdown", startResize);
   $("#rightPaneResizer").addEventListener("pointerdown", startResize);
-  $$(".pane-resizer").forEach((resizer) => resizer.addEventListener("dblclick", resetModuleWidths));
+  $$(".pane-resizer").forEach((resizer) => {
+    resizer.addEventListener("dblclick", resetModuleWidths);
+    resizer.addEventListener("keydown", handleDividerKeydown);
+  });
   document.addEventListener("keydown", handleKeyboard);
   window.addEventListener("hashchange", selectFromHash);
-  window.addEventListener("resize", () => window.innerWidth >= 980 && closeDrawer());
+  window.addEventListener("resize", handleViewportChange);
   window.addEventListener("beforeunload", () => {
     clearInterval(taskPoller);
     flushPendingNotesOnUnload();
@@ -366,6 +391,16 @@ function handleSegmentedControlKeydown(event) {
   event.preventDefault();
   options[nextIndex].focus();
   options[nextIndex].click();
+}
+
+function handleWorkspaceTabKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = $$("[data-mobile-tab]", event.currentTarget);
+  const current = Math.max(0, tabs.indexOf(document.activeElement));
+  const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  event.preventDefault();
+  tabs[next].click();
+  tabs[next].focus();
 }
 
 function setTaskSourceError(invalid) {
@@ -498,7 +533,7 @@ async function loadKnowledge(id, force = false) {
   state.loading = true;
   renderLibrary();
   setLoadingState();
-  closeDrawer();
+  if (!isWideShell()) closeSidebar(false);
   try {
     let knowledge = force ? null : knowledgeCache.get(id);
     if (!knowledge) {
@@ -719,7 +754,12 @@ async function retryAnalysis() {
 function renderMedia(knowledge) {
   const surface = $("#mediaSurface");
   const media = knowledge.media || {};
+  const savedRatio = localStorage.getItem(SETTINGS.videoAspectRatio);
+  const savedFit = localStorage.getItem(SETTINGS.videoObjectFit);
+  $("#videoAspectRatio").value = ["original", "16/9", "4/3", "1/1", "9/16"].includes(savedRatio) ? savedRatio : "original";
+  $("#videoObjectFit").value = savedFit === "cover" ? "cover" : "contain";
   surface.className = "media-surface";
+  surface.style.removeProperty("aspect-ratio");
   surface.innerHTML = "";
   if (media.kind === "video" && media.available) {
     const video = document.createElement("video");
@@ -727,7 +767,7 @@ function renderMedia(knowledge) {
     video.preload = "metadata";
     video.playsInline = true;
     video.addEventListener("timeupdate", throttle(handleTimeUpdate, 300));
-    video.addEventListener("loadedmetadata", updateTimeDisplay);
+    video.addEventListener("loadedmetadata", () => { updateTimeDisplay(); applyLocalVideoDisplay(); });
     video.addEventListener("play", () => setPlayIcon(true));
     video.addEventListener("pause", () => setPlayIcon(false));
     surface.appendChild(video);
@@ -757,7 +797,7 @@ function renderMedia(knowledge) {
     player.allowFullscreen = true;
     player.referrerPolicy = "strict-origin-when-cross-origin";
     surface.appendChild(player);
-    mediaController = new BilibiliEmbedController(player, media.embed.videoId, knowledge.source);
+    mediaController = new BilibiliEmbedController(player, media.embed.videoId, knowledge.source, media.embed.url);
   } else if (media.externalUrl) {
     renderExternalMedia(surface, knowledge);
   } else {
@@ -774,14 +814,31 @@ function syncMediaControls() {
   const seekable = Boolean(mediaController?.supportsSeek());
   const htmlMedia = mediaController instanceof HtmlMediaController;
   const iframeMedia = mediaController instanceof YouTubeMediaController || mediaController instanceof BilibiliEmbedController;
-  const externallyControlled = mediaController instanceof BilibiliEmbedController || mediaController instanceof ExternalLinkController;
-  $$('[data-media="play"], [data-media="back"], [data-media="forward"]').forEach((button) => {
-    button.disabled = externallyControlled;
-    button.title = externallyControlled ? "当前平台播放器需在播放器内控制；时间引用会在原网站打开" : "";
-  });
-  $("#playbackRate").disabled = !seekable;
+  const externalOnly = mediaController instanceof ExternalLinkController;
+  const embeddedBilibili = mediaController instanceof BilibiliEmbedController;
+  $('[data-media="play"]').disabled = externalOnly || embeddedBilibili;
+  $$('[data-media="back"], [data-media="forward"]').forEach((button) => button.disabled = externalOnly);
+  $('[data-media="play"]').title = embeddedBilibili ? "请在 B站播放器内点击播放" : externalOnly ? "请打开原视频播放" : "";
+  $("#playbackRate").disabled = !(htmlMedia || mediaController instanceof YouTubeMediaController);
   $('[data-media="repeat"]').disabled = !htmlMedia;
   $('[data-media="fullscreen"]').disabled = !(htmlMedia || iframeMedia);
+  $("#localVideoDisplay").classList.toggle("hidden", !(mediaController instanceof LocalVideoController));
+}
+
+function applyLocalVideoDisplay() {
+  if (!(mediaController instanceof LocalVideoController)) return;
+  const video = mediaController.element;
+  const ratioSetting = $("#videoAspectRatio").value;
+  const fitSetting = $("#videoObjectFit").value === "cover" ? "cover" : "contain";
+  const originalRatio = video.videoWidth > 0 && video.videoHeight > 0 ? video.videoWidth / video.videoHeight : 16 / 9;
+  const selectedRatio = ratioSetting === "original" ? originalRatio : Number(ratioSetting.split("/")[0]) / Number(ratioSetting.split("/")[1]);
+  const surface = $("#mediaSurface");
+  surface.classList.add("local-video-surface");
+  surface.style.aspectRatio = String(selectedRatio);
+  surface.style.setProperty("--media-aspect", String(selectedRatio));
+  video.style.objectFit = fitSetting;
+  localStorage.setItem(SETTINGS.videoAspectRatio, ratioSetting);
+  localStorage.setItem(SETTINGS.videoObjectFit, fitSetting);
 }
 
 function renderExternalMedia(surface, knowledge, message = "") {
@@ -960,7 +1017,7 @@ function setResultTab(tab, restoreScroll = true) {
 
 function handleResultClick(event) {
   const seek = event.target.closest("[data-seek]");
-  if (seek) { event.preventDefault(); event.stopPropagation(); seekTo(Number(seek.dataset.seek)); return; }
+  if (seek) { event.preventDefault(); event.stopPropagation(); seekPreview(Number(seek.dataset.seek)); return; }
   const toggle = event.target.closest("[data-toggle-chapter]");
   if (toggle) { toggle.closest(".chapter").classList.toggle("collapsed"); return; }
   const thought = event.target.closest("[data-question]");
@@ -975,7 +1032,7 @@ function handleResultClick(event) {
 
 function handleTranscriptClick(event) {
   const seek = event.target.closest("[data-seek]");
-  if (seek) { seekTo(Number(seek.dataset.seek)); return; }
+  if (seek) { event.preventDefault(); seekPreview(Number(seek.dataset.seek)); return; }
   const copy = event.target.closest("[data-copy-group]");
   if (copy) {
     const group = state.transcriptGroups.find((item) => String(item.index) === copy.dataset.copyGroup);
@@ -986,8 +1043,8 @@ function handleTranscriptClick(event) {
 function handleMediaAction(action) {
   if (!mediaController) return;
   if (action === "play") togglePlay();
-  else if (action === "back") seekTo(Math.max(0, mediaController.getCurrentTime() - 10));
-  else if (action === "forward") seekTo(mediaController.getCurrentTime() + 10);
+  else if (action === "back") seekPreview(Math.max(0, mediaController.getCurrentTime() - 10));
+  else if (action === "forward") seekPreview(mediaController.getCurrentTime() + 10);
   else if (action === "repeat") { const element = mediaController.element; if (element) { element.loop = !element.loop; showToast(element.loop ? "已开启循环" : "已关闭循环"); } }
   else if (action === "capture") captureFrame();
   else if (action === "fullscreen") mediaController.fullscreen();
@@ -1002,10 +1059,9 @@ function togglePlay() {
   mediaController?.play();
 }
 
-function seekTo(seconds) {
+function seekPreview(seconds) {
   state.currentTime = Math.max(0, seconds || 0);
   if (mediaController?.supportsSeek()) mediaController.seek(state.currentTime);
-  else mediaController?.openExternally(state.currentTime);
   updateTimeDisplay();
   updateActiveChapter();
   setMobileView("media");
@@ -1160,9 +1216,9 @@ function renderChatHistory() {
 
 function focusChatQuestion(question) {
   $("#chatInput").value = question || "";
-  setMobileView("collaboration");
+  openInspector($("#toggleInspector"));
   $("#chatPane").scrollIntoView({ behavior: uiScrollBehavior(), block: "start" });
-  setTimeout(() => $("#chatInput").focus(), 200);
+  requestAnimationFrame(() => $("#chatInput").focus());
 }
 
 function openNewTask() {
@@ -1263,55 +1319,249 @@ function renderTaskProgress(job) {
   $("#taskLogs").textContent = logs.slice(-10).join("\n") || "等待任务日志…";
 }
 
-function toggleSidebar() {
-  $("#app").classList.toggle("drawer-open");
+function isWideShell() { return window.matchMedia(WIDE_SHELL_QUERY).matches; }
+function isSinglePane() { return window.matchMedia(SINGLE_PANE_QUERY).matches; }
+
+function toggleSidebar(trigger = $("#toggleSidebar")) {
+  const app = $("#app");
+  lastSidebarTrigger = trigger;
+  if (isWideShell()) {
+    app.classList.toggle("sidebar-hidden");
+    app.classList.remove("sidebar-open");
+    syncShellAccessibility();
+    return;
+  }
+  if (app.classList.contains("sidebar-open")) closeSidebar(true);
+  else openSidebar(trigger);
 }
 
-function closeDrawer() { $("#app").classList.remove("drawer-open"); }
-function focusSidebarSearch() { $("#app").classList.add("drawer-open"); setTimeout(() => $("#librarySearch").focus(), 80); }
+function openSidebar(trigger = $("#toggleSidebar"), focusSearch = false) {
+  const app = $("#app");
+  lastSidebarTrigger = trigger;
+  app.classList.remove("sidebar-hidden", "inspector-open");
+  app.classList.add("sidebar-open");
+  syncShellAccessibility();
+  requestAnimationFrame(() => (focusSearch ? $("#librarySearch") : $("#sidebar")).focus());
+}
 
-function startResize(event) {
-  if (window.innerWidth < 1180) return;
-  const resizer = event.currentTarget;
+function closeSidebar(returnFocus = false) {
+  const app = $("#app");
+  if (isWideShell()) app.classList.add("sidebar-hidden");
+  app.classList.remove("sidebar-open");
+  syncShellAccessibility();
+  if (returnFocus) (lastSidebarTrigger || $("#toggleSidebar")).focus();
+}
+
+function focusSidebarSearch() { openSidebar($("#toggleSidebar"), true); }
+
+function toggleInspector(trigger = $("#toggleInspector")) {
+  const app = $("#app");
+  lastInspectorTrigger = trigger;
+  const expanded = isWideShell() ? !app.classList.contains("inspector-hidden") : app.classList.contains("inspector-open");
+  if (expanded) closeInspector(true);
+  else openInspector(trigger);
+}
+
+function openInspector(trigger = $("#toggleInspector")) {
+  const app = $("#app");
+  lastInspectorTrigger = trigger;
+  app.classList.remove("inspector-hidden", "sidebar-open");
+  if (!isWideShell()) app.classList.add("inspector-open");
+  syncShellAccessibility();
+  if (!isWideShell()) requestAnimationFrame(() => $("#collaborationPane").focus());
+}
+
+function closeInspector(returnFocus = false) {
+  const app = $("#app");
+  if (isWideShell()) app.classList.add("inspector-hidden");
+  app.classList.remove("inspector-open");
+  syncShellAccessibility();
+  if (returnFocus) (lastInspectorTrigger || $("#toggleInspector")).focus();
+}
+
+function closeActiveSheet(returnFocus = false) {
+  if ($("#app").classList.contains("sidebar-open")) closeSidebar(returnFocus);
+  else if ($("#app").classList.contains("inspector-open")) closeInspector(returnFocus);
+}
+
+function syncShellAccessibility() {
+  const app = $("#app");
+  const wide = isWideShell();
+  const sidebarExpanded = wide ? !app.classList.contains("sidebar-hidden") : app.classList.contains("sidebar-open");
+  const inspectorExpanded = wide ? !app.classList.contains("inspector-hidden") : app.classList.contains("inspector-open");
+  const sidebar = $("#sidebar");
+  const inspector = $("#collaborationPane");
+  $("#toggleSidebar").setAttribute("aria-expanded", String(sidebarExpanded));
+  $("#toggleSidebar").setAttribute("aria-label", sidebarExpanded ? "隐藏知识库" : "打开知识库");
+  $("#toggleInspector").setAttribute("aria-expanded", String(inspectorExpanded));
+  $("#toggleInspector").setAttribute("aria-label", inspectorExpanded ? "隐藏检查器" : "打开检查器");
+  sidebar.setAttribute("aria-hidden", String(!sidebarExpanded));
+  inspector.setAttribute("aria-hidden", String(!inspectorExpanded));
+  sidebar.inert = !sidebarExpanded;
+  inspector.inert = !inspectorExpanded;
+  [sidebar, inspector].forEach((layer) => {
+    if (wide) {
+      layer.removeAttribute("role");
+      layer.removeAttribute("aria-modal");
+    } else {
+      layer.setAttribute("role", "dialog");
+      layer.setAttribute("aria-modal", "true");
+    }
+  });
+  $("#drawerScrim").setAttribute("aria-hidden", String(!(app.classList.contains("sidebar-open") || app.classList.contains("inspector-open"))));
+}
+
+function handleViewportChange() {
+  $("#app").classList.remove("sidebar-open", "inspector-open");
+  syncShellAccessibility();
+  requestAnimationFrame(reconcileLayoutWidths);
+}
+
+function activeModalLayer() {
+  if (isWideShell()) return null;
+  if ($("#app").classList.contains("sidebar-open")) return $("#sidebar");
+  if ($("#app").classList.contains("inspector-open")) return $("#collaborationPane");
+  return null;
+}
+
+function trapLayerFocus(event) {
+  if (event.key !== "Tab") return false;
+  const layer = activeModalLayer();
+  if (!layer) return false;
+  const focusable = $$('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])', layer)
+    .filter((element) => element.getClientRects().length);
+  if (!focusable.length) { event.preventDefault(); layer.focus(); return true; }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); return true; }
+  if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); return true; }
+  return false;
+}
+
+function dividerModules(resizer) {
+  if (isSinglePane() || (resizer.id === "rightPaneResizer" && !isWideShell())) return null;
+  if (!isWideShell()) return [$("#resultPane"), $("#centerPane")];
   const dividerOrder = Number(resizer.style.order);
-  const modules = $$(".workspace-module").sort((a, b) => Number(a.style.order) - Number(b.style.order));
+  const modules = $$(".workspace-module").filter((module) => !module.matches("[aria-hidden=true]")).sort((a, b) => Number(a.style.order) - Number(b.style.order));
   const left = [...modules].reverse().find((module) => Number(module.style.order) < dividerOrder);
   const right = modules.find((module) => Number(module.style.order) > dividerOrder);
-  if (!left || !right) return;
+  return left && right ? [left, right] : null;
+}
+
+function moduleMinimumWidth(module) {
+  const minimum = Number.parseFloat(getComputedStyle(module).minWidth);
+  return Number.isFinite(minimum) ? minimum : 0;
+}
+
+function moduleMaximumWidth(module) {
+  const maximum = Number.parseFloat(getComputedStyle(module).maxWidth);
+  return Number.isFinite(maximum) ? maximum : Infinity;
+}
+
+function dividerBounds(left, right) {
+  const total = left.getBoundingClientRect().width + right.getBoundingClientRect().width;
+  const minimum = Math.round(Math.max(moduleMinimumWidth(left), total - moduleMaximumWidth(right)));
+  const rightMinimum = Math.round(moduleMinimumWidth(right));
+  const maximum = Math.max(minimum, Math.round(Math.min(moduleMaximumWidth(left), total - rightMinimum)));
+  return { minimum, rightMinimum, maximum, total };
+}
+
+function setDividerWidths(resizer, left, right, nextLeft) {
+  const { minimum, maximum, total } = dividerBounds(left, right);
+  const leftWidth = clamp(nextLeft, minimum, maximum);
+  const rightWidth = total - leftWidth;
+  left.style.flexBasis = `${leftWidth}px`;
+  right.style.flexBasis = `${rightWidth}px`;
+  state.moduleWidths[left.dataset.module] = Math.round(leftWidth);
+  state.moduleWidths[right.dataset.module] = Math.round(rightWidth);
+  updateDividerAria(resizer, left, right);
+}
+
+function startResize(event) {
+  if (event.button !== 0) return;
+  const resizer = event.currentTarget;
+  const modules = dividerModules(resizer);
+  if (!modules) return;
+  const [left, right] = modules;
   const startX = event.clientX;
   const leftWidth = left.getBoundingClientRect().width;
-  const rightWidth = right.getBoundingClientRect().width;
   resizer.setPointerCapture(event.pointerId);
   resizer.classList.add("dragging");
-  const move = (moveEvent) => {
-    const delta = moveEvent.clientX - startX;
-    const nextLeft = clamp(leftWidth + delta, 300, leftWidth + rightWidth - 300);
-    const nextRight = leftWidth + rightWidth - nextLeft;
-    left.style.flexBasis = `${nextLeft}px`;
-    right.style.flexBasis = `${nextRight}px`;
-    state.moduleWidths[left.dataset.module] = Math.round(nextLeft);
-    state.moduleWidths[right.dataset.module] = Math.round(nextRight);
-  };
+  const move = (moveEvent) => setDividerWidths(resizer, left, right, leftWidth + moveEvent.clientX - startX);
   const end = () => {
     resizer.classList.remove("dragging");
     resizer.removeEventListener("pointermove", move);
     resizer.removeEventListener("pointerup", end);
+    resizer.removeEventListener("pointercancel", end);
     localStorage.setItem(SETTINGS.moduleWidths, JSON.stringify(state.moduleWidths));
   };
   resizer.addEventListener("pointermove", move);
   resizer.addEventListener("pointerup", end);
+  resizer.addEventListener("pointercancel", end);
+}
+
+function handleDividerKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const modules = dividerModules(event.currentTarget);
+  if (!modules) return;
+  event.preventDefault();
+  const [left, right] = modules;
+  const { minimum, maximum } = dividerBounds(left, right);
+  const current = left.getBoundingClientRect().width;
+  const step = event.shiftKey ? 48 : 16;
+  const next = event.key === "Home" ? minimum : event.key === "End" ? maximum : current + (event.key === "ArrowRight" ? step : -step);
+  setDividerWidths(event.currentTarget, left, right, next);
+  localStorage.setItem(SETTINGS.moduleWidths, JSON.stringify(state.moduleWidths));
+}
+
+function updateDividerAria(resizer, left, right) {
+  if (!left || !right) return;
+  const { minimum, maximum } = dividerBounds(left, right);
+  const current = Math.round(left.getBoundingClientRect().width);
+  resizer.setAttribute("aria-valuemin", String(minimum));
+  resizer.setAttribute("aria-valuemax", String(maximum));
+  resizer.setAttribute("aria-valuenow", String(clamp(current, minimum, maximum)));
+  resizer.setAttribute("aria-valuetext", `${left.dataset.module} ${current} 像素`);
+  resizer.setAttribute("aria-controls", `${left.id} ${right.id}`);
+}
+
+function updateAllDividerAria() {
+  $$(".pane-resizer").forEach((resizer) => {
+    const modules = dividerModules(resizer);
+    if (modules) updateDividerAria(resizer, ...modules);
+  });
+}
+
+function reconcileLayoutWidths() {
+  if (!isSinglePane()) {
+    $$(".pane-resizer").forEach((resizer) => {
+      const modules = dividerModules(resizer);
+      if (!modules) return;
+      const [left, right] = modules;
+      const { minimum, rightMinimum, total } = dividerBounds(left, right);
+      if (total < minimum + rightMinimum) return;
+      setDividerWidths(resizer, left, right, left.getBoundingClientRect().width);
+    });
+    localStorage.setItem(SETTINGS.moduleWidths, JSON.stringify(state.moduleWidths));
+  }
+  updateAllDividerAria();
 }
 
 function resetModuleWidths() {
   state.moduleWidths = {};
   localStorage.removeItem(SETTINGS.moduleWidths);
   $$(".workspace-module").forEach((module) => module.style.removeProperty("flex-basis"));
+  requestAnimationFrame(updateAllDividerAria);
 }
 
 function setMobileView(view) {
-  const next = ["result", "media", "collaboration"].includes(view) ? view : "result";
+  const next = ["result", "media"].includes(view) ? view : "result";
   $("#app").dataset.mobileView = next;
-  $$("[data-mobile-tab]").forEach((button) => button.setAttribute("aria-selected", String(button.dataset.mobileTab === next)));
+  $$("[data-mobile-tab]").forEach((button) => {
+    const active = button.dataset.mobileTab === next;
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
 }
 
 function openLayoutSettings() {
@@ -1320,18 +1570,19 @@ function openLayoutSettings() {
 }
 
 function syncLayoutControls() {
-  state.moduleOrder.forEach((module, index) => {
-    $(`#layoutPosition${index + 1}`).value = module;
-  });
+  $("#layoutPosition1").value = state.moduleOrder[0];
+  $("#layoutPosition2").value = state.moduleOrder[1];
+  $("#layoutPosition3").value = "collaboration";
 }
 
 function updateLayoutFromControls(event) {
-  const selects = [$("#layoutPosition1"), $("#layoutPosition2"), $("#layoutPosition3")];
+  const selects = [$("#layoutPosition1"), $("#layoutPosition2")];
   const changedIndex = selects.indexOf(event.currentTarget);
+  if (changedIndex < 0) return;
   const selected = event.currentTarget.value;
-  const duplicateIndex = selects.findIndex((select, index) => index !== changedIndex && select.value === selected);
-  if (duplicateIndex >= 0) selects[duplicateIndex].value = state.moduleOrder[changedIndex];
-  state.moduleOrder = selects.map((select) => select.value);
+  const otherIndex = changedIndex === 0 ? 1 : 0;
+  if (selects[otherIndex].value === selected) selects[otherIndex].value = state.moduleOrder[changedIndex];
+  state.moduleOrder = [...selects.map((select) => select.value), "collaboration"];
   localStorage.setItem(SETTINGS.moduleOrder, JSON.stringify(state.moduleOrder));
   applyModuleOrder();
 }
@@ -1357,9 +1608,8 @@ function resetWorkspaceLayout() {
 
 function readModuleOrder() {
   const value = readJsonSetting(SETTINGS.moduleOrder, DEFAULT_MODULE_ORDER);
-  return Array.isArray(value) && value.length === 3 && new Set(value).size === 3 && value.every((item) => DEFAULT_MODULE_ORDER.includes(item))
-    ? value
-    : [...DEFAULT_MODULE_ORDER];
+  if (!Array.isArray(value) || value.length !== 3 || new Set(value).size !== 3 || !value.every((item) => DEFAULT_MODULE_ORDER.includes(item))) return [...DEFAULT_MODULE_ORDER];
+  return [...value.filter((item) => item !== "collaboration"), "collaboration"];
 }
 
 function readJsonSetting(key, fallback) {
@@ -1536,7 +1786,12 @@ function setFollowMode(value) {
 
 function setLibraryFilter(filter, button) {
   state.filter = filter;
-  $$("[data-filter]").forEach((item) => item.classList.toggle("active", item === button));
+  $$("[data-filter]").forEach((item) => {
+    const active = item === button;
+    item.classList.toggle("active", active);
+    if (active) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
+  });
   renderLibrary();
 }
 
@@ -1587,19 +1842,22 @@ async function copyText(text) {
 
 function handleKeyboard(event) {
   if (event.defaultPrevented) return;
+  if (trapLayerFocus(event)) return;
   const editing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
   if (event.ctrlKey && event.key.toLowerCase() === "k") { event.preventDefault(); focusSidebarSearch(); return; }
   if (event.key === "Escape") {
-    closeDrawer();
     const openDialogs = $$("dialog[open]");
     if (openDialogs.length) openDialogs.forEach((dialog) => dialog.close());
+    else if (activeModalLayer()) closeActiveSheet(true);
+    else if ($("#collaborationPane").contains(document.activeElement)) closeInspector(true);
+    else if ($("#sidebar").contains(document.activeElement)) closeSidebar(true);
     else if (state.deleteMode) setDeleteMode(false);
     return;
   }
   if (editing) return;
   if (event.code === "Space") { event.preventDefault(); togglePlay(); }
-  if (event.key === "ArrowLeft") { event.preventDefault(); seekTo(Math.max(0, (mediaController?.getCurrentTime() || 0) - 5)); }
-  if (event.key === "ArrowRight") { event.preventDefault(); seekTo((mediaController?.getCurrentTime() || 0) + 5); }
+  if (event.key === "ArrowLeft") { event.preventDefault(); seekPreview(Math.max(0, (mediaController?.getCurrentTime() || 0) - 5)); }
+  if (event.key === "ArrowRight") { event.preventDefault(); seekPreview((mediaController?.getCurrentTime() || 0) + 5); }
 }
 
 function selectFromHash() {
@@ -1615,11 +1873,12 @@ function decodeHashId() {
 
 function timestampLink(url, seconds) {
   if (!isSafeHttpUrl(url)) return "";
-  const host = new URL(url).hostname.toLowerCase();
-  const separator = url.includes("?") ? "&" : "?";
-  if (host.includes("youtube.com") || host === "youtu.be") return `${url}${separator}t=${Math.floor(seconds)}s`;
-  if (host.includes("bilibili.com") || host === "b23.tv") return `${url}${separator}t=${Math.floor(seconds)}`;
-  return url;
+  const target = new URL(url);
+  const host = target.hostname.toLowerCase();
+  if (host.includes("youtube.com") || host === "youtu.be") target.searchParams.set("t", `${Math.floor(seconds)}s`);
+  else if (host.includes("bilibili.com") || host === "b23.tv") target.searchParams.set("t", String(Math.floor(seconds)));
+  else return url;
+  return target.toString();
 }
 
 function statusLabel(status) {

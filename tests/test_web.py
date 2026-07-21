@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 import json
+import os
+import stat
 import threading
+from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -13,6 +16,7 @@ from urllib.request import Request, urlopen
 from src import __version__
 from src.job_store import Job
 from src.web import (
+    KnowledgeDeletionError,
     PROJECT_ROOT,
     VideoSummaryHandler,
     VideoSummaryServer,
@@ -61,6 +65,10 @@ class WebCommandTests(unittest.TestCase):
         bilibili = _external_player_descriptor("https://www.bilibili.com/video/BV19mMu66Eap/")
         self.assertEqual(bilibili["provider"], "bilibili")
         self.assertEqual(bilibili["videoId"], "BV19mMu66Eap")
+        self.assertIn("p=1", bilibili["url"])
+        bilibili_part = _external_player_descriptor("https://www.bilibili.com/video/BV19mMu66Eap/?from=search&p=3")
+        self.assertIn("bvid=BV19mMu66Eap", bilibili_part["url"])
+        self.assertIn("p=3", bilibili_part["url"])
         self.assertIsNone(_external_player_descriptor("https://example.com/video"))
 
     def test_build_url_command(self) -> None:
@@ -303,6 +311,67 @@ class WebLibraryTests(unittest.TestCase):
             self.assertFalse(first.exists())
             self.assertTrue(second.exists())
 
+    def test_library_delete_removes_non_empty_directory_recursively(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            nested = package / "frames" / "nested"
+            nested.mkdir(parents=True)
+            (nested / "frame.jpg").write_bytes(b"frame")
+            with patch("src.web.OUTPUT_ROOT", root):
+                self.assertEqual(delete_knowledge_packages(["demo"]), ["demo"])
+            self.assertFalse(package.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows read-only attribute behavior")
+    def test_library_delete_clears_read_only_file_attribute(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            read_only = package / "index.md"
+            read_only.chmod(stat.S_IREAD)
+            with patch("src.web.OUTPUT_ROOT", root):
+                self.assertEqual(delete_knowledge_packages(["demo"]), ["demo"])
+            self.assertFalse(package.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows sharing violation behavior")
+    def test_library_delete_reports_locked_file_and_preserves_package(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            locked_path = package / "index.md"
+            with self.assertLogs("src.web", level="ERROR") as logs:
+                with locked_path.open("rb") as locked_handle, patch("src.web.OUTPUT_ROOT", root):
+                    self.assertFalse(locked_handle.closed)
+                    with self.assertRaises(KnowledgeDeletionError) as caught:
+                        delete_knowledge_packages(["demo"])
+            self.assertEqual(caught.exception.code, "knowledge_package_locked")
+            self.assertEqual(caught.exception.target, package)
+            self.assertTrue(package.exists())
+            self.assertIn(str(package), "\n".join(logs.output))
+
+    def test_library_delete_rejects_path_outside_output_root(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_package(root)
+            with patch("src.web.OUTPUT_ROOT", root):
+                with self.assertRaises(ValueError):
+                    delete_knowledge_packages(["../demo"])
+
+    def test_library_delete_rejects_stale_path_without_removing_other_package(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            with patch("src.web.OUTPUT_ROOT", root):
+                with self.assertRaises(FileNotFoundError):
+                    delete_knowledge_packages(["missing"])
+            self.assertTrue(package.exists())
+
+    def test_job_payload_hides_stale_output_reference(self) -> None:
+        job = Job(id="stale", command=[], output_dir="output/missing", knowledge_id="missing")
+        payload = __import__("src.web", fromlist=["job_to_dict"]).job_to_dict(job)
+        self.assertEqual(payload["knowledgeId"], "")
+        self.assertEqual(payload["outputDir"], "")
+
     def test_library_delete_rejects_processing_record(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -383,6 +452,72 @@ class WebApiTests(unittest.TestCase):
 
         delete_packages.assert_called_once_with(["first", "second"])
         self.assertEqual(payload, {"deleted": ["first", "second"], "count": 2})
+
+    @patch("src.web.delete_knowledge_packages")
+    def test_library_delete_endpoint_returns_locked_error_code(self, delete_packages) -> None:
+        target = Path("C:/output/demo")
+        delete_packages.side_effect = KnowledgeDeletionError(
+            "knowledge_package_locked",
+            "知识包文件正在被其他进程占用。",
+            target,
+            PermissionError(13, "locked", str(target)),
+        )
+        request = Request(
+            f"{self.base_url}/api/library",
+            data=json.dumps({"knowledge_ids": ["demo"]}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="DELETE",
+        )
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(request, timeout=3)
+        self.assertEqual(caught.exception.code, HTTPStatus.LOCKED)
+        payload = json.loads(caught.exception.read().decode("utf-8"))
+        self.assertEqual(payload["code"], "knowledge_package_locked")
+        self.assertTrue(payload["retryable"])
+        self.assertNotIn(str(target), payload["error"])
+
+    @patch("src.web.delete_knowledge_packages")
+    def test_library_delete_endpoint_returns_access_denied_code(self, delete_packages) -> None:
+        target = Path("C:/output/demo")
+        delete_packages.side_effect = KnowledgeDeletionError(
+            "knowledge_package_access_denied",
+            "无法删除知识包，请检查 ACL。",
+            target,
+            PermissionError(13, "denied", str(target)),
+        )
+        request = Request(
+            f"{self.base_url}/api/library",
+            data=json.dumps({"knowledge_ids": ["demo"]}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="DELETE",
+        )
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(request, timeout=3)
+        self.assertEqual(caught.exception.code, HTTPStatus.FORBIDDEN)
+        payload = json.loads(caught.exception.read().decode("utf-8"))
+        self.assertEqual(payload["code"], "knowledge_package_access_denied")
+
+    @unittest.skipUnless(os.name == "nt", "Windows sharing violation behavior")
+    def test_library_delete_endpoint_reports_real_locked_file(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = WebLibraryTests()._write_package(root)
+            locked_path = package / "index.md"
+            request = Request(
+                f"{self.base_url}/api/library",
+                data=json.dumps({"knowledge_ids": ["demo"]}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="DELETE",
+            )
+            with self.assertLogs("src.web", level="ERROR") as logs:
+                with locked_path.open("rb"), patch("src.web.OUTPUT_ROOT", root):
+                    with self.assertRaises(HTTPError) as caught:
+                        urlopen(request, timeout=3)
+            self.assertEqual(caught.exception.code, HTTPStatus.LOCKED)
+            payload = json.loads(caught.exception.read().decode("utf-8"))
+            self.assertEqual(payload["code"], "knowledge_package_locked")
+            self.assertTrue(package.exists())
+            self.assertIn(str(package), "\n".join(logs.output))
 
     @patch("src.web.chat_with_knowledge")
     def test_chat_endpoint_returns_grounded_response(self, mocked_chat) -> None:
