@@ -14,6 +14,11 @@ const SETTINGS = {
   transcriptFollowMode: "vs.transcriptFollowMode",
   playbackRate: "vs.playbackRate",
 };
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
+function uiScrollBehavior() {
+  return typeof window.matchMedia === "function" && window.matchMedia(REDUCED_MOTION_QUERY).matches ? "auto" : "smooth";
+}
 
 const state = {
   selectedKnowledgeId: "",
@@ -272,9 +277,9 @@ function bindEvents() {
   $("#vaultKnowledgeExport").addEventListener("click", saveKnowledgeExportToVault);
   $$('[data-export-preset]').forEach((button) => button.addEventListener("click", () => setExportPreset(button.dataset.exportPreset)));
   $("#retryAnalysis").addEventListener("click", retryAnalysis);
-  $("#chapterDirectory").addEventListener("click", () => $(".chapter", $("#summaryView"))?.scrollIntoView({ behavior: "smooth" }));
+  $("#chapterDirectory").addEventListener("click", () => $(".chapter", $("#summaryView"))?.scrollIntoView({ behavior: uiScrollBehavior() }));
   $("#readTranscript").addEventListener("click", () => setResultTab(state.activeResultTab === "summary" ? "transcript" : "summary"));
-  $("#backToTop").addEventListener("click", () => $("#resultScroll").scrollTo({ top: 0, behavior: "smooth" }));
+  $("#backToTop").addEventListener("click", () => $("#resultScroll").scrollTo({ top: 0, behavior: uiScrollBehavior() }));
   $("#transcriptSearch").addEventListener("input", renderTranscriptGroups);
   $("#sendChat").addEventListener("click", sendChat);
   $("#clearChat").addEventListener("click", clearCurrentChat);
@@ -286,7 +291,7 @@ function bindEvents() {
   $("#chatInput").addEventListener("keydown", (event) => {
     if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); sendChat(); }
   });
-  $("#expandChat").addEventListener("click", () => { setMobileView("collaboration"); $("#chatPane").scrollIntoView({ behavior: "smooth", block: "start" }); });
+  $("#expandChat").addEventListener("click", () => { setMobileView("collaboration"); $("#chatPane").scrollIntoView({ behavior: uiScrollBehavior(), block: "start" }); });
   $("#playbackRate").addEventListener("change", (event) => setPlaybackRate(Number(event.target.value)));
   $("#followPlayback").addEventListener("change", (event) => setFollowMode(event.target.checked));
   $("#footerFollow").addEventListener("change", (event) => setFollowMode(event.target.checked));
@@ -954,7 +959,7 @@ function seekTo(seconds) {
   updateTimeDisplay();
   updateActiveChapter();
   setMobileView("media");
-  $("#mediaSection").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("#mediaSection").scrollIntoView({ behavior: uiScrollBehavior(), block: "start" });
 }
 
 function handleTimeUpdate() {
@@ -979,7 +984,7 @@ function updateActiveChapter() {
   });
   if (active !== state.currentChapter) {
     state.currentChapter = active;
-    if (state.transcriptFollowMode && active >= 0 && state.activeResultTab === "transcript") items[active]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (state.transcriptFollowMode && active >= 0 && state.activeResultTab === "transcript") items[active]?.scrollIntoView({ behavior: uiScrollBehavior(), block: "center" });
   }
 }
 
@@ -1106,7 +1111,7 @@ function renderChatHistory() {
 function focusChatQuestion(question) {
   $("#chatInput").value = question || "";
   setMobileView("collaboration");
-  $("#chatPane").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("#chatPane").scrollIntoView({ behavior: uiScrollBehavior(), block: "start" });
   setTimeout(() => $("#chatInput").focus(), 200);
 }
 

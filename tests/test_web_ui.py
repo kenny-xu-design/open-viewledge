@@ -32,6 +32,74 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("@media (max-width: 1179px)", self.css)
         self.assertIn('data-mobile-view="result"', self.html)
 
+    def test_cupertino_design_token_categories_exist(self) -> None:
+        required_tokens = {
+            "--ui-canvas",
+            "--ui-surface",
+            "--ui-surface-secondary",
+            "--ui-text-primary",
+            "--ui-text-secondary",
+            "--ui-separator",
+            "--ui-accent",
+            "--ui-success",
+            "--ui-warning",
+            "--ui-danger",
+            "--ui-info",
+            "--font-sans",
+            "--font-size-body",
+            "--line-height-body",
+            "--font-weight-semibold",
+            "--space-4",
+            "--radius-control",
+            "--shadow-overlay",
+            "--control-height",
+            "--z-toolbar",
+            "--ui-material",
+            "--material-blur",
+            "--motion-standard",
+            "--ease-out-ui",
+            "--breakpoint-single-pane",
+        }
+        for token in required_tokens:
+            self.assertIn(f"{token}:", self.css, token)
+        self.assertIn(
+            '--font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+            self.css,
+        )
+
+    def test_light_dark_and_native_color_scheme_are_defined(self) -> None:
+        self.assertIn('content="light dark"', self.html)
+        self.assertIn("color-scheme: light dark", self.css)
+        dark_theme = re.search(
+            r"@media \(prefers-color-scheme: dark\)\s*\{\s*:root\s*\{(?P<body>.*?)\}\s*\}",
+            self.css,
+            re.S,
+        )
+        self.assertIsNotNone(dark_theme)
+        for token in ("--ui-canvas", "--ui-surface", "--ui-text-primary", "--ui-separator", "--ui-accent", "--ui-focus-ring"):
+            self.assertIn(f"{token}:", dark_theme.group("body"), token)
+
+    def test_every_css_variable_use_has_a_definition(self) -> None:
+        defined = set(re.findall(r"--([a-zA-Z0-9-]+)\s*:", self.css))
+        used = set(re.findall(r"var\(--([a-zA-Z0-9-]+)", self.css))
+        self.assertEqual(used - defined, set())
+        self.assertIn("--surface:", self.css)
+        self.assertIn("--text-muted:", self.css)
+
+    def test_reduced_motion_tokens_and_scroll_behavior_exist(self) -> None:
+        reduced = re.search(
+            r"@media \(prefers-reduced-motion: reduce\)\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.S,
+        )
+        self.assertIsNotNone(reduced)
+        self.assertIn("--motion-standard: 0ms", reduced.group("body"))
+        self.assertIn("scroll-behavior: auto !important", reduced.group("body"))
+        self.assertIn("animation-iteration-count: 1 !important", reduced.group("body"))
+        self.assertIn('const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)"', self.js)
+        self.assertIn("window.matchMedia(REDUCED_MOTION_QUERY).matches", self.js)
+        self.assertNotIn('behavior: "smooth"', self.js)
+
     def test_workspace_order_is_configurable(self) -> None:
         self.assertIn('id="layoutDialog"', self.html)
         self.assertIn('id="layoutPosition1"', self.html)
