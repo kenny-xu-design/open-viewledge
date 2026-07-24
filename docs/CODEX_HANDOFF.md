@@ -6,9 +6,9 @@ Last updated: 2026-07-24
 
 - Repository: `E:\AGT\git\video-summary-skill`
 - Branch: `feat/v1.4-processing-pipeline`
-- Baseline commit: `e5d9b55` (`v1.4.0`)
+- Baseline commit: `52c1bb7` (`feat: add v1.4.1 cache-aware fast processing`)
 - Upstream v1.3.1 branch marker: `origin/feat/v1.3.1-cupertino-ui`
-- Scope: v1.4.0 contracts plus v1.4.1 subtitle priority, cache, and fast path.
+- Scope: v1.4.2 visual pipeline, highlight snapshots, and Gemini video-conversation routing.
 
 ## Completed
 
@@ -31,40 +31,48 @@ Last updated: 2026-07-24
 - Added fast audio-only acquisition and fast keyframe-stage skipping.
 - Added first-readable-result and full-completion timing fields.
 - Made cache failures degrade to ordinary execution instead of failing the task.
+- Moved text analysis before all optional visual stages and writes the text analysis artifact before visual work.
+- Added compatible highlight image fields and bounded WebP snapshot generation under the package root.
+- Connected optional keyframe analysis without making Gemini a requirement for text packages.
+- Added official Gemini public-YouTube URL and resumable Files API request paths.
+- Added explicit URL, Files, keyframe+text, and text-only chat route statuses and degradation reasons.
+- Extended `chat.json` with source-bound recovery and remote-file state while excluding credentials.
+- Added Web and Markdown rendering for relative highlight images and visible chat route status.
 
 ## Current Architecture Notes
 
-- The processing path is currently serial in `src/pipeline/orchestrator.py:PipelineOrchestrator.run()`.
+- The processing path remains serial, but its text result completes before optional visual stages.
 - The stage list is fixed in `src/pipeline/stages.py:STAGES`.
 - Web starts a CLI subprocess in `src/web.py:_run_job()` and consumes JSONL events through `_handle_cli_output_line()`.
 - Local Web job storage in `src/job_store.py:JobStore` is not a durable worker queue.
 - CLI task storage in `src/cli_tasks.py:CliTaskStore` is a resumable invocation record, not stage-level recovery.
-- Gemini currently supports text and image input through `src/providers/llm/gemini.py`, but not YouTube URL video chat or Files API.
-- `src/analysis/vision.py:KeyframeAnalysisService` exists but is not called by the default pipeline or Web chat.
+- Gemini supports text, inline images, public YouTube URL input, and resumable Files API video references.
+- `src/analysis/vision.py:KeyframeAnalysisService` is called only after complete-mode local keyframe extraction.
 - Comments remain disabled; `src/main.py` only emits a compatibility warning for `--comments`.
 
 ## Next Work Unit
 
-After v1.4.1 is reviewed and committed, v1.4.2 may add the visual pipeline, highlight snapshots, and Gemini video-conversation routing. Do not start comments, ASR worker, queue, or batch work in the v1.4.1 handoff.
+Stop after v1.4.2 review/commit. Do not start comments, ASR worker, queue, or batch work without a separate instruction.
 
 ## Verification
 
-- Focused v1.4.1/Web/CLI suite: 127 tests passed.
-- Full unit suite: 216 tests passed.
-- Python compileall, CLI/Web help, JavaScript syntax, and diff checks passed.
-- Browser contract check passed for default complete and separate tutorial/fast request fields.
-- The only browser console message was the existing missing `favicon.ico` 404.
+- Focused v1.4.2/Gemini/chat/export/pipeline/Web suite passes locally.
+- Full unit suite passes: 226 tests.
+- Python compileall, CLI/Web help, JavaScript syntax, and diff checks pass.
+- Browser checks at 1440×900, 1024×768, and 390×844 have no horizontal overflow; mocked highlight and degraded-route rendering pass.
+- The production FFmpeg WebP command was exercised successfully against a generated two-second video.
+- Gemini request contracts are mock verified only; no real API request or cost/quota claim has been made.
 
 ## Open Decisions
 
 - Whether new Web tasks should default to `fast` immediately, or keep `complete` until users see an explicit mode selector.
-- Exact Gemini model names and endpoint shapes for native YouTube URL input and Files API.
+- Real-account compatibility of the configured Gemini model with preview YouTube URL input.
 - Whether SQLite queue lands in v1.4.5 only, or a minimal stage table appears earlier behind a feature flag.
 - Cache root location and retention policy.
 - Benchmark fixture policy for long videos and platform URLs that may change over time.
 
 ## Git Notes
 
-- `e5d9b55 v1.4.0` appeared on the local branch and `origin/feat/v1.4-processing-pipeline` during v1.4.1 implementation.
+- `52c1bb7` is the committed and pushed v1.4.1 baseline.
 - This Codex task did not run commit, push, merge, rebase, tag, checkout, or branch creation commands.
-- Current uncommitted changes are the v1.4.1 implementation and tests.
+- Current uncommitted changes are the v1.4.2 implementation, tests, and documentation.

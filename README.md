@@ -4,7 +4,7 @@
 
 当前稳定版本为 `1.2.1`；`feat/v1.3.1-cupertino-ui` 的验收版本为 `1.3.1`，已完成 Agent/CLI 契约、Web 工作台外壳、知识记录删除、预览时间戳和本地视频比例控制的功能验收实现。范围仍不包含 Scale 或 SaaS。
 
-`feat/v1.4-processing-pipeline` 正在开发 v1.4。v1.4.0 已建立 `processing_profile: fast | complete` 契约；v1.4.1 已接入字幕/转写/文本分析缓存、平台字幕优先验证、首个可读结果计时和 fast 文本优先路径。默认 `complete` 保持既有完整处理；`fast` 在无字幕时只请求音频，并跳过关键帧阶段。
+`feat/v1.4-processing-pipeline` 正在开发 v1.4。v1.4.0 已建立 `processing_profile: fast | complete` 契约；v1.4.1 已接入字幕/转写/文本分析缓存和 fast 文本优先路径；v1.4.2 已把可选视觉分析、高光 WebP 快照和 Gemini 视频对话路由接入产品流程。默认 `complete` 在文本结果落盘后继续视觉阶段；`fast` 在无字幕时只请求音频，并跳过视觉阶段。
 
 ## 当前能力
 
@@ -16,8 +16,8 @@
 -> 优先获取平台字幕
 -> 无字幕时 FFmpeg + 本地 faster-whisper
 -> transcript.raw.jsonl / transcript.grouped.md / transcript.md
--> 时间轴与本地视频关键帧
 -> DeepSeek 结构化文本分析
+-> complete 模式：本地视频关键帧、Gemini 可选视觉分析与高光快照
 -> 标准知识包
 -> CLI / Web 查看
 ```
@@ -28,7 +28,7 @@ Web 对话链路：
 knowledge_id
 -> 当前知识包的分组字幕
 -> 本地 BM25 风格检索
--> DeepSeek 或 Gemini 文本 Provider
+-> DeepSeek 文本回答，或 Gemini 的 YouTube URL / Files API / 关键帧+文本 / 纯文本路由
 -> 带时间戳引用的回答
 -> chat.json
 ```
@@ -42,14 +42,15 @@ knowledge_id
 - `summary`、`tutorial`、`viral`、`close-reading` 分析模式。
 - DeepSeek 结构化分析及 Pydantic 校验。
 - 标准知识包、时间轴、关键帧和兼容 Markdown 输出。
+- 完整模式下每个高光最多一张 `assets/highlights/*.webp` 图片；截图失败时保留文本高光。
 - AppShell Web 工作台、本地媒体播放、YouTube 官方 IFrame 预览和 B站官方 iframe 预览。
-- 基于当前知识包字幕的真实 AI 对话、时间戳引用和按知识包保存的 `chat.json`。
+- 基于当前知识包的真实 AI 对话、时间戳引用，以及包含路由、远程文件恢复信息和本地消息的 `chat.json`。
 - 按知识包原子保存的 `user_notes.md`，以及包含用户笔记的 `export_note.md`。
 - 可在服务重启后恢复的本地 Web 任务历史；未完成进程会标记为 `interrupted`。
 
 尚未完成：
 
-- Gemini 关键帧图片请求和独立服务边界已实现并通过 mock 测试，但尚未接入默认 CLI/Web 产品流程，也未使用真实 API 验证。
+- Gemini YouTube URL、Files API、关键帧与文本降级路由已通过 mock 测试，但尚未使用真实 Gemini 账号和固定公开视频完成线上验收。
 - Obsidian 目前仅提供兼容 Markdown 文件，不具备 Vault 同步或双向管理。
 
 评论区分析已经停用，不属于当前产品功能。
@@ -69,7 +70,7 @@ knowledge_id
 - FFmpeg 和 FFprobe。
 - 本地 faster-whisper 模型。
 - DeepSeek API Key，仅在需要 AI 分析或 DeepSeek 对话时需要。
-- Gemini API Key，仅在选择 Gemini 文本对话或未来显式调用关键帧分析边界时需要。
+- Gemini API Key，仅在完整模式视觉分析或选择 Gemini 视频对话时需要；未配置时文本知识包仍可生成。
 
 安装 Python 依赖：
 
@@ -144,7 +145,7 @@ FFPROBE_PATH=
 
 `.env` 已被 Git 忽略，`.env.example` 只保存空 Key 和非敏感默认值。不要把真实 Key 写入 `.env.example`、README、日志、知识包或提交记录。
 
-当前 CLI 结构化分析后端仅支持 `deepseek`。Gemini 可用于 Web 文本对话；关键帧图片请求代码已经实现，但没有 CLI/Web 触发入口，不会在处理视频或聊天时自动上传图片。
+当前 CLI 结构化文本分析后端仅支持 `deepseek`。完整模式会在本地视频抽帧后尝试可选 Gemini 视觉分析；Web 选择 Gemini 对话时会依次尝试公开 YouTube URL、已有或新上传的本地视频、关键帧+文本和纯文本。视频上传仅在用户明确选择 Gemini 且知识包有本地视频时发生。
 
 ## CLI
 
@@ -437,6 +438,6 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 ## 已知限制
 
 - B站官方 iframe 通过重载 `t=<秒数>` 实现预览区时间戳跳转；实际播放行为仍受官方播放器嵌入能力限制。
-- Gemini 关键帧图片输入仅完成 Provider 与服务边界的 mock 验证，尚未进行真实 API 验证，也未形成可操作的视觉分析产品流程。
+- Gemini 视频和视觉路径已经形成可操作流程并完成 mock 验证；当前环境未配置 Gemini，因此仍需真实 API、额度、长视频和 URL 拒绝场景验收。
 - Obsidian 仅为兼容 Markdown 导出，不是 Vault 数据层。
 - 通用网页正文采集尚未实现；当前 URL 输入面向 `yt-dlp` 支持的视频平台。

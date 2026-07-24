@@ -17,6 +17,7 @@ def render_knowledge_markdown(
     *,
     chat: dict[str, Any] | None = None,
     user_notes: str = "",
+    highlight_image_prefix: str = "",
 ) -> str:
     source, analysis = package.source, package.analysis
     profile = (analysis.analysis_profile if analysis else source.analysis_profile) or "summary"
@@ -45,9 +46,18 @@ def render_knowledge_markdown(
         elif section == "highlights" and analysis and analysis.highlights:
             lines.extend(["## 亮点", ""])
             for item in analysis.highlights:
-                target = _time_link(package, selection.knowledge_id, item.start)
-                time = f" [{format_timestamp(item.start)}]({target})" if target else (f" {format_timestamp(item.start)}" if item.start is not None else "")
-                lines.append(f"- **{item.title}**：{item.explanation}{time}")
+                timestamp = item.timestamp if item.timestamp is not None else item.start
+                summary = item.summary or item.explanation
+                target = _time_link(package, selection.knowledge_id, timestamp)
+                time = f" [{format_timestamp(timestamp)}]({target})" if target else (f" {format_timestamp(timestamp)}" if timestamp is not None else "")
+                lines.append(f"- **{item.title}**：{summary}{time}")
+                if item.image:
+                    image_path = (
+                        f"{highlight_image_prefix.rstrip('/')}/{Path(item.image).name}"
+                        if highlight_image_prefix
+                        else item.image
+                    )
+                    lines.append(f"  ![[{image_path}]]")
                 tags = [f"`#{_clean_tag(tag)}`" for tag in item.tags if _clean_tag(tag)]
                 if tags:
                     lines.append("  " + " ".join(tags))

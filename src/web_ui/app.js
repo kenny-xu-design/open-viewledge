@@ -914,8 +914,11 @@ function renderSummary(knowledge) {
   else sections.push('<div class="analysis-empty">AI 分析已跳过。字幕、时间轴和原文细读仍可正常查看。</div>');
 
   if (Array.isArray(analysis.highlights) && analysis.highlights.length) {
-    sections.push(`<section class="result-section"><h2>亮点</h2><ul class="highlight-list">${analysis.highlights.map((item) => `
-      <li class="highlight-item"><span class="highlight-icon">${escapeHtml(item.icon || "◆")}</span><div class="highlight-copy"><strong>${escapeHtml(item.title || "亮点")}</strong>${item.explanation ? `<p>${escapeHtml(item.explanation)}</p>` : ""}<div class="tag-list">${(item.tags || []).map((tag) => `<button class="tag-button" data-tag="${escapeAttr(tag)}">#${escapeHtml(tag)}</button>`).join("")}</div></div></li>`).join("")}</ul></section>`);
+    sections.push(`<section class="result-section"><h2>亮点</h2><ul class="highlight-list">${analysis.highlights.map((item) => {
+      const imageUrl = knowledgeAssetUrl(knowledge.id, item.image);
+      const detail = item.summary || item.explanation || "";
+      return `<li class="highlight-item${imageUrl ? " has-image" : ""}">${imageUrl ? `<img class="highlight-image" src="${imageUrl}" alt="${escapeAttr(item.title || "亮点画面")}" loading="lazy" data-preview-image="${imageUrl}">` : `<span class="highlight-icon">${escapeHtml(item.icon || "◆")}</span>`}<div class="highlight-copy"><strong>${escapeHtml(item.title || "亮点")}</strong>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}<div class="tag-list">${(item.tags || []).map((tag) => `<button class="tag-button" data-tag="${escapeAttr(tag)}">#${escapeHtml(tag)}</button>`).join("")}</div></div></li>`;
+    }).join("")}</ul></section>`);
   }
   if (Array.isArray(analysis.thoughts) && analysis.thoughts.length) {
     sections.push(`<section class="result-section"><h2>思考</h2><ol class="thought-list">${analysis.thoughts.slice(0, 3).map((item) => `<li><button class="thought-button" data-question="${escapeAttr(item.question || "")}">${escapeHtml(item.question || "")}</button></li>`).join("")}</ol></section>`);
@@ -941,14 +944,15 @@ function renderInsightPanel(knowledge) {
     return;
   }
   $("#insightContent").innerHTML = source.map((item, index) => {
-    const hasTime = item.start != null && Number.isFinite(Number(item.start));
-    const detail = usingHighlights ? item.explanation : item.summary;
+    const itemTime = usingHighlights ? (item.timestamp ?? item.start) : item.start;
+    const hasTime = itemTime != null && Number.isFinite(Number(itemTime));
+    const detail = usingHighlights ? (item.summary || item.explanation) : item.summary;
     const tags = usingHighlights ? (item.tags || []) : (item.keywords || []);
     return `<article class="insight-item" data-insight-index="${index}">
       <div class="insight-row">
         <span class="insight-marker ${usingHighlights ? "ai" : "timeline"}"></span>
         <strong>${escapeHtml(item.title || (usingHighlights ? `高光 ${index + 1}` : `片段 ${index + 1}`))}</strong>
-        ${hasTime ? `<button class="timestamp-button" data-seek="${Number(item.start)}">${formatTime(item.start)}</button>` : ""}
+        ${hasTime ? `<button class="timestamp-button" data-seek="${Number(itemTime)}">${formatTime(itemTime)}</button>` : ""}
       </div>
       ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
       ${tags.length ? `<div class="tag-list">${tags.slice(0, 5).map((tag) => `<span class="static-tag">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
@@ -1141,7 +1145,7 @@ async function requestChat(question, appendUser) {
       body: JSON.stringify({ knowledge_id: knowledgeId, question, provider: chatState.provider, model: null, history: chatState.messages.slice(0, -1) }),
     });
     if (state.selectedKnowledgeId !== knowledgeId || data.knowledge_id !== knowledgeId) return;
-    chatState.messages.push({ role: "assistant", content: data.answer || "", citations: data.citations || [], provider: data.provider || "", model: data.model || "", warning: data.warning || "" });
+    chatState.messages.push({ role: "assistant", content: data.answer || "", citations: data.citations || [], provider: data.provider || "", model: data.model || "", warning: data.warning || "", route: data.route || "", route_status: data.route_status || "" });
   } catch (error) {
     if (error.name !== "AbortError" && state.selectedKnowledgeId === knowledgeId) {
       chatState.messages.push({ role: "system", content: error.message || "上下文对话请求失败" });
@@ -1207,7 +1211,8 @@ function renderChatHistory() {
     const citations = Array.isArray(item.citations) ? item.citations : [];
     const citationHtml = citations.length ? `<div class="chat-citations">${citations.map((citation) => `<button type="button" data-seek="${Number(citation.start || 0)}" title="${escapeAttr(citation.excerpt || citation.title || "字幕证据")}">[${Number(citation.index || 0)}] ${formatTime(Number(citation.start || 0))}</button>`).join("")}</div>` : "";
     const warningHtml = item.warning ? `<div class="chat-warning">${escapeHtml(item.warning)}</div>` : "";
-    const modelHtml = item.role === "assistant" && item.model ? `<small class="chat-model">${escapeHtml(providerLabel(item.provider))} · ${escapeHtml(item.model)} · ${citations.length} 条证据 <button type="button" data-regenerate>重新生成</button></small>` : "";
+    const routeHtml = item.route ? ` · ${escapeHtml(videoChatRouteLabel(item.route, item.route_status))}` : "";
+    const modelHtml = item.role === "assistant" && item.model ? `<small class="chat-model">${escapeHtml(providerLabel(item.provider))} · ${escapeHtml(item.model)}${routeHtml} · ${citations.length} 条证据 <button type="button" data-regenerate>重新生成</button></small>` : "";
     return `<div class="chat-message ${escapeAttr(item.role)}"><div>${escapeHtml(item.content)}</div>${warningHtml}${citationHtml}${modelHtml}</div>`;
   }).join("") : '<div class="chat-empty">针对当前视频提问，回答会附带可跳转的字幕时间引用。</div>';
   if (currentChatState().loading) root.insertAdjacentHTML("beforeend", '<div class="chat-message assistant loading">正在检索当前视频并请求模型…</div>');
@@ -1243,6 +1248,11 @@ function setTaskSourceType(type) {
   $("#taskSourceLabel").textContent = activeSourceType === "url" ? "视频链接" : "本地文件路径";
   $("#taskSource").placeholder = activeSourceType === "url" ? "https://www.bilibili.com/video/BV…" : "E:\\Downloads_E\\video.mp4";
   $("#taskSourceError").textContent = activeSourceType === "url" ? "请输入视频链接。" : "请输入本地文件路径。";
+}
+
+function knowledgeAssetUrl(knowledgeId, relativePath) {
+  if (!knowledgeId || !relativePath || String(relativePath).includes("..")) return "";
+  return `/api/library/${encodeURIComponent(knowledgeId)}/file/${String(relativePath).split("/").map(encodeURIComponent).join("/")}`;
 }
 
 async function submitTask(event) {
@@ -1299,7 +1309,7 @@ function pollTask(jobId) {
 }
 
 function renderTaskProgress(job) {
-  const stageOrder = ["resolve_source", "collect_metadata", "acquire_transcript", "normalize_transcript", "group_transcript", "build_timeline", "extract_frames", "run_analysis", "export_knowledge_package"];
+  const stageOrder = ["resolve_source", "collect_metadata", "acquire_transcript", "normalize_transcript", "group_transcript", "build_timeline", "run_analysis", "extract_frames", "visual_analysis", "highlight_snapshot", "export_knowledge_package"];
   const logs = job.logs || [];
   const latestStage = [...logs].reverse().find((line) => line.includes("阶段：")) || "";
   const stage = latestStage.split("阶段：").pop();
@@ -1887,7 +1897,12 @@ function statusLabel(status) {
 }
 
 function stageLabel(stage) {
-  return ({ queued: "等待处理", resolve_source: "识别来源", collect_metadata: "读取来源信息", acquire_transcript: "获取字幕或转写", normalize_transcript: "标准化字幕", group_transcript: "字幕分组", build_timeline: "构建时间轴", extract_frames: "生成关键帧", run_analysis: "结构化分析", export_knowledge_package: "导出知识包" })[stage] || stage || "处理中";
+  return ({ queued: "等待处理", resolve_source: "识别来源", collect_metadata: "读取来源信息", acquire_transcript: "获取字幕或转写", normalize_transcript: "标准化字幕", group_transcript: "字幕分组", build_timeline: "构建时间轴", run_analysis: "结构化分析", extract_frames: "生成关键帧", visual_analysis: "分析关键帧", highlight_snapshot: "生成高光图片", export_knowledge_package: "导出知识包" })[stage] || stage || "处理中";
+}
+
+function videoChatRouteLabel(route, status) {
+  const label = ({ gemini_youtube_url: "YouTube 原生视频", gemini_files_api: "Files API 视频", gemini_frames_text: "关键帧+文本", text_only: "纯文本" })[route] || route;
+  return status === "degraded" ? `${label}（已降级）` : label;
 }
 
 function platformLabel(platform) {

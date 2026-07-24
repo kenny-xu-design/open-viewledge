@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 import time
 import uuid
 from pathlib import Path
 
-from ..analysis import AnalysisService
+from ..analysis import AnalysisService, KeyframeAnalysisService
 from ..analysis.profiles import resolve_analysis_profile
 from ..audio import extract_audio
 from ..cache import CacheStore, build_cache_key, source_cache_dimensions, transcript_content_hash
@@ -13,7 +14,7 @@ from ..config import AppConfig
 from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, ProcessingManifest, ProviderAttempt, SourceRecord, StageMetric, TranscriptSegment, utc_now
 from ..exporters import export_knowledge_package
 from ..providers.asr import LocalWhisperProvider
-from ..providers.llm import DeepSeekProvider
+from ..providers.llm import DeepSeekProvider, GeminiProvider
 from ..processing_profiles import ProcessingProfile
 from ..knowledge_validation import inspect_knowledge_package
 from ..sources import LocalMediaSource, YtdlpSource
@@ -21,6 +22,7 @@ from ..timeline import build_timeline, extract_frames
 from ..transcripts import group_segments, parse_subtitle_file, read_jsonl, write_grouped_markdown, write_jsonl, write_legacy_transcript
 from ..transcripts.normalizer import normalize_segments
 from ..utils import UserFacingError, ensure_dir, load_json, sanitize_filename, save_json, write_text
+from ..visual import generate_highlight_snapshots
 from ..cli_contract import sanitize_message
 from .context import PipelineContext
 from .stages import STAGES
@@ -113,6 +115,7 @@ class PipelineOrchestrator:
             context.previous_manifest = load_json(context.output_dir / "manifest.json")
             ensure_dir(context.output_dir / "audio")
             ensure_dir(context.output_dir / "frames")
+            ensure_dir(context.output_dir / "assets" / "highlights")
             context.manifest.source = context.source
             self._save_manifest(context)
             source_dimensions = source_cache_dimensions(context.source, input_value)
@@ -286,8 +289,6 @@ class PipelineOrchestrator:
                 )
                 context.manifest.errors.extend(errors)
 
-            self._stage(context, "extract_frames", frames, soft_fail=True)
-
             def analyze() -> None:
                 if self.no_analysis:
                     context.analysis = AnalysisResult(status="skipped", analysis_profile=context.analysis_profile)
@@ -330,6 +331,10 @@ class PipelineOrchestrator:
                     context.mark_cache_hit("run_analysis")
                     context.log("命中文本分析缓存，跳过 LLM 请求。")
                     _write_legacy_analysis_files(context)
+                    save_json(
+                        context.output_dir / "analysis.json",
+                        context.analysis.model_dump(mode="json"),
+                    )
                     return
                 attempt = ProviderAttempt(provider=provider.name, model=provider.model_name, stage="run_analysis")
                 if not provider.is_available():
@@ -378,6 +383,10 @@ class PipelineOrchestrator:
                     attempt.finished_at = utc_now()
                     context.manifest.provider_attempts.append(attempt)
                 _write_legacy_analysis_files(context)
+                save_json(
+                    context.output_dir / "analysis.json",
+                    context.analysis.model_dump(mode="json"),
+                )
 
             self._stage(context, "run_analysis", analyze, soft_fail=True)
             if context.analysis is None:
@@ -388,6 +397,113 @@ class PipelineOrchestrator:
                 )
                 context.manifest.analysis_status = "failed"
                 context.manifest.analysis_error = context.analysis.error
+            save_json(
+                context.output_dir / "analysis.json",
+                context.analysis.model_dump(mode="json"),
+            )
+
+            self._stage(context, "extract_frames", frames, soft_fail=True)
+
+            def visual_analysis() -> None:
+                if self.processing_profile == "fast" or not self.generate_frames:
+                    context.mark_stage_skipped("visual_analysis")
+                    return
+                frame_paths = [
+                    context.output_dir / item.frame_path
+                    for item in context.timeline
+                    if item.frame_path and (context.output_dir / item.frame_path).is_file()
+                ][:12]
+                if not frame_paths:
+                    context.mark_stage_skipped("visual_analysis")
+                    return
+                provider = GeminiProvider(
+                    base_url=self.config.gemini_base_url,
+                    model_name=self.config.gemini_model,
+                )
+                if not provider.is_available():
+                    context.mark_stage_skipped("visual_analysis")
+                    context.log("Gemini 未配置，跳过可选视觉分析；文本结果不受影响。")
+                    return
+                visual_key = build_cache_key(
+                    "visual_analysis",
+                    source=source_dimensions,
+                    frame_hashes=[_file_sha256(path) for path in frame_paths],
+                    provider=provider.name,
+                    model=provider.model_name,
+                    prompt_version=context.manifest.prompt_version,
+                )
+                context.manifest.cache_keys["visual_analysis"] = visual_key
+                cached_visual = self._cache_get(context, "visual_analysis", visual_key)
+                if (
+                    isinstance(cached_visual, dict)
+                    and cached_visual.get("status") == "success"
+                    and str(cached_visual.get("content") or "").strip()
+                ):
+                    save_json(context.output_dir / "visual_insights.json", cached_visual)
+                    write_text(
+                        context.output_dir / "visual_insights.md",
+                        "# 视觉观察\n\n" + str(cached_visual["content"]).strip() + "\n",
+                    )
+                    context.mark_cache_hit("visual_analysis")
+                    context.log("命中视觉分析缓存，跳过 Gemini 图片请求。")
+                    return
+                result = KeyframeAnalysisService(provider).analyze(
+                    frame_paths,
+                    (
+                        "按时间顺序分析这些视频关键帧。只描述画面中可见的信息，"
+                        "指出界面、图表、演示动作和重要视觉变化；不要猜测不可见内容。"
+                    ),
+                    system_prompt="输出简洁的中文视觉观察，并在不确定时明确说明。",
+                    max_tokens=1_500,
+                )
+                payload = {
+                    "status": result.status,
+                    "frame_count": result.frame_count,
+                    "provider": result.response.provider if result.response else "",
+                    "model": result.response.model if result.response else "",
+                    "content": result.response.content if result.response else "",
+                    "message": result.message,
+                }
+                save_json(context.output_dir / "visual_insights.json", payload)
+                self._cache_put(context, "visual_analysis", visual_key, payload)
+                if result.response:
+                    write_text(
+                        context.output_dir / "visual_insights.md",
+                        "# 视觉观察\n\n" + result.response.content.strip() + "\n",
+                    )
+
+            self._stage(context, "visual_analysis", visual_analysis, soft_fail=True)
+
+            def highlight_snapshot() -> None:
+                if (
+                    self.processing_profile == "fast"
+                    or not self.generate_frames
+                    or context.source.source_type != "local_video"
+                    or not context.analysis
+                    or not context.analysis.highlights
+                ):
+                    context.mark_stage_skipped("highlight_snapshot")
+                    return
+                result = generate_highlight_snapshots(
+                    Path(context.source.local_path),
+                    context.analysis,
+                    context.timeline,
+                    context.output_dir,
+                    ffmpeg_path=self.config.ffmpeg_path,
+                )
+                context.analysis = result.analysis
+                save_json(
+                    context.output_dir / "analysis.json",
+                    context.analysis.model_dump(mode="json"),
+                )
+                if result.errors:
+                    context.manifest.errors.extend(result.errors)
+                    raise UserFacingError("；".join(result.errors[:3]))
+                context.log(
+                    f"高光图片：新截取 {result.generated_count} 张，复用关键帧 {result.reused_count} 张。"
+                )
+
+            self._stage(context, "highlight_snapshot", highlight_snapshot, soft_fail=True)
 
             def export() -> None:
                 assert context.source and context.manifest
@@ -403,7 +519,22 @@ class PipelineOrchestrator:
                     output_dir=context.output_dir,
                 )
                 files = export_knowledge_package(package, self.export_legacy_note)
-                context.manifest.output_files = [path.name for path in files] + ["transcript.raw.jsonl", "transcript.grouped.md", "transcript.md"]
+                optional_files = [
+                    name
+                    for name in ("visual_insights.json", "visual_insights.md")
+                    if (context.output_dir / name).is_file()
+                ]
+                highlight_files = [
+                    path.relative_to(context.output_dir).as_posix()
+                    for path in sorted((context.output_dir / "assets" / "highlights").glob("*.webp"))
+                ]
+                context.manifest.output_files = [path.name for path in files] + [
+                    "transcript.raw.jsonl",
+                    "transcript.grouped.md",
+                    "transcript.md",
+                    *optional_files,
+                    *highlight_files,
+                ]
                 self._save_manifest(context)
                 for name in context.manifest.output_files:
                     self._emit("artifact_created", task_id=context.manifest.task_id, stage="export_knowledge_package", artifact=str(context.output_dir / name))
@@ -581,6 +712,14 @@ def _analysis_from_cache(value) -> AnalysisResult | None:
         return AnalysisResult.model_validate(value)
     except ValueError:
         return None
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _limit_segments(segments, sample_seconds: int):

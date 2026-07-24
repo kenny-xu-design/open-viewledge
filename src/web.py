@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import mimetypes
@@ -23,7 +24,7 @@ from urllib.parse import quote, unquote, urlparse
 from . import __version__
 from .cli_contract import sanitize_message
 from .analysis.retry import reanalyze_knowledge_package
-from .chat import answer_question
+from .chat import answer_question, prepare_grounded_request
 from .chat_store import ChatStore
 from .config import load_config
 from .exporters import export_directory_to_vault, refresh_compatible_export, render_directory_export, selection_for_request
@@ -31,9 +32,10 @@ from .job_store import Job, JobStore
 from .knowledge_validation import inspect_knowledge_package
 from .note_store import NoteConflictError, NoteStore
 from .processing_profiles import normalize_processing_profile
-from .providers.llm import ProviderRegistry
+from .providers.llm import GeminiProvider, ProviderRegistry
 from .runtime_tools import runtime_tool_statuses
 from .utils import UserFacingError
+from .video_chat import GeminiVideoChatRouter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = PROJECT_ROOT / "output"
@@ -54,6 +56,8 @@ LIBRARY_FILES = {
     "source.md",
     "export_note.md",
     "user_notes.md",
+    "visual_insights.json",
+    "visual_insights.md",
 }
 MEDIA_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"}
 
@@ -418,6 +422,7 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
             *[issue.message for issue in inspection.issues if issue.severity == "error"][:5],
         ]
     timeline_payload = _load_json_file(directory / "timeline.json")
+    visual_insights = _load_json_file(directory / "visual_insights.json")
     timeline = timeline_payload.get("items", []) if isinstance(timeline_payload, dict) else []
     if not isinstance(timeline, list):
         timeline = []
@@ -462,6 +467,7 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
         "source": source,
         "manifest": manifest_view,
         "analysis": analysis,
+        "visualInsights": visual_insights,
         "inspection": inspection.to_dict(),
         "timeline": timeline,
         "files": files,
@@ -578,17 +584,101 @@ def chat_with_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
         str(payload.get("model") or "") or None,
     )
     store = ChatStore(resolve_library_dir)
-    stored_history = store.load(knowledge_id).get("messages", [])
-    result = answer_question(
-        question=question,
-        groups=groups,
-        analysis=knowledge.get("analysis") if isinstance(knowledge.get("analysis"), dict) else {},
-        source=knowledge.get("source") if isinstance(knowledge.get("source"), dict) else {},
-        history=stored_history if stored_history else client_history,
-        provider=provider,
-        knowledge_id=knowledge_id,
-    )
-    if visual_question:
+    stored_state = store.load(knowledge_id)
+    stored_history = stored_state.get("messages", [])
+    source = knowledge.get("source") if isinstance(knowledge.get("source"), dict) else {}
+    source_url = str(source.get("canonical_url") or source.get("source_url") or knowledge.get("source_url") or "")
+    fingerprint = _chat_source_fingerprint(source_url, source, knowledge_id)
+    if stored_state.get("source_fingerprint") and stored_state.get("source_fingerprint") != fingerprint:
+        stored_state = store.reset_for_source(
+            knowledge_id,
+            source_url=source_url,
+            source_fingerprint=fingerprint,
+            provider=provider.name,
+            model=provider.model_name,
+        )
+        stored_history = []
+
+    if isinstance(provider, GeminiProvider):
+        request = prepare_grounded_request(
+            question=question,
+            groups=groups,
+            analysis=knowledge.get("analysis") if isinstance(knowledge.get("analysis"), dict) else {},
+            source=source,
+            history=stored_history if stored_history else client_history,
+            allow_fallback_context=True,
+        )
+        if request is None:
+            raise ValueError("当前知识包没有可用于视频对话的上下文。")
+        media_path = None
+        try:
+            media_path = resolve_media_path(knowledge_id)
+        except FileNotFoundError:
+            pass
+        directory = resolve_library_dir(knowledge_id)
+        frame_paths = _chat_frame_paths(directory, knowledge)
+        routed = GeminiVideoChatRouter(provider).answer(
+            request.messages,
+            source_url=source_url,
+            media_path=media_path,
+            frame_paths=frame_paths,
+            remote_file_id=str(stored_state.get("remote_file_id") or ""),
+        )
+        result = {
+            "answer": routed.response.content,
+            "citations": request.citations,
+            "provider": routed.response.provider,
+            "model": routed.response.model,
+            "usage": routed.response.usage,
+            "knowledge_id": knowledge_id,
+            "route": routed.route,
+            "route_status": routed.route_status,
+            "route_attempts": routed.attempts,
+        }
+        if routed.route_status == "degraded":
+            result["warning"] = (
+                "Gemini 视频路由已降级为"
+                f" {routed.route}。{routed.degradation_reason or '仍可基于现有知识包回答。'}"
+            )
+        store.update_state(
+            knowledge_id,
+            source_url=source_url,
+            source_fingerprint=fingerprint,
+            provider=routed.response.provider,
+            model=routed.response.model,
+            route=routed.route,
+            route_status=routed.route_status,
+            remote_file_id=routed.remote_file_id,
+            remote_expires_at=routed.remote_expires_at,
+            recovery_state="degraded" if routed.route_status == "degraded" else "ready",
+            degradation_reason=routed.degradation_reason,
+        )
+    else:
+        result = answer_question(
+            question=question,
+            groups=groups,
+            analysis=knowledge.get("analysis") if isinstance(knowledge.get("analysis"), dict) else {},
+            source=source,
+            history=stored_history if stored_history else client_history,
+            provider=provider,
+            knowledge_id=knowledge_id,
+        )
+        result["route"] = "text_only"
+        result["route_status"] = "available"
+        result["route_attempts"] = [
+            {"route": "text_only", "status": "available", "reason": ""}
+        ]
+        store.update_state(
+            knowledge_id,
+            source_url=source_url,
+            source_fingerprint=fingerprint,
+            provider=result["provider"],
+            model=result["model"],
+            route="text_only",
+            route_status="available",
+            recovery_state="ready",
+        )
+    if visual_question and not isinstance(provider, GeminiProvider):
         result["warning"] = "当前聊天请求未附带关键帧，本次仅基于字幕和已有文本分析回答。"
     new_messages = [] if stored_history and stored_history[-1].get("role") == "user" and stored_history[-1].get("content") == question else [{"role": "user", "content": question}]
     new_messages.append(
@@ -599,9 +689,53 @@ def chat_with_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
             "provider": result["provider"],
             "model": result["model"],
             "warning": result.get("warning", ""),
+            "route": result.get("route", ""),
+            "route_status": result.get("route_status", ""),
         }
     )
     store.append(knowledge_id, new_messages)
+    return result
+
+
+def _chat_source_fingerprint(source_url: str, source: dict[str, Any], knowledge_id: str) -> str:
+    identity = {
+        "knowledge_id": knowledge_id,
+        "source_url": source_url,
+        "source_id": str(source.get("source_id") or ""),
+        "platform": str(source.get("platform") or ""),
+    }
+    return hashlib.sha256(
+        json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _chat_frame_paths(directory: Path, knowledge: dict[str, Any]) -> list[Path]:
+    relative_paths = []
+    highlights = (knowledge.get("analysis") or {}).get("highlights", [])
+    if isinstance(highlights, list):
+        relative_paths.extend(
+            str(item.get("image") or "")
+            for item in highlights
+            if isinstance(item, dict) and item.get("image")
+        )
+    frames_dir = directory / "frames"
+    if frames_dir.is_dir():
+        relative_paths.extend(
+            f"frames/{path.name}"
+            for path in sorted(frames_dir.iterdir())
+            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+        )
+    result = []
+    for relative in relative_paths:
+        candidate = (directory / relative).resolve()
+        try:
+            candidate.relative_to(directory)
+        except ValueError:
+            continue
+        if candidate.is_file() and candidate not in result:
+            result.append(candidate)
+        if len(result) >= 8:
+            break
     return result
 
 
@@ -723,6 +857,13 @@ def resolve_library_file(knowledge_id: str, relative_name: str) -> Path:
     if len(parts) == 2 and parts[0] == "frames":
         if Path(parts[1]).suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
             raise ValueError("不允许访问该关键帧文件。")
+    elif (
+        len(parts) == 3
+        and parts[0] == "assets"
+        and parts[1] == "highlights"
+        and Path(parts[2]).suffix.lower() == ".webp"
+    ):
+        pass
     elif len(parts) != 1:
         raise ValueError("不允许访问该文件。")
     candidate = (directory / Path(*parts)).resolve()

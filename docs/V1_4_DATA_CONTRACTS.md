@@ -1,6 +1,6 @@
 # v1.4 Data Contracts
 
-Status: v1.4.0 core contracts and v1.4.1 cache/timing fields implemented; later-unit contracts remain design
+Status: v1.4.0-v1.4.2 contracts implemented; later-unit contracts remain design
 
 Last updated: 2026-07-24
 

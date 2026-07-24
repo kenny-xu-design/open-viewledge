@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..processing_profiles import ProcessingProfile
 from ..schema_compat import require_supported_schema
@@ -73,6 +73,23 @@ class HighlightItem(BaseModel):
     start: float | None = None
     end: float | None = None
     icon: str | None = None
+    timestamp: float | None = None
+    summary: str = ""
+    image: str = ""
+    image_source_timestamp: float | None = None
+    image_generation_status: Literal["generated", "reused", "skipped", "failed"] = "skipped"
+
+    @model_validator(mode="after")
+    def synchronize_compatible_fields(self) -> "HighlightItem":
+        if self.timestamp is None:
+            self.timestamp = self.start
+        if self.start is None:
+            self.start = self.timestamp
+        if not self.summary:
+            self.summary = self.explanation
+        if not self.explanation:
+            self.explanation = self.summary
+        return self
 
 
 class ThoughtQuestion(BaseModel):

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
 from ..domain.models import AnalysisResult, KnowledgePackage, ProcessingManifest, SourceRecord, TimelineEntry
 from ..analysis.entities import normalize_analysis_entities
-from ..utils import UserFacingError
+from ..utils import UserFacingError, sanitize_filename
 from .markdown_renderer import render_knowledge_markdown
 from .models import ExportSelection, selection_from_preset
 from .obsidian_exporter import safe_export_filename, write_to_vault
@@ -48,8 +49,39 @@ def export_directory_to_vault(
     vault_name: str = "",
     subdir: str = "外源/视频",
 ) -> dict[str, Any]:
-    markdown, filename = render_directory_export(directory, selection)
+    package, chat, notes = load_package_for_export(directory)
+    filename = selection.filename or safe_export_filename(package.source.title or selection.knowledge_id)
+    filename = safe_export_filename(Path(filename).stem)
+    asset_prefix = (
+        Path("assets")
+        / "video-summary"
+        / sanitize_filename(selection.knowledge_id, "knowledge")
+        / "highlights"
+    ).as_posix()
+    markdown = render_knowledge_markdown(
+        package,
+        selection,
+        chat=chat,
+        user_notes=notes,
+        highlight_image_prefix=asset_prefix,
+    )
     path, uri = write_to_vault(markdown, vault_path, subdir, filename, overwrite=selection.overwrite)
+    copied_assets = []
+    if package.analysis:
+        for item in package.analysis.highlights:
+            if not item.image:
+                continue
+            source = (directory / item.image).resolve()
+            try:
+                source.relative_to(directory.resolve())
+            except ValueError:
+                continue
+            if not source.is_file():
+                continue
+            target = path.parent / asset_prefix / source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            copied_assets.append(target.relative_to(Path(vault_path).expanduser().resolve()).as_posix())
     return {
         "success": True,
         "knowledge_id": selection.knowledge_id,
@@ -58,6 +90,7 @@ def export_directory_to_vault(
         "relative_vault_path": path.relative_to(Path(vault_path).expanduser().resolve()).as_posix(),
         "obsidian_uri": uri if not vault_name else uri.replace("vault=" + Path(vault_path).name, "vault=" + vault_name),
         "included_sections": selection.normalized_sections(),
+        "copied_assets": copied_assets,
     }
 
 

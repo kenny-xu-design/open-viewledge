@@ -359,6 +359,22 @@ class WebLibraryTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     resolve_library_file("demo", "secret.txt")
 
+    def test_library_file_allows_only_webp_highlight_assets(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            assets = package / "assets" / "highlights"
+            assets.mkdir(parents=True)
+            image = assets / "highlight_001.webp"
+            image.write_bytes(b"webp")
+            with patch("src.web.OUTPUT_ROOT", root):
+                self.assertEqual(
+                    resolve_library_file("demo", "assets/highlights/highlight_001.webp"),
+                    image,
+                )
+                with self.assertRaises(ValueError):
+                    resolve_library_file("demo", "assets/highlights/script.html")
+
     def test_library_batch_delete_validates_all_targets_before_removal(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

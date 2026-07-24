@@ -28,6 +28,8 @@ Implementation status: automated acceptance complete on the working branch.
 
 ### v1.4.2
 
+Implementation status: code and mock-backed automated coverage complete; real Gemini API and manual browser acceptance remain.
+
 - Complete mode can produce text output before visual output.
 - Highlight cards show at most one lightweight image each.
 - Highlight image failure does not remove highlight text.

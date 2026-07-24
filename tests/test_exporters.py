@@ -15,7 +15,7 @@ from src.domain.models import (
     TimelineEntry,
     TranscriptSegment,
 )
-from src.exporters import export_knowledge_package
+from src.exporters import export_directory_to_vault, export_knowledge_package, selection_from_preset
 
 
 class ExporterTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class ExporterTests(unittest.TestCase):
         source = SourceRecord(source_type="online_video", platform="youtube", source_url="https://youtube.com/watch?v=abc", source_id="abc", title="测试视频", author="作者")
         analysis = AnalysisResult(
             summary="这是摘要。",
-            highlights=[HighlightItem(title="亮点", explanation="说明", tags=["知识"])],
+            highlights=[HighlightItem(title="亮点", explanation="说明", tags=["知识"], image="assets/highlights/highlight_001.webp")],
             thoughts=[ThoughtQuestion(question="值得思考什么？")],
             chapters=[ChapterSummary(title="第一章", start=0, end=20, summary="章节总结", frame_path="frames/frame_0001.jpg", source_link="https://youtube.com/watch?v=abc&t=0s")],
         )
@@ -59,6 +59,7 @@ class ExporterTests(unittest.TestCase):
     def test_index_uses_relative_frame_and_has_no_bibigpt_link(self) -> None:
         text = self._render()
         self.assertIn("![[frames/frame_0001.jpg]]", text)
+        self.assertIn("![[assets/highlights/highlight_001.webp]]", text)
         self.assertNotIn("BibiGPT", text)
 
     def test_empty_optional_sections_are_hidden(self) -> None:
@@ -71,4 +72,24 @@ class ExporterTests(unittest.TestCase):
         text = (Path(self.temp.name) / "export_note.md").read_text(encoding="utf-8")
         self.assertIn("## 我的笔记", text)
         self.assertIn("这是用户自己的判断。", text)
+
+    def test_obsidian_export_copies_highlight_assets_with_relative_reference(self) -> None:
+        self._render()
+        root = Path(self.temp.name)
+        image = root / "assets" / "highlights" / "highlight_001.webp"
+        image.parent.mkdir(parents=True)
+        image.write_bytes(b"webp")
+        with tempfile.TemporaryDirectory() as vault:
+            selection = selection_from_preset(root.name, "light")
+            result = export_directory_to_vault(
+                root,
+                selection,
+                vault_path=vault,
+                subdir="外源/视频",
+            )
+            markdown = Path(result["file_path"]).read_text(encoding="utf-8")
+            self.assertEqual(len(result["copied_assets"]), 1)
+            copied = Path(vault) / result["copied_assets"][0]
+            self.assertTrue(copied.is_file())
+            self.assertIn(f"![[assets/video-summary/{root.name}/highlights/highlight_001.webp]]", markdown)
 

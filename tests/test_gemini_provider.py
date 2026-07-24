@@ -44,6 +44,7 @@ class _FakeProvider(LLMProvider):
 
 class _FakeVisionProvider(_FakeProvider):
     supports_images = True
+    supports_video = True
 
     def __init__(self, available: bool = True) -> None:
         super().__init__("gemini", available)
@@ -138,7 +139,7 @@ class GeminiProviderTests(unittest.TestCase):
         self.assertEqual(registry.resolve("auto", "分析关键帧", capability="images").name, "gemini")
         statuses = {item["name"]: item for item in registry.statuses()}
         self.assertEqual(statuses["deepseek"]["capabilities"], ["text"])
-        self.assertEqual(statuses["gemini"]["capabilities"], ["text", "images"])
+        self.assertEqual(statuses["gemini"]["capabilities"], ["text", "images", "video"])
 
     def test_image_capability_requires_gemini_configuration(self) -> None:
         gemini = _FakeProvider("gemini", False)

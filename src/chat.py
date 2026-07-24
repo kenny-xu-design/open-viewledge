@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from .providers.llm import DeepSeekProvider, LLMProvider
@@ -11,6 +12,12 @@ from .utils import UserFacingError
 MAX_QUESTION_LENGTH = 4_000
 MAX_HISTORY_MESSAGES = 16
 MAX_HISTORY_MESSAGE_LENGTH = 4_000
+
+
+@dataclass(frozen=True)
+class GroundedChatRequest:
+    messages: list[dict[str, Any]]
+    citations: list[dict[str, Any]]
 
 
 def answer_question(
@@ -31,8 +38,14 @@ def answer_question(
     if not groups:
         raise ValueError("当前知识包没有可用于对话的分组字幕。")
 
-    selected = ContextRetriever(groups).retrieve(normalized_question)
-    if not selected:
+    request = prepare_grounded_request(
+        question=normalized_question,
+        groups=groups,
+        analysis=analysis,
+        source=source,
+        history=history,
+    )
+    if request is None:
         return {
             "answer": "当前视频未提供该信息。检索未找到能够支持回答的字幕证据。",
             "citations": [],
@@ -41,6 +54,34 @@ def answer_question(
             "usage": {},
             "knowledge_id": knowledge_id,
         }
+    active_provider = provider or DeepSeekProvider()
+    if not active_provider.is_available():
+        raise UserFacingError("未检测到 DEEPSEEK_API_KEY，请在项目 .env 中配置后重试。")
+    response = active_provider.complete(request.messages, json_mode=False, temperature=0.2, max_tokens=1_500)
+    return {
+        "answer": response.content,
+        "citations": request.citations,
+        "provider": response.provider,
+        "model": response.model,
+        "usage": response.usage,
+        "knowledge_id": knowledge_id,
+    }
+
+
+def prepare_grounded_request(
+    *,
+    question: str,
+    groups: list[dict[str, Any]],
+    analysis: dict[str, Any] | None = None,
+    source: dict[str, Any] | None = None,
+    history: list[dict[str, Any]] | None = None,
+    allow_fallback_context: bool = False,
+) -> GroundedChatRequest | None:
+    selected = ContextRetriever(groups).retrieve(question)
+    if not selected and allow_fallback_context:
+        selected = [item for item in groups[:3] if isinstance(item, dict)]
+    if not selected:
+        return None
     evidence = [
         {
             "id": index + 1,
@@ -77,12 +118,7 @@ def answer_question(
         },
     ]
     messages.extend(_normalize_history(history or []))
-    messages.append({"role": "user", "content": normalized_question})
-
-    active_provider = provider or DeepSeekProvider()
-    if not active_provider.is_available():
-        raise UserFacingError("未检测到 DEEPSEEK_API_KEY，请在项目 .env 中配置后重试。")
-    response = active_provider.complete(messages, json_mode=False, temperature=0.2, max_tokens=1_500)
+    messages.append({"role": "user", "content": question.strip()})
     citations = [
         {
             "index": item["id"],
@@ -94,14 +130,7 @@ def answer_question(
         }
         for index, item in enumerate(evidence)
     ]
-    return {
-        "answer": response.content,
-        "citations": citations,
-        "provider": response.provider,
-        "model": response.model,
-        "usage": response.usage,
-        "knowledge_id": knowledge_id,
-    }
+    return GroundedChatRequest(messages=messages, citations=citations)
 
 
 def _normalize_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:

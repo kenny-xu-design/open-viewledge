@@ -17,6 +17,9 @@ All notable changes to this project are documented in this file.
 - Unified `seekPreview(seconds)` handling for local media, YouTube, and Bilibili preview timestamp clicks.
 - Local video display ratio controls for original, 16:9, 4:3, 1:1, and 9:16, with fit/fill display modes.
 - Safer knowledge-record deletion with path validation, recursive directory handling, clearer API errors, and regression tests.
+- v1.4 processing profiles, cache-aware subtitle-first fast path, and first-readable-result timing.
+- Optional v1.4 visual analysis and bounded per-highlight WebP snapshots that preserve text on failure.
+- Gemini video chat routing through public YouTube URL, Files API, keyframes plus text, and text-only fallback with recoverable local route state.
 
 ### Changed
 

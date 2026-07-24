@@ -1,6 +1,6 @@
 # v1.4 Architecture
 
-Status: design phase only
+Status: v1.4.0-v1.4.2 implementation-aligned; v1.4.3-v1.4.6 remain design
 
 Last updated: 2026-07-24
 

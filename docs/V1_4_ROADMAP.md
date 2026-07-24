@@ -1,6 +1,6 @@
 # v1.4 Roadmap
 
-Status: v1.4.0-v1.4.1 implemented; v1.4.2-v1.4.6 planned
+Status: v1.4.0-v1.4.2 implemented; v1.4.3-v1.4.6 planned
 
 Branch: `feat/v1.4-processing-pipeline`
 
@@ -98,6 +98,8 @@ Acceptance:
 - First readable result duration is visible in manifest or stage metrics.
 
 ### v1.4.2: Visual Pipeline, Highlight Snapshots, And Gemini YouTube Video Chat
+
+Status: implemented on `feat/v1.4-processing-pipeline`; automated and real-API acceptance pending final verification.
 
 Goal: turn existing frame and Gemini image boundaries into visible product features without blocking text results.
 

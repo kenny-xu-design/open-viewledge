@@ -22,7 +22,11 @@ class ProviderRegistry:
                 "name": name,
                 "model": provider.model_name,
                 "configured": provider.is_available(),
-                "capabilities": ["text", *(["images"] if provider.supports_images else [])],
+                "capabilities": [
+                    "text",
+                    *(["images"] if provider.supports_images else []),
+                    *(["video"] if provider.supports_video else []),
+                ],
             }
             for name, provider in self._providers.items()
         ]

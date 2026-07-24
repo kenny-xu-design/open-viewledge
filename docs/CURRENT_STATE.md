@@ -10,7 +10,7 @@ This document describes the implementation that currently exists. Planned work b
 - Stable baseline: `main` (`v1.2.1`)
 - Release commit and tag: `0583a89` / `v1.2.1`
 - Current development branch: `feat/v1.4-processing-pipeline`
-- Current implementation unit: `v1.4.1 subtitle priority, cache, and fast path`
+- Current implementation unit: `v1.4.2 visual pipeline, highlight snapshots, and Gemini video chat`
 
 ## v1.4.0 processing contract
 
@@ -34,6 +34,15 @@ This document describes the implementation that currently exists. Planned work b
 - Fast tasks mark `extract_frames` as skipped. Complete mode retains existing local-video frame behavior.
 - Manifest records cache keys, per-stage cache hits, first readable result time, and full completion duration.
 - Cache read/write failures degrade to normal execution and do not fail the media task.
+
+## v1.4.2 visual and video conversation
+
+- Text analysis now runs and writes `analysis.json` before optional frame, visual-analysis, and high-light snapshot stages.
+- Complete local-video tasks can create at most one lightweight WebP image per highlight under `assets/highlights/`; fast mode and `--no-frames` skip visual stages.
+- Highlight data keeps legacy `start` / `explanation` fields synchronized with v1.4 `timestamp` / `summary`, and records image source time and generation status.
+- Visual analysis uses existing keyframes and remains optional; missing Gemini configuration or visual failures do not remove text output.
+- Gemini Web chat routes through public YouTube URL, Files API, keyframes plus grounded text, then text-only fallback.
+- `chat.json` stores a stable `chat_id`, source fingerprint, Provider/model, selected route/status, optional remote file ID/expiry, recovery state, and local messages without credentials.
 
 ## v1.3.1 acceptance branch
 
@@ -251,7 +260,7 @@ Implemented:
 -> knowledge_id
 -> grouped transcript loading
 -> local BM25-style retrieval
--> DeepSeek or Gemini text Provider
+-> DeepSeek text Provider or Gemini video route planner
 -> timestamp citations
 -> output/<knowledge_id>/chat.json
 ```
@@ -260,7 +269,7 @@ Implemented:
 - Stored history is reloaded when switching packages.
 - The server reloads package context and does not trust client-provided evidence.
 - DeepSeek text chat is configured in the audited local environment.
-- Gemini text Provider exists but Gemini is not configured in the audited local environment.
+- Gemini text/image/video Provider exists but Gemini is not configured in the audited local environment.
 
 ## Gemini
 
@@ -271,7 +280,11 @@ Implemented:
 - `KeyframeAnalysisService` returns `skipped` without calling the Provider when no frames are available.
 - Text and image capabilities are resolved separately; visual wording in a chat question does not silently turn a text request into an image request.
 - Image requests and service behavior are covered by fake-opener and fake-Provider tests.
-- There is no CLI or Web trigger for keyframe analysis in v1.2, and no real Gemini API request has been performed.
+- Complete local-video processing can call keyframe analysis after the text result is written.
+- `complete_with_video_url()` uses the official `file_data.file_uri` request shape for public YouTube URLs.
+- `upload_video()` uses the official resumable Files API contract, polls to `ACTIVE`, and reuses only the remote file resource ID.
+- Web chat exposes the selected route and degradation status; capability is never inferred from YouTube UI.
+- No real Gemini API request has been performed in the audited environment.
 
 ## Notes And Obsidian
 

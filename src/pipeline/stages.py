@@ -5,8 +5,9 @@ STAGES = (
     "normalize_transcript",
     "group_transcript",
     "build_timeline",
-    "extract_frames",
     "run_analysis",
+    "extract_frames",
+    "visual_analysis",
+    "highlight_snapshot",
     "export_knowledge_package",
 )
-
