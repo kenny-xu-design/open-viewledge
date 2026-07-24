@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .processing_profiles import ProcessingProfile, normalize_processing_profile
 from .schema_compat import UnsupportedSchemaVersion, require_supported_schema
 from .utils import UserFacingError
 
@@ -23,6 +24,8 @@ class Job:
     id: str
     command: list[str]
     schema_version: str = SCHEMA_VERSION
+    analysis_profile: str = "summary"
+    processing_profile: ProcessingProfile = "complete"
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -48,10 +51,16 @@ class Job:
             )
         except UnsupportedSchemaVersion as exc:
             raise UserFacingError(str(exc)) from exc
+        try:
+            processing_profile = normalize_processing_profile(value.get("processing_profile"))
+        except ValueError as exc:
+            raise UserFacingError(f"Web 任务记录损坏：{exc}") from exc
         return cls(
             id=str(value.get("id") or ""),
             command=[str(item) for item in value.get("command", []) if isinstance(item, (str, int, float))],
             schema_version=schema_version,
+            analysis_profile=str(value.get("analysis_profile") or "summary"),
+            processing_profile=processing_profile,
             created_at=float(value.get("created_at") or time.time()),
             updated_at=float(value.get("updated_at") or value.get("created_at") or time.time()),
             started_at=_optional_float(value.get("started_at")),

@@ -4,6 +4,8 @@
 
 当前稳定版本为 `1.2.1`；`feat/v1.3.1-cupertino-ui` 的验收版本为 `1.3.1`，已完成 Agent/CLI 契约、Web 工作台外壳、知识记录删除、预览时间戳和本地视频比例控制的功能验收实现。范围仍不包含 Scale 或 SaaS。
 
+`feat/v1.4-processing-pipeline` 正在开发 v1.4。v1.4.0 已建立 `processing_profile: fast | complete` 契约，覆盖 CLI、Web 请求、任务记录、API、JSONL 和 manifest；默认 `complete` 保持现有处理行为。真正的字幕缓存和 fast 跳阶段逻辑属于 v1.4.1，尚未在 v1.4.0 启用。
+
 ## 当前能力
 
 主处理链路：
@@ -242,6 +244,7 @@ Obsidian 兼容 Markdown 副本：
 - `--lang`：字幕或转写语言。
 - `--backend`：当前只接受 `deepseek`。
 - `--mode`：`summary`、`tutorial`、`viral`、`close-reading`。
+- `--processing-profile`：`fast` 或 `complete`；默认 `complete`。v1.4.0 只建立兼容契约，两种模式暂时执行相同的现有阶段。
 - `--no-summary`：跳过 LLM 分析。
 - `--sample-seconds`：只处理媒体开头指定秒数。
 - `--no-frames`：跳过关键帧生成。

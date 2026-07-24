@@ -20,6 +20,7 @@ from .exporters import export_directory_to_vault, render_directory_export, selec
 from .exporters.obsidian_exporter import safe_export_filename
 from .knowledge_validation import inspect_knowledge_package
 from .pipeline import PipelineOrchestrator
+from .processing_profiles import DEFAULT_PROCESSING_PROFILE, normalize_processing_profile
 from .utils import UserFacingError
 
 
@@ -72,6 +73,7 @@ def run_pipeline(
     lang: Optional[str] = None,
     backend: Optional[str] = None,
     mode: str = DEFAULT_MODE,
+    processing_profile: str = DEFAULT_PROCESSING_PROFILE,
     comments: bool = False,
     export: str = "none",
     no_summary: bool = False,
@@ -102,8 +104,9 @@ def run_pipeline(
     try:
         summary_backend = normalize_backend(backend or cfg.summary_backend)
         analysis_mode = normalize_mode(mode)
+        resolved_processing_profile = normalize_processing_profile(processing_profile)
         export_mode = normalize_export(export)
-    except UserFacingError as exc:
+    except (UserFacingError, ValueError) as exc:
         raise ExitWithCode(ExitCode.USAGE_OR_CONFIG, str(exc)) from exc
 
     if comments:
@@ -113,6 +116,7 @@ def run_pipeline(
             cfg,
             backend=summary_backend,
             analysis_profile=analysis_mode,
+            processing_profile=resolved_processing_profile,
             no_analysis=no_summary,
             generate_frames=generate_frames,
             sample_seconds=sample_seconds,
@@ -133,6 +137,8 @@ def run_pipeline(
         "knowledge_id": package.output_dir.name,
         "output_dir": str(package.output_dir),
         "status": package.manifest.status,
+        "analysis_profile": package.manifest.analysis_profile,
+        "processing_profile": package.manifest.processing_profile,
         "analysis": {
             "status": package.analysis.status if package.analysis else "skipped",
             "provider": package.analysis.provider if package.analysis else "",
@@ -154,6 +160,7 @@ def execute_analyze(
     lang: str | None = None,
     backend: str | None = None,
     mode: str = DEFAULT_MODE,
+    processing_profile: str = DEFAULT_PROCESSING_PROFILE,
     comments: bool = False,
     export: str = "none",
     no_summary: bool = False,
@@ -176,10 +183,16 @@ def execute_analyze(
     resolved_task_id = task_id or uuid.uuid4().hex[:12]
     source_type = "url" if url else "file"
     source = str(url or file or "")
+    try:
+        resolved_processing_profile = normalize_processing_profile(processing_profile)
+    except ValueError as exc:
+        emitter.failure(ExitCode.USAGE_OR_CONFIG, str(exc), task_id=resolved_task_id)
+        return int(ExitCode.USAGE_OR_CONFIG)
     options = {
         "lang": lang,
         "backend": backend,
         "mode": mode,
+        "processing_profile": resolved_processing_profile,
         "comments": comments,
         "export": export,
         "no_summary": no_summary,
@@ -199,6 +212,7 @@ def execute_analyze(
                 task_id=resolved_task_id,
                 source_type=source_type,
                 source=source,
+                processing_profile=resolved_processing_profile,
                 options=options,
                 status="running",
             )
@@ -207,7 +221,14 @@ def execute_analyze(
         emitter.failure(ExitCode.USAGE_OR_CONFIG, str(exc), task_id=resolved_task_id)
         return int(ExitCode.USAGE_OR_CONFIG)
 
-    emitter.event("task_created", task_id=resolved_task_id, resumed=resumed, source_type=source_type)
+    emitter.event(
+        "task_created",
+        task_id=resolved_task_id,
+        resumed=resumed,
+        source_type=source_type,
+        analysis_profile=mode,
+        processing_profile=resolved_processing_profile,
+    )
     try:
         data = run_pipeline(
             url=url,
@@ -215,6 +236,7 @@ def execute_analyze(
             lang=lang,
             backend=backend,
             mode=mode,
+            processing_profile=resolved_processing_profile,
             comments=comments,
             export=export,
             no_summary=no_summary,
@@ -278,6 +300,7 @@ def execute_resume(
         lang=_optional_string(options.get("lang")),
         backend=_optional_string(options.get("backend")),
         mode=str(options.get("mode") or DEFAULT_MODE),
+        processing_profile=record.processing_profile,
         comments=bool(options.get("comments", False)),
         export=str(options.get("export") or "none"),
         no_summary=bool(options.get("no_summary", False)),
@@ -400,6 +423,12 @@ def _run_argparse() -> None:
         default=DEFAULT_MODE,
         help="分析模式：summary / tutorial / viral / close-reading。",
     )
+    parser.add_argument(
+        "--processing-profile",
+        choices=("fast", "complete"),
+        default=DEFAULT_PROCESSING_PROFILE,
+        help="处理模式：fast / complete。v1.4.0 默认 complete，保持既有执行行为。",
+    )
     parser.add_argument("--comments", action="store_true", help="已停用；保留此参数仅用于旧命令兼容。")
     parser.add_argument("--export", choices=SUPPORTED_EXPORTS, default="none", help="导出方式：none / obsidian。")
     parser.add_argument("--no-summary", action="store_true", help="只生成 transcript.md，不调用 LLM。")
@@ -414,6 +443,7 @@ def _run_argparse() -> None:
             lang=args.lang,
             backend=args.backend,
             mode=args.mode,
+            processing_profile=args.processing_profile,
             comments=args.comments,
             export=args.export,
             no_summary=args.no_summary,
@@ -433,6 +463,11 @@ if typer:
         lang: Optional[str] = typer.Option(None, "--lang"),
         backend: Optional[str] = typer.Option(None, "--backend"),
         mode: str = typer.Option(DEFAULT_MODE, "--mode"),
+        processing_profile: str = typer.Option(
+            DEFAULT_PROCESSING_PROFILE,
+            "--processing-profile",
+            help="处理模式：fast / complete。v1.4.0 默认 complete。",
+        ),
         comments: bool = typer.Option(False, "--comments", help="已停用的兼容参数。"),
         export: str = typer.Option("none", "--export"),
         no_summary: bool = typer.Option(False, "--no-summary"),
@@ -448,6 +483,7 @@ if typer:
             lang=lang,
             backend=backend,
             mode=mode,
+            processing_profile=processing_profile,
             comments=comments,
             export=export,
             no_summary=no_summary,
@@ -550,6 +586,11 @@ if typer:
         lang: Optional[str] = typer.Option(None, "--lang"),
         backend: Optional[str] = typer.Option(None, "--backend"),
         mode: str = typer.Option(DEFAULT_MODE, "--mode"),
+        processing_profile: str = typer.Option(
+            DEFAULT_PROCESSING_PROFILE,
+            "--processing-profile",
+            help="旧根级用法兼容；处理模式 fast / complete。",
+        ),
         comments: bool = typer.Option(False, "--comments", help="已停用的兼容参数。"),
         export: str = typer.Option("none", "--export"),
         no_summary: bool = typer.Option(False, "--no-summary"),
@@ -571,6 +612,7 @@ if typer:
             lang=lang,
             backend=backend,
             mode=mode,
+            processing_profile=processing_profile,
             comments=comments,
             export=export,
             no_summary=no_summary,

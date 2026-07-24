@@ -9,8 +9,18 @@ This document describes the implementation that currently exists. Planned work b
 - Formal repository: `E:\AGT\git\video-summary-skill`
 - Stable baseline: `main` (`v1.2.1`)
 - Release commit and tag: `0583a89` / `v1.2.1`
-- Current acceptance branch: `feat/v1.3.1-cupertino-ui`
-- Package version on the acceptance branch: `1.3.1`
+- Current development branch: `feat/v1.4-processing-pipeline`
+- Current implementation unit: `v1.4.0 processing profiles and data contract`
+
+## v1.4.0 processing contract
+
+- CLI accepts `--processing-profile fast|complete`; missing values default to `complete`.
+- `analysis_profile` and `processing_profile` remain separate in CLI results, JSONL lifecycle events, Web jobs, task API payloads, task records, and knowledge manifests.
+- Existing CLI task records, Web job records, and manifests without the new field load as `complete`.
+- The Web new-task form exposes processing mode beside analysis mode and sends `processingProfile`.
+- `ProcessingManifest.stage_metrics` records stage start/completion timestamps, duration, attempt, cache placeholder, and sanitized error fields.
+- `fast` does not skip stages in v1.4.0. Cache-aware subtitle and fast-path behavior remains v1.4.1 work.
+- `--no-frames` remains an independent override and retains existing behavior.
 
 ## v1.3.1 acceptance branch
 

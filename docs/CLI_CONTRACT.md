@@ -46,6 +46,7 @@ Stable options:
 --lang
 --backend
 --mode
+--processing-profile
 --export
 --no-summary
 --no-frames
@@ -55,9 +56,11 @@ Stable options:
 --jsonl
 ```
 
-The deprecated root-level form remains accepted in v1.3 and writes an explicit warning to stderr. `--comments` remains accepted only as a deprecated no-op and is never silent.
+`--processing-profile` accepts `fast` or `complete`. Missing values default to `complete`, so v1.3 commands keep their existing execution behavior. The field is independent from `--mode`: mode selects the analysis shape, while processing profile selects how the pipeline executes. In v1.4.0 both values use the existing stage plan; fast-path stage skipping starts in v1.4.1. `--no-frames` continues to disable frame generation independently.
 
-Successful data includes `task_id`, `knowledge_id`, `output_dir`, task and analysis status, Provider/model, and artifact paths.
+The deprecated root-level form remains accepted and mirrors `--processing-profile` during its compatibility window. `--comments` remains accepted only as a deprecated no-op and is never silent.
+
+Successful data includes `task_id`, `knowledge_id`, `output_dir`, task status, `analysis_profile`, `processing_profile`, analysis status, Provider/model, and artifact paths.
 
 ## inspect
 
@@ -114,4 +117,4 @@ task_failed
 task_completed
 ```
 
-Every event contains `schema_version`, `event`, `task_id`, and `timestamp`. Stage events include `stage`; progress events include a number from `0` through `1`.
+Every event contains `schema_version`, `event`, `task_id`, and `timestamp`. `task_created` includes separate `analysis_profile` and `processing_profile` fields. Stage events include `stage`; completion events may also include `duration_ms`, `attempt`, and `cache_hit`. Progress events include a number from `0` through `1`. Existing v1.3 consumers remain compatible because the event names and required fields are unchanged.

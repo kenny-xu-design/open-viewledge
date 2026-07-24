@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -8,10 +9,11 @@ from ..analysis import AnalysisService
 from ..analysis.profiles import resolve_analysis_profile
 from ..audio import extract_audio
 from ..config import AppConfig
-from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, ProcessingManifest, ProviderAttempt, utc_now
+from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, ProcessingManifest, ProviderAttempt, StageMetric, utc_now
 from ..exporters import export_knowledge_package
 from ..providers.asr import LocalWhisperProvider
 from ..providers.llm import DeepSeekProvider
+from ..processing_profiles import ProcessingProfile
 from ..knowledge_validation import inspect_knowledge_package
 from ..sources import LocalMediaSource, YtdlpSource
 from ..timeline import build_timeline, extract_frames
@@ -30,6 +32,7 @@ class PipelineOrchestrator:
         *,
         backend: str | None = None,
         analysis_profile: str = "summary",
+        processing_profile: ProcessingProfile = "complete",
         no_analysis: bool = False,
         generate_frames: bool | None = None,
         sample_seconds: int | None = None,
@@ -41,6 +44,7 @@ class PipelineOrchestrator:
         self.config = config
         self.backend = backend or config.summary_backend
         self.analysis_profile = analysis_profile
+        self.processing_profile = processing_profile
         self.no_analysis = no_analysis
         self.generate_frames = config.generate_frames if generate_frames is None else generate_frames
         self.sample_seconds = sample_seconds
@@ -57,11 +61,17 @@ class PipelineOrchestrator:
             input_value=input_value,
             output_dir=Path(self.config.output_dir),
             analysis_profile=self.analysis_profile,
+            processing_profile=self.processing_profile,
             no_analysis=self.no_analysis,
             generate_frames=self.generate_frames,
             sample_seconds=self.sample_seconds,
             log_callback=self.log_callback,
-            manifest=ProcessingManifest(task_id=task_id, privacy_mode=False, sample_seconds=self.sample_seconds),
+            manifest=ProcessingManifest(
+                task_id=task_id,
+                privacy_mode=False,
+                sample_seconds=self.sample_seconds,
+                processing_profile=self.processing_profile,
+            ),
         )
         try:
             self._stage(context, "resolve_source", lambda: setattr(context, "source", source_adapter.resolve(input_value)))
@@ -278,6 +288,10 @@ class PipelineOrchestrator:
         assert context.manifest
         stage_index = STAGES.index(name) if name in STAGES else 0
         total_stages = len(STAGES)
+        previous_metric = context.manifest.stage_metrics.get(name)
+        metric = StageMetric(attempt=(previous_metric.attempt + 1) if previous_metric else 1)
+        context.manifest.stage_metrics[name] = metric
+        started = time.perf_counter()
         context.manifest.current_stage = name
         context.manifest.stage_status[name] = "running"
         context.log(f"阶段：{name}")
@@ -286,6 +300,9 @@ class PipelineOrchestrator:
             task_id=context.manifest.task_id,
             stage=name,
             progress=stage_index / total_stages,
+            analysis_profile=context.analysis_profile,
+            processing_profile=context.processing_profile,
+            attempt=metric.attempt,
         )
         self._save_manifest(context)
         try:
@@ -297,15 +314,20 @@ class PipelineOrchestrator:
         except Exception as exc:
             message = sanitize_message(f"阶段 {name} 失败：{exc}")
             context.manifest.errors.append(message)
+            metric.error_code = type(exc).__name__
+            metric.error_message = message
             if name == "run_analysis":
                 context.manifest.stage_status[name] = "failed"
             else:
                 context.manifest.stage_status[name] = "warning" if soft_fail else "failed"
+            self._finish_stage_metric(metric, started)
             self._save_manifest(context)
             if not soft_fail:
                 raise UserFacingError(message) from exc
             context.log(message)
             self._emit("warning", task_id=context.manifest.task_id, stage=name, message=message)
+        else:
+            self._finish_stage_metric(metric, started)
         self._save_manifest(context)
         self._emit(
             "stage_completed",
@@ -313,17 +335,28 @@ class PipelineOrchestrator:
             stage=name,
             status=context.manifest.stage_status[name],
             progress=(stage_index + 1) / total_stages,
+            analysis_profile=context.analysis_profile,
+            processing_profile=context.processing_profile,
+            duration_ms=metric.duration_ms,
+            attempt=metric.attempt,
+            cache_hit=metric.cache_hit,
         )
         self._emit(
             "progress",
             task_id=context.manifest.task_id,
             stage=name,
             progress=(stage_index + 1) / total_stages,
+            processing_profile=context.processing_profile,
         )
 
     def _emit(self, event: str, **payload) -> None:
         if self.event_callback:
             self.event_callback(event, **payload)
+
+    @staticmethod
+    def _finish_stage_metric(metric: StageMetric, started: float) -> None:
+        metric.completed_at = utc_now()
+        metric.duration_ms = max(0, round((time.perf_counter() - started) * 1000))
 
     @staticmethod
     def _save_manifest(context: PipelineContext) -> None:

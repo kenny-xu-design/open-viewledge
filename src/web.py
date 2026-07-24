@@ -30,6 +30,7 @@ from .exporters import export_directory_to_vault, refresh_compatible_export, ren
 from .job_store import Job, JobStore
 from .knowledge_validation import inspect_knowledge_package
 from .note_store import NoteConflictError, NoteStore
+from .processing_profiles import normalize_processing_profile
 from .providers.llm import ProviderRegistry
 from .runtime_tools import runtime_tool_statuses
 from .utils import UserFacingError
@@ -82,6 +83,7 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
 
     backend = str(payload.get("backend") or "deepseek")
     mode = str(payload.get("mode") or "summary")
+    processing_profile = normalize_processing_profile(str(payload.get("processingProfile") or "complete"))
     export = str(payload.get("export") or "none")
     lang = str(payload.get("lang") or "").strip()
 
@@ -96,7 +98,16 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
     command.extend(["--url" if source_type == "url" else "--file", source])
     if lang:
         command.extend(["--lang", lang])
-    command.extend(["--backend", backend, "--mode", mode])
+    command.extend(
+        [
+            "--backend",
+            backend,
+            "--mode",
+            mode,
+            "--processing-profile",
+            processing_profile,
+        ]
+    )
     if payload.get("noFrames"):
         command.append("--no-frames")
     if export != "none":
@@ -127,7 +138,12 @@ def _clean_source_value(value: str) -> str:
 
 def start_job(payload: dict[str, Any]) -> Job:
     command = build_cli_command(payload)
-    job = Job(id=uuid.uuid4().hex[:12], command=command)
+    job = Job(
+        id=uuid.uuid4().hex[:12],
+        command=command,
+        analysis_profile=str(payload.get("mode") or "summary"),
+        processing_profile=normalize_processing_profile(str(payload.get("processingProfile") or "complete")),
+    )
     with JOBS_LOCK:
         JOBS[job.id] = job
         try:
@@ -193,10 +209,18 @@ def _handle_cli_output_line(job: Job, line: str) -> None:
     event = str(payload.get("event"))
     if event == "task_created":
         job.cli_task_id = str(payload.get("task_id") or "")
+        job.analysis_profile = str(payload.get("analysis_profile") or job.analysis_profile)
+        job.processing_profile = normalize_processing_profile(
+            str(payload.get("processing_profile") or job.processing_profile)
+        )
     elif event == "task_completed" and isinstance(payload.get("result"), dict):
         result = payload["result"]
         job.output_dir = str(result.get("output_dir") or "")
         job.knowledge_id = str(result.get("knowledge_id") or "")
+        job.analysis_profile = str(result.get("analysis_profile") or job.analysis_profile)
+        job.processing_profile = normalize_processing_profile(
+            str(result.get("processing_profile") or job.processing_profile)
+        )
     elif event == "task_failed" and isinstance(payload.get("error"), dict):
         job.error = str(payload["error"].get("message") or "")
     stage = str(payload.get("stage") or "")
@@ -317,6 +341,8 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "startedAt": job.started_at,
         "finishedAt": job.finished_at,
         "status": job.status,
+        "analysisProfile": job.analysis_profile,
+        "processingProfile": job.processing_profile,
         "returncode": job.returncode,
         "cliTaskId": job.cli_task_id,
         "logs": job.logs,
@@ -355,6 +381,8 @@ def list_library_items() -> list[dict[str, Any]]:
                 "updatedAt": directory.stat().st_mtime,
                 "hasAnalysis": bool(analysis.get("summary") or analysis.get("highlights") or analysis.get("chapters")),
                 "analysisStatus": inspection.analysis_status,
+                "analysisProfile": manifest.get("analysis_profile") or "summary",
+                "processingProfile": manifest.get("processing_profile") or "complete",
                 "integrity": inspection.level,
                 "integrityIssues": [issue.message for issue in inspection.issues[:5]],
                 "chapterCount": _timeline_count(directory),
@@ -379,6 +407,9 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
             "error": "知识包中的 analysis.json 无效，请运行 CLI inspect 查看详情。",
         }
     manifest_view = dict(manifest)
+    manifest_view.setdefault("analysis_profile", "summary")
+    manifest_view.setdefault("processing_profile", "complete")
+    manifest_view.setdefault("stage_metrics", {})
     if inspection.level == "invalid" and str(manifest_view.get("status") or "").startswith("completed"):
         manifest_view["status"] = "invalid"
         manifest_view["errors"] = [
@@ -1298,6 +1329,15 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div class="grid-2">
           <div class="field">
+            <label>处理模式</label>
+            <select id="processingProfile">
+              <option value="complete">complete（兼容完整流程）</option>
+              <option value="fast">fast（v1.4.0 仅记录契约）</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field">
             <label>字幕语言</label>
             <select id="lang">
               <option value="">默认 zh</option>
@@ -1356,6 +1396,7 @@ INDEX_HTML = r"""<!doctype html>
         source: $("source").value.trim(),
         backend: $("backend").value,
         mode: $("mode").value,
+        processingProfile: $("processingProfile").value,
         lang: $("lang").value,
         export: $("exportMode").value,
         noFrames: $("noFrames").checked,

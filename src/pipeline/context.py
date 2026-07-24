@@ -7,6 +7,7 @@ from typing import Any
 
 from ..config import AppConfig
 from ..domain.models import AnalysisResult, ProcessingManifest, SourceRecord, TimelineEntry, TranscriptGroup, TranscriptSegment
+from ..processing_profiles import ProcessingProfile
 
 
 LogCallback = Callable[[str], None]
@@ -18,6 +19,7 @@ class PipelineContext:
     input_value: str
     output_dir: Path
     analysis_profile: str
+    processing_profile: ProcessingProfile = "complete"
     no_analysis: bool = False
     generate_frames: bool = True
     sample_seconds: int | None = None

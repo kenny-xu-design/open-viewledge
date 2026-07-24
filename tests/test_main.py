@@ -58,6 +58,34 @@ class MainPipelineTests(unittest.TestCase):
         self.assertEqual(context.exception.code, 1)
         self.assertIn("处理失败", context.exception.message)
 
+    def test_processing_profile_is_separate_from_analysis_profile(self) -> None:
+        package = SimpleNamespace(
+            output_dir=Path("output/demo"),
+            manifest=ProcessingManifest(
+                task_id="task",
+                status="completed",
+                analysis_profile="tutorial",
+                processing_profile="fast",
+            ),
+            analysis=AnalysisResult(status="skipped", analysis_profile="tutorial"),
+        )
+        with (
+            patch("src.main.load_config", return_value=AppConfig()),
+            patch("src.main.PipelineOrchestrator") as orchestrator,
+        ):
+            orchestrator.return_value.run.return_value = package
+            result = run_pipeline(
+                url="https://example.com/video",
+                mode="tutorial",
+                processing_profile="fast",
+                no_summary=True,
+            )
+
+        self.assertEqual(result["analysis_profile"], "tutorial")
+        self.assertEqual(result["processing_profile"], "fast")
+        self.assertEqual(orchestrator.call_args.kwargs["analysis_profile"], "tutorial")
+        self.assertEqual(orchestrator.call_args.kwargs["processing_profile"], "fast")
+
 
 if __name__ == "__main__":
     unittest.main()

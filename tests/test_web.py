@@ -27,6 +27,7 @@ from src.web import (
     list_library_items,
     load_knowledge_package,
     load_transcript_groups,
+    job_to_dict,
     resolve_library_file,
     runtime_status_payload,
     _timestamp_seconds,
@@ -97,6 +98,8 @@ class WebCommandTests(unittest.TestCase):
                 "deepseek",
                 "--mode",
                 "viral",
+                "--processing-profile",
+                "complete",
                 "--export",
                 "obsidian",
                 "--jsonl",
@@ -152,6 +155,8 @@ class WebCommandTests(unittest.TestCase):
                 "deepseek",
                 "--mode",
                 "summary",
+                "--processing-profile",
+                "complete",
                 "--no-summary",
                 "--jsonl",
             ],
@@ -201,6 +206,47 @@ class WebCommandTests(unittest.TestCase):
         )
 
         self.assertEqual(command[-3:], ["--sample-seconds", "30", "--jsonl"])
+
+    def test_build_command_accepts_fast_processing_profile(self) -> None:
+        command = build_cli_command(
+            {
+                "sourceType": "url",
+                "source": "https://example.com/video",
+                "backend": "deepseek",
+                "mode": "summary",
+                "processingProfile": "fast",
+                "noFrames": True,
+            },
+            python_executable=r"C:\test\.venv\Scripts\python.exe",
+        )
+
+        profile_index = command.index("--processing-profile")
+        self.assertEqual(command[profile_index + 1], "fast")
+        self.assertIn("--no-frames", command)
+
+    def test_build_command_rejects_invalid_processing_profile(self) -> None:
+        with self.assertRaisesRegex(ValueError, "processing_profile"):
+            build_cli_command(
+                {
+                    "sourceType": "url",
+                    "source": "https://example.com/video",
+                    "processingProfile": "turbo",
+                },
+                python_executable=r"C:\test\.venv\Scripts\python.exe",
+            )
+
+    def test_job_api_payload_exposes_separate_profiles(self) -> None:
+        payload = job_to_dict(
+            Job(
+                id="job",
+                command=[],
+                analysis_profile="tutorial",
+                processing_profile="fast",
+            )
+        )
+
+        self.assertEqual(payload["analysisProfile"], "tutorial")
+        self.assertEqual(payload["processingProfile"], "fast")
 
     def test_rejects_retired_backend(self) -> None:
         with self.assertRaisesRegex(ValueError, "只能是 deepseek"):
@@ -262,6 +308,7 @@ class WebLibraryTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in items], ["demo"])
         self.assertEqual(items[0]["status"], "partial")
+        self.assertEqual(items[0]["processingProfile"], "complete")
 
     def test_detail_omits_private_local_path_and_tolerates_missing_analysis(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -275,6 +322,8 @@ class WebLibraryTests(unittest.TestCase):
         self.assertEqual(detail["analysis"]["status"], "failed")
         self.assertEqual(detail["status"], "partial")
         self.assertEqual(detail["inspection"]["analysis_status"], "invalid")
+        self.assertEqual(detail["manifest"]["processing_profile"], "complete")
+        self.assertEqual(detail["manifest"]["stage_metrics"], {})
 
     def test_grouped_transcript_is_parsed_without_loading_raw_transcript(self) -> None:
         with TemporaryDirectory() as temp_dir:

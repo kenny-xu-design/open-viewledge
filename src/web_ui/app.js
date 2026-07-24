@@ -1252,6 +1252,7 @@ async function submitTask(event) {
     source: $("#taskSource").value,
     backend: $("#taskBackend").value,
     mode: $("#taskMode").value,
+    processingProfile: $("#taskProcessingProfile").value,
     lang: $("#taskLanguage").value,
     export: $("#taskExport").value,
     noFrames: !$("#taskFrames").checked,

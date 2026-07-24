@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from .cli_contract import TASK_SCHEMA_VERSION, utc_timestamp
+from .processing_profiles import ProcessingProfile
 from .schema_compat import require_supported_schema
 from .utils import UserFacingError
 
@@ -19,6 +20,7 @@ class CliTaskRecord(BaseModel):
     status: Literal["created", "running", "completed", "failed", "cancelled"] = "created"
     source_type: Literal["url", "file"]
     source: str
+    processing_profile: ProcessingProfile = "complete"
     options: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=utc_timestamp)
     updated_at: str = Field(default_factory=utc_timestamp)

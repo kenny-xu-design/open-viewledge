@@ -16,6 +16,8 @@ class JobStoreTests(unittest.TestCase):
             job = Job(
                 id="job-1",
                 command=["python", "-m", "src.main"],
+                analysis_profile="tutorial",
+                processing_profile="fast",
                 status="success",
                 knowledge_id="demo",
                 output_dir="output/demo",
@@ -29,6 +31,8 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(reloaded[0].knowledge_id, "demo")
         self.assertEqual(reloaded[0].status, "success")
         self.assertEqual(reloaded[0].logs, ["完成"])
+        self.assertEqual(reloaded[0].analysis_profile, "tutorial")
+        self.assertEqual(reloaded[0].processing_profile, "fast")
 
     def test_running_job_becomes_interrupted_after_restart(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -55,6 +59,23 @@ class JobStoreTests(unittest.TestCase):
             path = Path(temp_dir) / "web_jobs.json"
             path.write_text('{"schema_version":"2.0","jobs":[]}', encoding="utf-8")
             with self.assertRaisesRegex(UserFacingError, "不支持"):
+                JobStore(path).load_jobs()
+
+    def test_legacy_web_job_defaults_to_complete_and_invalid_profile_fails(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "web_jobs.json"
+            path.write_text(
+                '{"schema_version":"1.0","jobs":[{"id":"legacy","command":["python"],"status":"success"}]}',
+                encoding="utf-8",
+            )
+            legacy = JobStore(path).load_jobs()[0]
+            self.assertEqual(legacy.processing_profile, "complete")
+
+            path.write_text(
+                '{"schema_version":"1.0","jobs":[{"id":"bad","command":["python"],"processing_profile":"turbo"}]}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(UserFacingError, "任务记录损坏"):
                 JobStore(path).load_jobs()
 
 

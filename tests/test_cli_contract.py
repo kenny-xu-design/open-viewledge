@@ -84,7 +84,10 @@ class ExitCodeContractTests(unittest.TestCase):
 
 class SchemaCompatibilityTests(unittest.TestCase):
     def test_legacy_missing_versions_use_safe_defaults(self) -> None:
-        self.assertEqual(ProcessingManifest.model_validate({"task_id": "task"}).schema_version, "1.0")
+        manifest = ProcessingManifest.model_validate({"task_id": "task"})
+        self.assertEqual(manifest.schema_version, "1.0")
+        self.assertEqual(manifest.processing_profile, "complete")
+        self.assertEqual(manifest.stage_metrics, {})
         self.assertEqual(AppConfig.model_validate({"unknown_future_field": True}).schema_version, "1.0")
 
     def test_unknown_fields_are_ignored_in_same_major_version(self) -> None:
@@ -123,6 +126,23 @@ class CliTaskStoreTests(unittest.TestCase):
             restored = store.load("task-1")
         self.assertEqual(restored.task_id, "task-1")
         self.assertEqual(restored.schema_version, "1.0")
+        self.assertEqual(restored.processing_profile, "complete")
+
+    def test_task_processing_profile_accepts_valid_and_rejects_invalid_values(self) -> None:
+        record = CliTaskRecord(
+            task_id="task",
+            source_type="url",
+            source="https://example.com",
+            processing_profile="fast",
+        )
+        self.assertEqual(record.processing_profile, "fast")
+        with self.assertRaises(ValueError):
+            CliTaskRecord(
+                task_id="task",
+                source_type="url",
+                source="https://example.com",
+                processing_profile="turbo",
+            )
 
     def test_future_task_schema_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -154,6 +174,23 @@ class PublicCommandTests(unittest.TestCase):
         for command in ("analyze", "resume"):
             result = self.runner.invoke(app, [command, "--help"])
             self.assertIn("--jsonl", result.stdout, command)
+        self.assertIn("--processing-profile", self.runner.invoke(app, ["analyze", "--help"]).stdout)
+
+    def test_analyze_rejects_invalid_processing_profile(self) -> None:
+        result = self.runner.invoke(
+            app,
+            [
+                "analyze",
+                "--url",
+                "https://example.com/video",
+                "--processing-profile",
+                "turbo",
+                "--json",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, int(ExitCode.USAGE_OR_CONFIG))
+        self.assertIn("processing_profile", json.loads(result.stdout)["error"]["message"])
 
     def test_config_supports_json_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -185,6 +222,8 @@ class PublicCommandTests(unittest.TestCase):
             "knowledge_id": "demo",
             "output_dir": "output/demo",
             "status": "completed",
+            "analysis_profile": "summary",
+            "processing_profile": "complete",
             "analysis": {"status": "skipped", "provider": "", "model": ""},
             "artifacts": {},
         }
@@ -196,8 +235,11 @@ class PublicCommandTests(unittest.TestCase):
                 )
                 records = list(Path(temp).glob("*.json"))
         self.assertEqual(result.exit_code, 0)
-        events = [json.loads(line)["event"] for line in result.stdout.splitlines()]
-        self.assertEqual(events, ["task_created", "task_completed"])
+        payloads = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([item["event"] for item in payloads], ["task_created", "task_completed"])
+        self.assertEqual(payloads[0]["analysis_profile"], "summary")
+        self.assertEqual(payloads[0]["processing_profile"], "complete")
+        self.assertEqual(payloads[1]["result"]["processing_profile"], "complete")
         self.assertEqual(len(records), 1)
 
     def test_legacy_root_analyze_usage_remains_supported_with_warning(self) -> None:
@@ -234,6 +276,7 @@ class PublicCommandTests(unittest.TestCase):
                     status="failed",
                     source_type="url",
                     source="https://example.com/video",
+                    processing_profile="fast",
                     options={"mode": "tutorial", "no_summary": True, "config": "config.example.json"},
                 )
             )
@@ -244,6 +287,7 @@ class PublicCommandTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["command"], "resume")
         self.assertEqual(restored.status, "completed")
         self.assertEqual(run.call_args.kwargs["mode"], "tutorial")
+        self.assertEqual(run.call_args.kwargs["processing_profile"], "fast")
 
     def test_real_process_json_exit_code_and_stream_separation(self) -> None:
         project_root = Path(__file__).resolve().parents[1]

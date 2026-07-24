@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..processing_profiles import ProcessingProfile
 from ..schema_compat import require_supported_schema
 
 
@@ -146,6 +147,16 @@ class ProviderAttempt(BaseModel):
     error_message: str = ""
 
 
+class StageMetric(BaseModel):
+    started_at: str = Field(default_factory=utc_now)
+    completed_at: str = ""
+    duration_ms: int = Field(default=0, ge=0)
+    attempt: int = Field(default=1, ge=1)
+    cache_hit: bool = False
+    error_code: str = ""
+    error_message: str = ""
+
+
 class ProcessingManifest(BaseModel):
     schema_version: str = "1.0"
     task_id: str
@@ -164,9 +175,11 @@ class ProcessingManifest(BaseModel):
     analysis_error: str = ""
     prompt_version: str = "1"
     analysis_profile: str = "summary"
+    processing_profile: ProcessingProfile = "complete"
     errors: list[str] = Field(default_factory=list)
     output_files: list[str] = Field(default_factory=list)
     stage_status: dict[str, str] = Field(default_factory=dict)
+    stage_metrics: dict[str, StageMetric] = Field(default_factory=dict)
     provider_attempts: list[ProviderAttempt] = Field(default_factory=list)
 
     @field_validator("schema_version")

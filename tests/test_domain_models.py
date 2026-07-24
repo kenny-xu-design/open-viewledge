@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.domain.models import AnalysisResult, ProcessingManifest, SourceRecord, TranscriptGroup, TranscriptSegment
+from src.domain.models import AnalysisResult, ProcessingManifest, SourceRecord, StageMetric, TranscriptGroup, TranscriptSegment
 from src.main import normalize_backend
 from src.pipeline.context import PipelineContext
 from src.config import AppConfig
@@ -36,6 +36,28 @@ class DomainModelTests(unittest.TestCase):
         self.assertEqual(manifest.stage_status["resolve_source"], "completed")
         self.assertEqual(manifest.sample_seconds, 30)
         self.assertEqual(manifest.analysis_status, "skipped")
+        self.assertEqual(manifest.processing_profile, "complete")
+        self.assertEqual(manifest.stage_metrics, {})
+
+    def test_manifest_processing_profile_and_stage_metric_contract(self) -> None:
+        manifest = ProcessingManifest(
+            task_id="task",
+            processing_profile="fast",
+            stage_metrics={
+                "resolve_source": StageMetric(
+                    duration_ms=12,
+                    attempt=1,
+                    cache_hit=False,
+                    error_code="",
+                    error_message="",
+                )
+            },
+        )
+
+        self.assertEqual(manifest.processing_profile, "fast")
+        self.assertEqual(manifest.stage_metrics["resolve_source"].duration_ms, 12)
+        with self.assertRaises(ValueError):
+            ProcessingManifest(task_id="task", processing_profile="turbo")
 
     def test_only_deepseek_backend_is_active(self) -> None:
         self.assertEqual(normalize_backend(None), "deepseek")
