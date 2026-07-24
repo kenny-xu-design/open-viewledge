@@ -2,7 +2,7 @@
 
 `video-summary-skill` 是一个本地优先的视频与音频知识提取工具。它把用户提供的本地媒体或公开在线视频转换为带时间戳、可追溯的知识包，并提供 Web 浏览和基于当前知识包字幕的 AI 对话。
 
-当前稳定版本为 `1.2.1`；`feat/v1.3-agent-cli` 的开发版本为 `1.3.0`，正在固定 Agent 与 CLI 调用契约。范围仍不包含 Scale 或 SaaS。
+当前稳定版本为 `1.2.1`；`feat/v1.3.1-cupertino-ui` 的验收版本为 `1.3.1`，已完成 Agent/CLI 契约、Web 工作台外壳、知识记录删除、预览时间戳和本地视频比例控制的功能验收实现。范围仍不包含 Scale 或 SaaS。
 
 ## 当前能力
 
@@ -40,7 +40,7 @@ knowledge_id
 - `summary`、`tutorial`、`viral`、`close-reading` 分析模式。
 - DeepSeek 结构化分析及 Pydantic 校验。
 - 标准知识包、时间轴、关键帧和兼容 Markdown 输出。
-- 三栏 Web 工作台、本地媒体播放、YouTube 官方 IFrame 预览和 B站官方 iframe 预览。
+- AppShell Web 工作台、本地媒体播放、YouTube 官方 IFrame 预览和 B站官方 iframe 预览。
 - 基于当前知识包字幕的真实 AI 对话、时间戳引用和按知识包保存的 `chat.json`。
 - 按知识包原子保存的 `user_notes.md`，以及包含用户笔记的 `export_note.md`。
 - 可在服务重启后恢复的本地 Web 任务历史；未完成进程会标记为 `interrupted`。
@@ -49,7 +49,6 @@ knowledge_id
 
 - Gemini 关键帧图片请求和独立服务边界已实现并通过 mock 测试，但尚未接入默认 CLI/Web 产品流程，也未使用真实 API 验证。
 - Obsidian 目前仅提供兼容 Markdown 文件，不具备 Vault 同步或双向管理。
-- B站官方 iframe 不提供本项目可依赖的可靠播放时间控制。
 
 评论区分析已经停用，不属于当前产品功能。
 
@@ -311,7 +310,9 @@ Web 当前支持：
 
 笔记编辑区在停止输入 800 ms 后保存，切换知识包前也会尝试完成保存。保存笔记时会同步刷新 `export_note.md`。
 
-B站预览使用官方 iframe。应用不会声称可以可靠控制其播放时间；点击摘要、字幕或聊天引用中的时间戳时，会改为在原网站打开对应时间链接。
+B站预览使用官方 iframe。点击摘要、字幕或聊天引用中的时间戳时，Web UI 会在原预览区域用当前 `bvid`、`p` 等参数重载 iframe，并更新 `t=<秒数>`；外部原视频链接保留为单独操作。
+
+本地视频预览默认使用原始比例和 `object-fit: contain`。播放器工具栏可切换原始比例、16:9、4:3、1:1、9:16，以及适应/填充显示模式；切换不会主动重置播放时间或暂停状态。
 
 “重新生成摘要”仅在分析失败或知识包分析状态异常时显示。使用前需在项目 `.env` 中配置 `DEEPSEEK_API_KEY`；重试不会重新下载媒体、提取字幕或生成关键帧。
 
@@ -319,7 +320,7 @@ B站预览使用官方 iframe。应用不会声称可以可靠控制其播放时
 
 `summary` 使用公共摘要结构；`tutorial` 在可靠内容存在时增加前置条件、操作步骤、关键术语、可执行动作和注意事项。Profile 统一按“用户显式选择 → 知识包已有值 → 自动识别 → summary”解析，识别失败不会导致任务失败。
 
-时间戳由统一模块格式化并生成平台链接：YouTube 和 B站链接保留既有查询参数并替换 `t`；本地媒体由 Web 播放器使用原始秒数 seek。B站 iframe 仍不承诺可靠程序化同步。
+时间戳由统一模块格式化并生成平台链接：YouTube 和 B站链接保留既有查询参数并替换 `t`；Web 预览内点击时间戳统一进入 `seekPreview(seconds)`，本地媒体使用 `currentTime`，YouTube 使用 IFrame API，B站在原预览区域重载带 `t=<秒数>` 的 iframe。
 
 导出产物是普通 UTF-8 `.md` 文件；`.obsidian` 是 Vault 配置目录，程序不会写入其中。下载 Markdown 不要求安装 Obsidian。Vault 直接写入仅适用于本地部署，服务端只读取本地配置，前端不能提交任意路径。首版组合导出支持摘要、AI 对话和原始用户笔记；关键帧只读取既有产物，不重新调用模型。
 
@@ -419,7 +420,7 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 .\.venv\Scripts\python.exe -m src.web --help
 ```
 
-当前 `v1.2.1` 基线包含 147 项单元测试。相较 v1.1，活动管线覆盖保持，并新增了持久化、导出、版本和 Gemini 图片请求测试；旧适配器与 Ollama 路线测试已随停用代码删除。
+当前 `v1.3.1` 验收分支的 Web UI/API 聚焦测试为 78 项，覆盖 AppShell、Sidebar、Inspector、Divider、预览时间戳、本地视频比例和知识记录删除等行为。v1.2.1 基线包含 147 项单元测试；发布前仍需重新运行全量 `unittest discover`、`compileall`、`node --check` 和人工浏览器矩阵。
 
 ## 项目文档
 
@@ -432,7 +433,7 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 
 ## 已知限制
 
-- B站官方 iframe 无可靠的程序化时间跳转和播放同步。
+- B站官方 iframe 通过重载 `t=<秒数>` 实现预览区时间戳跳转；实际播放行为仍受官方播放器嵌入能力限制。
 - Gemini 关键帧图片输入仅完成 Provider 与服务边界的 mock 验证，尚未进行真实 API 验证，也未形成可操作的视觉分析产品流程。
 - Obsidian 仅为兼容 Markdown 导出，不是 Vault 数据层。
 - 通用网页正文采集尚未实现；当前 URL 输入面向 `yt-dlp` 支持的视频平台。

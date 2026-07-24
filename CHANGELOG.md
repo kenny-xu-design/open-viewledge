@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased] - 1.3.0
+## [Unreleased] - 1.3.1
 
 ### Added
 
@@ -12,6 +12,11 @@ All notable changes to this project are documented in this file.
 - Doctor checks for runtime tools, local models, Providers, storage, and Schema versions.
 - Explicit Schema compatibility rules for configuration, tasks, manifests, analysis, and export requests.
 - CLI contract, exit-code, Schema, lifecycle, migration, release, security, and privacy documentation.
+- Cupertino AppShell structure with unified Sidebar, Toolbar, primary content region, and responsive Inspector shell.
+- Accessible Sidebar, Inspector, and split-view divider behavior, including focus return and keyboard resizing.
+- Unified `seekPreview(seconds)` handling for local media, YouTube, and Bilibili preview timestamp clicks.
+- Local video display ratio controls for original, 16:9, 4:3, 1:1, and 9:16, with fit/fill display modes.
+- Safer knowledge-record deletion with path validation, recursive directory handling, clearer API errors, and regression tests.
 
 ### Changed
 
@@ -19,6 +24,14 @@ All notable changes to this project are documented in this file.
 - Agent Skill now documents only public CLI usage and result/error handling.
 - Pipeline and local Whisper diagnostics are routed to stderr while stdout remains machine-readable.
 - Root-level analyze options remain as an explicitly deprecated compatibility path.
+- Web UI layout now uses one AppShell generation instead of the legacy competing three/four-column layout rules.
+- Bilibili timestamp clicks stay inside the preview area by reloading the embedded player URL instead of opening the original source link.
+
+### Verification
+
+- Focused Web UI/API tests pass: `python -m unittest tests.test_web_ui tests.test_web` reports 78 tests.
+- `node --check src/web_ui/app.js` and `git diff --check` were used during the v1.3.1 implementation pass.
+- Full release verification and manual browser acceptance remain required before tagging or merging.
 
 ## [1.2.1] - 2026-07-20
 

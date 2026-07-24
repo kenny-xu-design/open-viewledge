@@ -1,6 +1,6 @@
 # Current State
 
-Last verified: 2026-07-20
+Last verified: 2026-07-24
 
 This document describes the implementation that currently exists. Planned work belongs in `ROADMAP.md`.
 
@@ -9,8 +9,22 @@ This document describes the implementation that currently exists. Planned work b
 - Formal repository: `E:\AGT\git\video-summary-skill`
 - Stable baseline: `main` (`v1.2.1`)
 - Release commit and tag: `0583a89` / `v1.2.1`
-- Development branch: `feat/v1.3-agent-cli`
-- Package version on the development branch: `1.3.0`
+- Current acceptance branch: `feat/v1.3.1-cupertino-ui`
+- Package version on the acceptance branch: `1.3.1`
+
+## v1.3.1 acceptance branch
+
+- The branch includes the v1.3 Agent and CLI contract work plus Web UI acceptance fixes.
+- Web UI uses an AppShell structure with Sidebar, Toolbar, primary content, and responsive Inspector.
+- Legacy competing layout rules for the old multi-column workspace were removed or neutralized during the UI work.
+- Sidebar and Inspector controls expose expanded/current state, Escape close behavior, and focus return.
+- Split-view dividers expose separator semantics and support pointer and keyboard resizing.
+- Inspector width is clamped against viewport, main-content minimum width, and Inspector minimum width; saved widths are corrected on resize.
+- Preview timestamp clicks use `seekPreview(seconds)`: local media seeks with `currentTime`, YouTube uses the IFrame player, and Bilibili reloads the existing preview iframe with `t=<seconds>`.
+- Local video preview supports original, 16:9, 4:3, 1:1, and 9:16 ratio display with fit/fill modes.
+- Knowledge-record deletion validates package paths before deletion, uses recursive directory deletion for non-empty packages, returns clearer errors, and avoids removing database records before filesystem deletion succeeds.
+- Focused verification on this branch: `python -m unittest tests.test_web_ui tests.test_web` passes with 78 tests.
+- Full release verification and manual browser matrix acceptance remain open before merge/tag/release.
 
 ## v1.3 Agent and CLI contract
 
@@ -24,7 +38,7 @@ This document describes the implementation that currently exists. Planned work b
 - Configuration, task, manifest, analysis, and export request Schemas have explicit compatibility checks.
 - A real local video completed a 30-second no-LLM Agent CLI flow and passed `inspect`.
 - A real external-tool failure was repaired and resumed with the same task ID.
-- Latest verification: 170 unit tests plus compile/help/JavaScript checks all pass.
+- Latest v1.3 Agent/CLI verification: 170 unit tests plus compile/help/JavaScript checks passed on the earlier `feat/v1.3-agent-cli` handoff.
 - `doctor --json` is healthy on the audited machine: 11 checks pass, with optional warnings for unconfigured Gemini and Obsidian only.
 
 ## v1.2.1 export increment
@@ -181,7 +195,7 @@ CLI `inspect` reports existing package anomalies without mutating them. Web pack
 
 Implemented:
 
-- Three-pane knowledge workspace.
+- AppShell knowledge workspace with Sidebar, Toolbar, primary content, and Inspector.
 - Knowledge-package library.
 - URL and local path processing tasks.
 - Runtime Python reporting.
@@ -189,12 +203,12 @@ Implemented:
 - YouTube official IFrame API preview.
 - Bilibili official iframe preview.
 - Summary, chapter, timeline, transcript, and frame display.
-- Configurable pane order and widths.
+- Configurable pane order and clamped widths.
 - Grounded AI chat.
 
 Limitations:
 
-- Bilibili iframe playback cannot be reliably controlled or synchronized by the application.
+- Bilibili preview timestamp jumps are implemented by reloading the official iframe with `t=<seconds>`; final playback behavior still depends on the embedded player.
 - Some online videos prohibit embedding and fall back to the external source.
 - Frame capture API returns `501`.
 
@@ -270,4 +284,5 @@ Implemented:
 
 - A browser closed before its final keepalive request is accepted can leave the latest keystrokes unsaved; normal edits are persisted after 800 ms.
 - The local JSON job store is intentionally single-process and is not a Scale queue.
+- Manual viewport/theme/zoom browser acceptance is still pending for the v1.3.1 UI branch.
 - Archived documents can describe retired routes and must not be treated as current specifications.

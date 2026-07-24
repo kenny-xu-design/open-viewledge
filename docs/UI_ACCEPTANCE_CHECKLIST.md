@@ -2,9 +2,9 @@
 
 Status: v1.3.1 implementation gate
 
-Last updated: 2026-07-21
+Last updated: 2026-07-24
 
-This checklist converts the design and motion documents into verifiable release criteria. In this first work unit, only the documentation-baseline section is expected to pass. Unchecked implementation items belong to later work units.
+This checklist converts the design and motion documents into verifiable release criteria. Work Unit 4 implementation and the focused v1.3.1 acceptance fixes have been completed on `feat/v1.3.1-cupertino-ui`; unchecked items below still require full manual review or release-gate confirmation.
 
 ## Work Unit 1: Audit and Specification
 
@@ -19,20 +19,20 @@ This checklist converts the design and motion documents into verifiable release 
 
 ## Scope Protection for Later UI Work
 
-- [ ] API paths, request bodies, response fields, and task lifecycle meanings remain unchanged unless separately approved.
-- [ ] Existing knowledge-package rendering and persistence behavior remains intact.
-- [ ] Existing element IDs required by JavaScript/tests are preserved or migrated with tests in the same work unit.
-- [ ] API Keys and private paths remain absent from frontend storage and rendered payloads.
-- [ ] A UI refactor does not silently broaden v1.3.1 into v1.4 queue or v1.5 account/provider work.
+- [x] API paths, request bodies, response fields, and task lifecycle meanings remain unchanged unless separately approved.
+- [x] Existing knowledge-package rendering and persistence behavior remains intact.
+- [x] Existing element IDs required by JavaScript/tests are preserved or migrated with tests in the same work unit.
+- [x] API Keys and private paths remain absent from frontend storage and rendered payloads.
+- [x] A UI refactor does not silently broaden v1.3.1 into v1.4 queue or v1.5 account/provider work.
 
 ## Architecture
 
-- [ ] One authoritative AppShell layout replaces the two competing CSS layout generations.
-- [ ] Wide desktop provides a usable Sidebar, primary content region, and Inspector without compressing reading surfaces.
-- [ ] Medium layouts disclose Sidebar and Inspector independently.
-- [ ] Compact layouts show one clear primary pane and use an accessible navigation control.
-- [ ] Split views restore saved widths safely and provide a reset action.
-- [ ] Source order remains logical when visual module order changes.
+- [x] One authoritative AppShell layout replaces the two competing CSS layout generations.
+- [x] Wide desktop provides a usable Sidebar, primary content region, and Inspector without compressing reading surfaces.
+- [x] Medium layouts disclose Sidebar and Inspector independently.
+- [x] Compact layouts show one clear primary pane and use an accessible navigation control.
+- [x] Split views restore saved widths safely and provide a reset action.
+- [x] Source order remains logical when visual module order changes.
 
 ## Visual Tokens
 
@@ -55,7 +55,7 @@ This checklist converts the design and motion documents into verifiable release 
 
 ## Component Consolidation
 
-- [ ] `IconButton` covers sizes, accessible labels, pressed, disabled, hover, and focus states.
+- [x] `IconButton` covers sizes, accessible labels, pressed, disabled, hover, and focus states.
 - [ ] Primary, secondary, destructive, and borderless Buttons share one state model.
 - [ ] Tabs and segmented controls share keyboard and selection behavior.
 - [ ] Sidebar rows and list rows share selection, status, and destructive-selection behavior.
@@ -90,10 +90,10 @@ This checklist converts the design and motion documents into verifiable release 
 
 - [ ] Every control has an accessible name and explicit button type where relevant.
 - [ ] Tab sets implement `tablist`, `tab`, `tabpanel`, `aria-controls`, roving `tabindex`, and Arrow-key navigation.
-- [ ] Sidebar and Inspector triggers expose `aria-controls` and `aria-expanded`.
-- [ ] Sheet/drawer focus enters predictably, is contained when modal, and returns to its trigger.
+- [x] Sidebar and Inspector triggers expose `aria-controls` and `aria-expanded`.
+- [x] Sheet/drawer focus enters predictably, is contained when modal, and returns to its trigger.
 - [ ] Dialogs have programmatic names and preserve native Escape/focus behavior.
-- [ ] Split-view dividers support keyboard resizing and expose orientation, current value, minimum, and maximum.
+- [x] Split-view dividers support keyboard resizing and expose orientation, current value, minimum, and maximum.
 - [ ] Dynamic task, save, error, and provider states are announced without excessive repetition.
 - [ ] Focus indicators are visible in light, dark, and high-contrast modes.
 - [ ] Touch targets are at least `44×44px` in touch layouts; compact desktop controls retain adequate separation.
@@ -116,11 +116,11 @@ For every viewport confirm: no unintended horizontal scrolling, no clipped focus
 
 ## Automated Verification
 
-- [ ] Existing Web UI contract tests pass.
-- [ ] Existing Web API tests pass.
+- [x] Existing Web UI contract tests pass.
+- [x] Existing Web API tests pass.
 - [ ] Full unit suite passes.
-- [ ] `node --check src/web_ui/app.js` passes.
-- [ ] `git diff --check` passes.
+- [x] `node --check src/web_ui/app.js` passes.
+- [x] `git diff --check` passes.
 - [ ] Tests cover theme token presence, reduced-motion integration, forbidden motion patterns, and accessible tab contracts.
 - [ ] Browser tests cover Sidebar/Sheet focus, keyboard tabs, dialog close/focus return, keyboard split resizing, and compact navigation.
 - [ ] Visual regression snapshots cover the viewport/theme matrix after the visual implementation stabilizes.
