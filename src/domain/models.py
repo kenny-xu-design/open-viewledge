@@ -180,6 +180,10 @@ class ProcessingManifest(BaseModel):
     output_files: list[str] = Field(default_factory=list)
     stage_status: dict[str, str] = Field(default_factory=dict)
     stage_metrics: dict[str, StageMetric] = Field(default_factory=dict)
+    cache_keys: dict[str, str] = Field(default_factory=dict)
+    first_readable_result_at: str = ""
+    first_readable_result_duration_ms: int | None = Field(default=None, ge=0)
+    full_completion_duration_ms: int | None = Field(default=None, ge=0)
     provider_attempts: list[ProviderAttempt] = Field(default_factory=list)
 
     @field_validator("schema_version")

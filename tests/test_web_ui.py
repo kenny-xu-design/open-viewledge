@@ -423,6 +423,13 @@ class WebUiContractTests(unittest.TestCase):
         self.assertRegex(self.html, r'id="captureNote"[^>]*disabled')
         self.assertIn("Obsidian 兼容 Markdown", self.html)
 
+    def test_processing_profile_is_exposed_separately_from_analysis_mode(self) -> None:
+        self.assertIn('id="taskMode"', self.html)
+        self.assertIn('id="taskProcessingProfile"', self.html)
+        self.assertIn('<option value="complete">complete（完整兼容）</option>', self.html)
+        self.assertIn('<option value="fast">fast（优先文本）</option>', self.html)
+        self.assertIn('processingProfile: $("#taskProcessingProfile").value', self.js)
+
     def test_bilibili_timestamp_seek_reloads_the_embedded_player(self) -> None:
         self.assertIn("function syncMediaControls()", self.js)
         self.assertIn("mediaController instanceof BilibiliEmbedController", self.js)

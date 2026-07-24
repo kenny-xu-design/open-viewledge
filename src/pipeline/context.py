@@ -34,7 +34,15 @@ class PipelineContext:
     analysis: AnalysisResult | None = None
     manifest: ProcessingManifest | None = None
     previous_manifest: dict[str, Any] = field(default_factory=dict)
+    cache_hits: set[str] = field(default_factory=set)
+    skipped_stages: set[str] = field(default_factory=set)
 
     def log(self, message: str) -> None:
         if self.log_callback:
             self.log_callback(message)
+
+    def mark_cache_hit(self, stage: str) -> None:
+        self.cache_hits.add(stage)
+
+    def mark_stage_skipped(self, stage: str) -> None:
+        self.skipped_stages.add(stage)

@@ -47,6 +47,7 @@ class ExitCodeContractTests(unittest.TestCase):
             "progress",
             "artifact_created",
             "warning",
+            "first_readable_result",
             "stage_completed",
             "task_failed",
             "task_completed",

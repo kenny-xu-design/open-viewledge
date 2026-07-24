@@ -138,12 +138,14 @@ def _download_media_for_transcription(
     url: str,
     work_dir: Path,
     sample_seconds: int | None = None,
+    *,
+    audio_only: bool = False,
 ) -> Path:
     media_dir = ensure_dir(work_dir / "media")
     opts = {
         "quiet": True,
         "no_warnings": True,
-        "format": "bestaudio/best",
+        "format": "bestaudio" if audio_only else "bestaudio/best",
         "outtmpl": str(media_dir / "source.%(ext)s"),
         "noplaylist": True,
     }

@@ -1,6 +1,6 @@
 # v1.4 Roadmap
 
-Status: v1.4.0 implemented; v1.4.1-v1.4.6 planned
+Status: v1.4.0-v1.4.1 implemented; v1.4.2-v1.4.6 planned
 
 Branch: `feat/v1.4-processing-pipeline`
 
@@ -45,7 +45,7 @@ Relevant code:
 
 ### v1.4.0: Processing Profiles And Data Contract
 
-Status: implemented on `feat/v1.4-processing-pipeline`; pending commit/review.
+Status: committed as `e5d9b55 v1.4.0`.
 
 Goal: establish `processing_profile: fast | complete` across CLI, Web, API, task record, manifest, and migration rules.
 
@@ -72,6 +72,8 @@ Acceptance:
 - Schema compatibility tests cover missing, valid, and invalid `processing_profile`.
 
 ### v1.4.1: Subtitle Priority, Cache, And Fast Path
+
+Status: implemented on `feat/v1.4-processing-pipeline`; pending commit/review.
 
 Goal: reduce time to first readable result.
 

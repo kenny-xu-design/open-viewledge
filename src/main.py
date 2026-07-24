@@ -139,6 +139,8 @@ def run_pipeline(
         "status": package.manifest.status,
         "analysis_profile": package.manifest.analysis_profile,
         "processing_profile": package.manifest.processing_profile,
+        "first_readable_result_duration_ms": package.manifest.first_readable_result_duration_ms,
+        "full_completion_duration_ms": package.manifest.full_completion_duration_ms,
         "analysis": {
             "status": package.analysis.status if package.analysis else "skipped",
             "provider": package.analysis.provider if package.analysis else "",
@@ -427,7 +429,7 @@ def _run_argparse() -> None:
         "--processing-profile",
         choices=("fast", "complete"),
         default=DEFAULT_PROCESSING_PROFILE,
-        help="处理模式：fast / complete。v1.4.0 默认 complete，保持既有执行行为。",
+        help="处理模式：fast / complete。fast 优先文本并跳过关键帧；默认 complete。",
     )
     parser.add_argument("--comments", action="store_true", help="已停用；保留此参数仅用于旧命令兼容。")
     parser.add_argument("--export", choices=SUPPORTED_EXPORTS, default="none", help="导出方式：none / obsidian。")
@@ -466,7 +468,7 @@ if typer:
         processing_profile: str = typer.Option(
             DEFAULT_PROCESSING_PROFILE,
             "--processing-profile",
-            help="处理模式：fast / complete。v1.4.0 默认 complete。",
+            help="处理模式：fast / complete。fast 优先文本并跳过关键帧。",
         ),
         comments: bool = typer.Option(False, "--comments", help="已停用的兼容参数。"),
         export: str = typer.Option("none", "--export"),

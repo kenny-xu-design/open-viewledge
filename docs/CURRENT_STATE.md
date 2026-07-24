@@ -10,7 +10,7 @@ This document describes the implementation that currently exists. Planned work b
 - Stable baseline: `main` (`v1.2.1`)
 - Release commit and tag: `0583a89` / `v1.2.1`
 - Current development branch: `feat/v1.4-processing-pipeline`
-- Current implementation unit: `v1.4.0 processing profiles and data contract`
+- Current implementation unit: `v1.4.1 subtitle priority, cache, and fast path`
 
 ## v1.4.0 processing contract
 
@@ -21,6 +21,19 @@ This document describes the implementation that currently exists. Planned work b
 - `ProcessingManifest.stage_metrics` records stage start/completion timestamps, duration, attempt, cache placeholder, and sanitized error fields.
 - `fast` does not skip stages in v1.4.0. Cache-aware subtitle and fast-path behavior remains v1.4.1 work.
 - `--no-frames` remains an independent override and retains existing behavior.
+
+## v1.4.1 cache and fast path
+
+- Type-safe cache keys cover metadata, subtitles, audio, transcripts, frames, text analysis, visual analysis, and comments.
+- Active cache storage is local and atomic under `.local/cache/v1`; cache files are ignored by Git.
+- Cache dimensions include platform/source identity, Bilibili part, YouTube video ID, language, sample range, ASR settings, grouping settings, analysis profile, processing profile, Provider/model, and prompt version where relevant.
+- Platform subtitle hits return before media acquisition and local Whisper construction.
+- Transcript cache hits skip subtitle download, media acquisition, audio extraction, and ASR.
+- Text-analysis cache hits skip the LLM request.
+- Fast no-subtitle tasks request `bestaudio` without the complete-mode video fallback.
+- Fast tasks mark `extract_frames` as skipped. Complete mode retains existing local-video frame behavior.
+- Manifest records cache keys, per-stage cache hits, first readable result time, and full completion duration.
+- Cache read/write failures degrade to normal execution and do not fail the media task.
 
 ## v1.3.1 acceptance branch
 

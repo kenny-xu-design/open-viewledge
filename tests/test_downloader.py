@@ -70,6 +70,36 @@ class DownloaderMessageTests(unittest.TestCase):
             self.assertTrue(media.exists())
             self.assertEqual(captured["download_sections"], ["*0-30"])
 
+    def test_fast_media_download_requires_audio_only_format(self) -> None:
+        captured = {}
+
+        class FakeYdl:
+            def __init__(self, opts):
+                captured.update(opts)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def download(self, _urls):
+                output = Path(captured["outtmpl"].replace("%(ext)s", "m4a"))
+                output.write_bytes(b"audio")
+
+        class FakeYtDlp:
+            YoutubeDL = FakeYdl
+
+        with tempfile.TemporaryDirectory() as temp:
+            _download_media_for_transcription(
+                FakeYtDlp,
+                "https://example.com/video",
+                Path(temp),
+                audio_only=True,
+            )
+
+        self.assertEqual(captured["format"], "bestaudio")
+
 
 if __name__ == "__main__":
     unittest.main()

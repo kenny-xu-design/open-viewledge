@@ -48,6 +48,18 @@ class WebCommandTests(unittest.TestCase):
             json.dumps(
                 {
                     "schema_version": "1.0",
+                    "event": "first_readable_result",
+                    "task_id": "task",
+                    "stage": "group_transcript",
+                    "duration_ms": 42,
+                }
+            ),
+        )
+        _handle_cli_output_line(
+            job,
+            json.dumps(
+                {
+                    "schema_version": "1.0",
                     "event": "task_completed",
                     "task_id": "task",
                     "result": {"output_dir": "output/demo", "knowledge_id": "demo"},
@@ -57,6 +69,7 @@ class WebCommandTests(unittest.TestCase):
         self.assertEqual(job.output_dir, "output/demo")
         self.assertEqual(job.knowledge_id, "demo")
         self.assertEqual(job.cli_task_id, "task")
+        self.assertTrue(any("first_readable_result" in line for line in job.logs))
 
     def test_official_external_player_descriptors(self) -> None:
         self.assertEqual(

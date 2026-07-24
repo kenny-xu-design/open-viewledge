@@ -6,9 +6,9 @@ Last updated: 2026-07-24
 
 - Repository: `E:\AGT\git\video-summary-skill`
 - Branch: `feat/v1.4-processing-pipeline`
-- Baseline commit: `7790ed1` (`v1.3.12`)
+- Baseline commit: `e5d9b55` (`v1.4.0`)
 - Upstream v1.3.1 branch marker: `origin/feat/v1.3.1-cupertino-ui`
-- Scope: v1.4.0 processing-profile contract implementation.
+- Scope: v1.4.0 contracts plus v1.4.1 subtitle priority, cache, and fast path.
 
 ## Completed
 
@@ -25,6 +25,12 @@ Last updated: 2026-07-24
 - Added the Web processing-mode selector without changing application styling or motion.
 - Kept `--no-frames` behavior independent and kept fast/complete execution identical in v1.4.0.
 - Added focused compatibility and request/response tests.
+- Added typed SHA-256 cache keys and atomic local cache storage under `.local/cache/v1`.
+- Added metadata, platform-subtitle, transcript, and successful text-analysis reuse.
+- Verified YouTube and Bilibili subtitle hits do not acquire media or instantiate Whisper.
+- Added fast audio-only acquisition and fast keyframe-stage skipping.
+- Added first-readable-result and full-completion timing fields.
+- Made cache failures degrade to ordinary execution instead of failing the task.
 
 ## Current Architecture Notes
 
@@ -39,12 +45,12 @@ Last updated: 2026-07-24
 
 ## Next Work Unit
 
-After v1.4.0 is reviewed and committed, v1.4.1 may add cache-aware subtitle priority and fast-path execution. Do not start visual, comments, ASR worker, queue, or batch work in the v1.4.0 handoff.
+After v1.4.1 is reviewed and committed, v1.4.2 may add the visual pipeline, highlight snapshots, and Gemini video-conversation routing. Do not start comments, ASR worker, queue, or batch work in the v1.4.1 handoff.
 
 ## Verification
 
-- Focused v1.4.0 suite: 84 tests passed.
-- Full unit suite: 209 tests passed.
+- Focused v1.4.1/Web/CLI suite: 127 tests passed.
+- Full unit suite: 216 tests passed.
 - Python compileall, CLI/Web help, JavaScript syntax, and diff checks passed.
 - Browser contract check passed for default complete and separate tutorial/fast request fields.
 - The only browser console message was the existing missing `favicon.ico` 404.
@@ -59,4 +65,6 @@ After v1.4.0 is reviewed and committed, v1.4.1 may add cache-aware subtitle prio
 
 ## Git Notes
 
-No commit, push, merge, rebase, tag, checkout, or branch creation was performed in this design pass.
+- `e5d9b55 v1.4.0` appeared on the local branch and `origin/feat/v1.4-processing-pipeline` during v1.4.1 implementation.
+- This Codex task did not run commit, push, merge, rebase, tag, checkout, or branch creation commands.
+- Current uncommitted changes are the v1.4.1 implementation and tests.

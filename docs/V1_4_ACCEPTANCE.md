@@ -18,6 +18,8 @@ Implementation status: complete on the working branch. Automated contract covera
 
 ### v1.4.1
 
+Implementation status: automated acceptance complete on the working branch.
+
 - YouTube/Bilibili videos with subtitles do not download full video.
 - YouTube/Bilibili videos with subtitles do not run local ASR.
 - No-subtitle fast mode downloads audio only.

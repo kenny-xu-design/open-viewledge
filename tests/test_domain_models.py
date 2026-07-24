@@ -38,6 +38,9 @@ class DomainModelTests(unittest.TestCase):
         self.assertEqual(manifest.analysis_status, "skipped")
         self.assertEqual(manifest.processing_profile, "complete")
         self.assertEqual(manifest.stage_metrics, {})
+        self.assertEqual(manifest.cache_keys, {})
+        self.assertIsNone(manifest.first_readable_result_duration_ms)
+        self.assertIsNone(manifest.full_completion_duration_ms)
 
     def test_manifest_processing_profile_and_stage_metric_contract(self) -> None:
         manifest = ProcessingManifest(
@@ -56,6 +59,13 @@ class DomainModelTests(unittest.TestCase):
 
         self.assertEqual(manifest.processing_profile, "fast")
         self.assertEqual(manifest.stage_metrics["resolve_source"].duration_ms, 12)
+        timed = manifest.model_copy(
+            update={
+                "first_readable_result_duration_ms": 25,
+                "full_completion_duration_ms": 50,
+            }
+        )
+        self.assertEqual(timed.first_readable_result_duration_ms, 25)
         with self.assertRaises(ValueError):
             ProcessingManifest(task_id="task", processing_profile="turbo")
 

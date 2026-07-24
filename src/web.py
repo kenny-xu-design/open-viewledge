@@ -383,6 +383,7 @@ def list_library_items() -> list[dict[str, Any]]:
                 "analysisStatus": inspection.analysis_status,
                 "analysisProfile": manifest.get("analysis_profile") or "summary",
                 "processingProfile": manifest.get("processing_profile") or "complete",
+                "firstReadableResultDurationMs": manifest.get("first_readable_result_duration_ms"),
                 "integrity": inspection.level,
                 "integrityIssues": [issue.message for issue in inspection.issues[:5]],
                 "chapterCount": _timeline_count(directory),
@@ -1332,7 +1333,7 @@ INDEX_HTML = r"""<!doctype html>
             <label>处理模式</label>
             <select id="processingProfile">
               <option value="complete">complete（兼容完整流程）</option>
-              <option value="fast">fast（v1.4.0 仅记录契约）</option>
+              <option value="fast">fast（优先文本）</option>
             </select>
           </div>
         </div>

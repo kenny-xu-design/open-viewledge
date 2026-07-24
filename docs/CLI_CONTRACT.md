@@ -56,7 +56,7 @@ Stable options:
 --jsonl
 ```
 
-`--processing-profile` accepts `fast` or `complete`. Missing values default to `complete`, so v1.3 commands keep their existing execution behavior. The field is independent from `--mode`: mode selects the analysis shape, while processing profile selects how the pipeline executes. In v1.4.0 both values use the existing stage plan; fast-path stage skipping starts in v1.4.1. `--no-frames` continues to disable frame generation independently.
+`--processing-profile` accepts `fast` or `complete`. Missing values default to `complete`, so v1.3 commands keep their existing execution behavior. The field is independent from `--mode`: mode selects the analysis shape, while processing profile selects how the pipeline executes. `fast` requests audio-only media when subtitles are unavailable and skips keyframe extraction; `complete` retains the existing full plan. `--no-frames` continues to disable frame generation independently.
 
 The deprecated root-level form remains accepted and mirrors `--processing-profile` during its compatibility window. `--comments` remains accepted only as a deprecated no-op and is never silent.
 
@@ -112,6 +112,7 @@ stage_started
 progress
 artifact_created
 warning
+first_readable_result
 stage_completed
 task_failed
 task_completed

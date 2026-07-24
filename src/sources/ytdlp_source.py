@@ -66,10 +66,22 @@ class YtdlpSource(SourceAdapter):
             raise RuntimeError("请先调用 resolve()。")
         return _download_subtitle(self._yt_dlp, self.url, work_dir, language)
 
-    def acquire_media(self, work_dir: Path, sample_seconds: int | None = None) -> Path:
+    def acquire_media(
+        self,
+        work_dir: Path,
+        sample_seconds: int | None = None,
+        *,
+        audio_only: bool = False,
+    ) -> Path:
         if not self._yt_dlp:
             raise RuntimeError("请先调用 resolve()。")
-        return _download_media_for_transcription(self._yt_dlp, self.url, work_dir, sample_seconds)
+        return _download_media_for_transcription(
+            self._yt_dlp,
+            self.url,
+            work_dir,
+            sample_seconds,
+            audio_only=audio_only,
+        )
 
 
 def _platform_from_url(url: str) -> str:

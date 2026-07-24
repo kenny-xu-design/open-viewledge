@@ -21,4 +21,10 @@ class SourceAdapter(ABC):
     def acquire_subtitles(self, work_dir: Path, language: str) -> Path | None: ...
 
     @abstractmethod
-    def acquire_media(self, work_dir: Path, sample_seconds: int | None = None) -> Path: ...
+    def acquire_media(
+        self,
+        work_dir: Path,
+        sample_seconds: int | None = None,
+        *,
+        audio_only: bool = False,
+    ) -> Path: ...

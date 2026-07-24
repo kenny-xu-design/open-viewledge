@@ -155,6 +155,8 @@ If the source URL or source fingerprint changes, the video conversation state be
 
 v1.4 introduces a cache service with typed keys:
 
+Implementation status: v1.4.1 implements deterministic SHA-256 keys and atomic JSON cache entries in `.local/cache/v1`. Metadata, platform subtitles, normalized transcripts, and successful text analysis are actively reused. Audio and frame keys are recorded for planning/invalidation; large binary artifact copying and retention cleanup remain deferred.
+
 - metadata: platform, source ID, canonical URL, playlist/part.
 - subtitle: platform, source ID, part, language, subtitle kind.
 - audio: source ID, part, sample range, audio format.
