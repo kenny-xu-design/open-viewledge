@@ -1,284 +1,112 @@
 ---
 name: video-summary
-description: Process user-provided public video URLs or local audio/video files with the video-summary-skill CLI, producing transcripts, structured DeepSeek analysis, and knowledge-package Markdown. Use for Bilibili, YouTube, other yt-dlp-supported public videos, and local media when the user asks for transcription, summaries, tutorial analysis, viral content analysis, close reading, or Obsidian-compatible notes.
+description: Use the video-summary-skill public CLI to analyze user-provided public video URLs or local audio/video files, inspect knowledge packages, export Markdown, diagnose configuration, or resume a failed CLI task.
 ---
 
 # Video Summary Skill
 
-Use the existing project CLI. Do not reimplement downloading, subtitle parsing, ASR, analysis, or export logic inside the Skill.
+Use this Skill when the user asks to process an explicitly provided public video URL or local media file, inspect an existing knowledge package, export existing results, diagnose the local installation, or resume a failed task.
 
-## Project
+Run only the public CLI from the active repository or approved worktree:
 
-The formal project directory is:
+```powershell
+.\.venv\Scripts\python.exe -m src.main <command>
+```
+
+Do not import or invoke internal pipeline classes from the Skill. Do not duplicate prompts or media-processing logic.
+
+## Analyze
+
+Exactly one input is required:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main analyze --url "<public-url>" --mode summary --jsonl
+.\.venv\Scripts\python.exe -m src.main analyze --file "<absolute-media-path>" --mode summary --jsonl
+```
+
+Useful optional arguments:
 
 ```text
-E:\AGT\git\video-summary-skill
+--lang <language>
+--backend deepseek
+--mode <summary|tutorial|viral|close-reading>
+--no-summary
+--no-frames
+--sample-seconds <positive-integer>
+--export obsidian
+--config <path>
 ```
 
-Run commands from the active repository or approved worktree. Prefer the project virtual environment:
+Use `--jsonl` for long runs. Read one JSON object per stdout line. Treat stderr as diagnostics only.
 
-```powershell
-.\.venv\Scripts\python.exe
-```
-
-## Supported Inputs
-
-- Public YouTube URLs.
-- Public Bilibili URLs or BV identifiers accepted by the CLI.
-- Other public video URLs supported by `yt-dlp`.
-- Local video and audio files supported by `LocalMediaSource`.
-
-Only process links or files the user explicitly provides.
-
-## Current Processing Path
+Required lifecycle events:
 
 ```text
-input
--> LocalMediaSource or YtdlpSource
--> platform subtitles when available
--> FFmpeg plus local faster-whisper when subtitles are unavailable
--> normalized and grouped transcript
--> timeline and optional local-video frames
--> DeepSeek structured analysis
--> knowledge package
+task_created
+stage_started
+progress
+artifact_created
+warning
+stage_completed
+task_failed
+task_completed
 ```
 
-Important:
+On `task_completed`, read `result.task_id`, `result.knowledge_id`, `result.output_dir`, analysis Provider/model/status, and artifact paths.
 
-- Online video handling uses the project's `yt-dlp` path.
-- Do not install, require, or invoke `bilibili-cli`.
-- Do not use `--backend ollama`.
-- CLI structured analysis currently uses `deepseek`.
-- Local ASR uses the existing local `faster-whisper-small` model.
-- Comment retrieval and comment analysis are not current features.
-- Gemini text chat exists in the Web UI. A keyframe image-request boundary is implemented and mock tested, but it has no CLI/Web product trigger and has not been real-API verified.
+## Inspect
 
-## Before Running
-
-Check the project environment without exposing secret values:
+Always inspect a generated package before claiming success:
 
 ```powershell
-.\.venv\Scripts\python.exe -c "import sys; print(sys.executable)"
-.\.venv\Scripts\python.exe -c "import yt_dlp; print('yt-dlp OK')"
-.\.venv\Scripts\python.exe -c "import faster_whisper; print('faster-whisper OK')"
+.\.venv\Scripts\python.exe -m src.main inspect "<package-directory>" --json
 ```
 
-When ASR, media conversion, or frame extraction is needed, also check:
+Read `data.valid`, `data.level`, analysis/manifest status, transcript count, and issues. Inspection never modifies the package.
+
+## Export
 
 ```powershell
-ffmpeg -version
-ffprobe -version
+.\.venv\Scripts\python.exe -m src.main export --knowledge-id "<id>" --format markdown --preset full --json
 ```
 
-Do not print `.env` contents or API Keys.
+Read the exported `data.file_path` and included sections. Export uses existing artifacts and never invokes a model.
 
-## Commands
+## Resume
 
-Show help:
+If analyze returns a failed task with a `task_id`, preserve that ID and run:
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.main --help
+.\.venv\Scripts\python.exe -m src.main resume "<task-id>" --jsonl
 ```
 
-Show the installed project version:
+Resume reuses the original secret-free source and options. Do not resume completed tasks.
+
+## Diagnose and read configuration
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.main --version
+.\.venv\Scripts\python.exe -m src.main doctor --json
+.\.venv\Scripts\python.exe -m src.main config --json
 ```
 
-Inspect an existing package without modifying it:
+These commands report status without returning complete API Keys.
 
-```powershell
-.\.venv\Scripts\python.exe -m src.main inspect "output\<knowledge-id>" --json
-```
-
-Public URL summary:
-
-```powershell
-.\.venv\Scripts\python.exe -m src.main `
-  --url "<public-video-url>" `
-  --backend deepseek `
-  --mode summary
-```
-
-Tutorial analysis:
-
-```powershell
-.\.venv\Scripts\python.exe -m src.main `
-  --url "<public-video-url>" `
-  --backend deepseek `
-  --mode tutorial
-```
-
-Viral content analysis:
-
-```powershell
-.\.venv\Scripts\python.exe -m src.main `
-  --url "<public-video-url>" `
-  --backend deepseek `
-  --mode viral
-```
-
-Close reading:
-
-```powershell
-.\.venv\Scripts\python.exe -m src.main `
-  --url "<public-video-url>" `
-  --backend deepseek `
-  --mode close-reading
-```
-
-Local media:
-
-```powershell
-.\.venv\Scripts\python.exe -m src.main `
-  --file "<absolute-local-media-path>" `
-  --backend deepseek `
-  --mode summary
-```
-
-Transcript only:
-
-```powershell
-.\.venv\Scripts\python.exe -m src.main `
-  --file "<absolute-local-media-path>" `
-  --no-summary
-```
-
-Short local validation:
-
-```powershell
-.\.venv\Scripts\python.exe -m src.main `
-  --file "<absolute-local-media-path>" `
-  --no-summary `
-  --sample-seconds 30
-```
-
-Obsidian-compatible Markdown copy:
-
-```powershell
-.\.venv\Scripts\python.exe -m src.main `
-  --url "<public-video-url>" `
-  --backend deepseek `
-  --mode summary `
-  --export obsidian
-```
-
-The export layer creates UTF-8 Markdown and can include selected summary, chat, and unchanged `user_notes.md` content. Local deployments may write below a configured Obsidian Vault; `.obsidian` is a configuration directory and is never a note target. Export never invokes an LLM or re-extracts keyframes.
-
-Profiles: `summary` uses the shared note structure. `tutorial` adds optional prerequisites, steps, glossary, action items, and warnings. Resolution priority is explicit selection, existing package profile, automatic recognition, then `summary` fallback.
-
-## Web UI
-
-Start with:
-
-```powershell
-.\start_web.ps1
-```
-
-or:
-
-```bat
-start_web.bat
-```
-
-Default URL:
+## Exit codes
 
 ```text
-http://127.0.0.1:5188/
+0 success
+1 general failure or inspection warning
+2 usage/configuration error
+3 inaccessible input or task record
+4 required Provider not configured
+5 required external tool/model missing
+6 damaged or unsupported knowledge package/Schema
+7 cancelled
+8 retryable temporary failure
 ```
 
-The Web UI starts processing through `src.main` using the Web process `sys.executable`. It also provides knowledge-package browsing, grounded text chat, durable `user_notes.md`, and ignored local task history.
+Retry automatically only for exit code `8`, or use `resume` after the underlying issue is corrected. For exit codes `2` through `6`, report the specific JSON error and required user action.
 
-## Outputs
+## Output handling
 
-Report the created knowledge-package directory and the most relevant result files.
-
-Core outputs:
-
-```text
-output/<knowledge-id>/index.md
-output/<knowledge-id>/metadata.json
-output/<knowledge-id>/manifest.json
-output/<knowledge-id>/analysis.json
-output/<knowledge-id>/timeline.json
-output/<knowledge-id>/transcript.raw.jsonl
-output/<knowledge-id>/transcript.grouped.md
-output/<knowledge-id>/transcript.md
-```
-
-Conditional outputs:
-
-```text
-summary.md
-chapter_summary.md
-highlight_notes.md
-export_note.md
-chat.json
-user_notes.md
-frames/*.jpg
-```
-
-When responding to the user:
-
-1. State whether transcript acquisition used platform subtitles or local ASR when known.
-2. State whether AI analysis succeeded, failed, or was skipped.
-3. Include the actual provider and model recorded in `analysis.json` or `manifest.json`.
-4. Provide the knowledge-package path.
-5. Link or name the key result files.
-6. Do not claim success based only on file existence; use the CLI `inspect` command and inspect meaningful content.
-
-## Failure Handling
-
-### Project virtual environment is not active
-
-Run commands through:
-
-```powershell
-.\.venv\Scripts\python.exe
-```
-
-Do not fall back to a global `python` without telling the user.
-
-### yt-dlp or faster-whisper is missing
-
-Report the current `sys.executable` and working directory, then suggest:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-### FFmpeg or FFprobe is unavailable
-
-Explain which executable is missing. Do not silently download binaries or change the system PATH.
-
-### Local Whisper model is incomplete
-
-Report:
-
-```text
-未找到完整的本地 faster-whisper 模型，请先执行：
-hf download Systran/faster-whisper-small --local-dir models/faster-whisper-small
-```
-
-Do not allow an implicit Hugging Face download.
-
-### DeepSeek is not configured
-
-Tell the user to set `DEEPSEEK_API_KEY` in the ignored project `.env`. Never request that the Key be committed or pasted into tracked files.
-
-### Online video preview fails
-
-The platform may prohibit embedding or require login. Processing results can still be used. Bilibili iframe playback does not provide reliable programmatic time synchronization; use source timestamp links when available.
-
-### Gemini visual request
-
-The repository contains a mock-tested keyframe image-request boundary, but the current Skill and CLI do not expose it as a product command. Do not invoke it implicitly, do not claim real-API validation, and do not simulate visual understanding from subtitles.
-
-## Safety
-
-- Do not expose API Keys, cookies, Authorization headers, or credentials.
-- Do not add `.env`, media, models, or `output/` to Git.
-- Do not bypass paid content, access controls, DRM, or platform restrictions.
-- Do not encourage reposting, plagiarism, or copyright infringement.
-- Do not claim comment analysis, an end-to-end Gemini visual product flow, Vault synchronization, or Bilibili time synchronization are complete.
+Report the knowledge-package directory and key artifacts returned by the CLI. Never infer success from file existence alone. Never expose or store API Keys, cookies, Authorization headers, local `.env` contents, or credentials in messages, logs, task records, knowledge packages, or exports.

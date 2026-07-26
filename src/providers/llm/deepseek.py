@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+import json
 from typing import Any, Callable
 
 try:
@@ -27,11 +28,14 @@ class DeepSeekProvider(LLMProvider):
         model_name: str | None = None,
         client: object | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        prefer_env: bool = True,
     ) -> None:
         load_dotenv()
         self.api_key = api_key if api_key is not None else os.getenv("DEEPSEEK_API_KEY", "")
-        self.base_url = (os.getenv("DEEPSEEK_BASE_URL") or base_url or DEFAULT_DEEPSEEK_BASE_URL).rstrip("/")
-        self.model_name = os.getenv("DEEPSEEK_MODEL") or model_name or DEFAULT_DEEPSEEK_MODEL
+        env_base_url = os.getenv("DEEPSEEK_BASE_URL") if prefer_env else ""
+        env_model = os.getenv("DEEPSEEK_MODEL") if prefer_env else ""
+        self.base_url = (env_base_url or base_url or DEFAULT_DEEPSEEK_BASE_URL).rstrip("/")
+        self.model_name = env_model or model_name or DEFAULT_DEEPSEEK_MODEL
         self._client = client
         self._sleep = sleep
 
@@ -90,7 +94,7 @@ class DeepSeekProvider(LLMProvider):
                 status = _status_code(exc)
                 if status in {401, 403}:
                     raise UserFacingError("DeepSeek 鉴权失败，请检查 DEEPSEEK_API_KEY。") from exc
-                last_error = _safe_error(status)
+                last_error = _safe_error(exc, status)
                 if attempt < 2 and (status in {408, 409, 429} or status is None or status >= 500):
                     self._sleep(float(2 ** attempt))
                     continue
@@ -115,9 +119,36 @@ def _status_code(exc: Exception) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _safe_error(status: int | None) -> str:
+def _safe_error(exc: Exception, status: int | None) -> str:
     if status == 429:
         return "DeepSeek 请求过于频繁或额度不足，请稍后重试。"
     if status is not None:
-        return f"DeepSeek 请求失败：HTTP {status}。"
+        detail = _response_error_message(exc)
+        return f"DeepSeek 请求失败：HTTP {status}{f'：{detail}' if detail else ''}。"
     return "DeepSeek 请求超时或网络不可用，请检查网络后重试。"
+
+
+def _response_error_message(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    text = str(getattr(response, "text", "") or "")
+    if not text:
+        return ""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = {}
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = str(error.get("message") or "").strip()
+            if message:
+                return _sanitize_detail(message)
+    return _sanitize_detail(text)
+
+
+def _sanitize_detail(value: str) -> str:
+    cleaned = " ".join(value.replace("\r", " ").replace("\n", " ").split())
+    for key in ("sk-", "sk_"):
+        if key in cleaned:
+            cleaned = cleaned.split(key, 1)[0].rstrip() + " [redacted]"
+    return cleaned[:300]

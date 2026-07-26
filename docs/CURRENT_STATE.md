@@ -1,6 +1,6 @@
 # Current State
 
-Last verified: 2026-07-20
+Last verified: 2026-07-26
 
 This document describes the implementation that currently exists. Planned work belongs in `ROADMAP.md`.
 
@@ -9,11 +9,107 @@ This document describes the implementation that currently exists. Planned work b
 - Formal repository: `E:\AGT\git\video-summary-skill`
 - Stable baseline: `main` (`v1.2.1`)
 - Release commit and tag: `0583a89` / `v1.2.1`
-- Package version: `1.2.1`
+- Current development branch: `feat/v1.4-processing-pipeline`
+- Current implementation unit: `v1.4.3 comment sync, API configuration, and analysis-profile output contracts`
+
+## v1.4.0 processing contract
+
+- CLI accepts `--processing-profile fast|complete`; missing values default to `complete`.
+- `analysis_profile` and `processing_profile` remain separate in CLI results, JSONL lifecycle events, Web jobs, task API payloads, task records, and knowledge manifests.
+- Existing CLI task records, Web job records, and manifests without the new field load as `complete`.
+- The Web new-task form exposes processing mode beside analysis mode and sends `processingProfile`.
+- `ProcessingManifest.stage_metrics` records stage start/completion timestamps, duration, attempt, cache placeholder, and sanitized error fields.
+- `fast` does not skip stages in v1.4.0. Cache-aware subtitle and fast-path behavior remains v1.4.1 work.
+- `--no-frames` remains an independent override and retains existing behavior.
+
+## v1.4.1 cache and fast path
+
+- Type-safe cache keys cover metadata, subtitles, audio, transcripts, frames, text analysis, visual analysis, and comments.
+- Active cache storage is local and atomic under `.local/cache/v1`; cache files are ignored by Git.
+- Cache dimensions include platform/source identity, Bilibili part, YouTube video ID, language, sample range, ASR settings, grouping settings, analysis profile, processing profile, Provider/model, and prompt version where relevant.
+- Platform subtitle hits return before media acquisition and local Whisper construction.
+- Transcript cache hits skip subtitle download, media acquisition, audio extraction, and ASR.
+- Text-analysis cache hits skip the LLM request.
+- Fast no-subtitle tasks request `bestaudio` without the complete-mode video fallback.
+- Fast tasks mark `extract_frames` as skipped. Complete mode retains existing local-video frame behavior.
+- Manifest records cache keys, per-stage cache hits, first readable result time, and full completion duration.
+- Cache read/write failures degrade to normal execution and do not fail the media task.
+
+## v1.4.2 visual and video conversation
+
+- Text analysis now runs and writes `analysis.json` before optional frame, visual-analysis, and tutorial step screenshot stages.
+- Only `tutorial + complete` local-video tasks can create lightweight WebP images under `assets/tutorial/`; fast mode and `--no-frames` skip visual stages.
+- Highlight data keeps legacy `start` / `explanation` fields synchronized with v1.4 `timestamp` / `summary`, and records image source time and generation status.
+- Visual analysis uses existing keyframes and remains optional; missing Gemini configuration or visual failures do not remove text output.
+- Gemini Web chat routes through public YouTube URL, Files API, keyframes plus grounded text, then text-only fallback.
+- `chat.json` stores a stable `chat_id`, source fingerprint, Provider/model, selected route/status, optional remote file ID/expiry, recovery state, and local messages without credentials.
+
+## v1.4.3 comments
+
+- `--comments` is now an explicit active option instead of a warning-only compatibility flag.
+- Comment sync is skipped by default and runs only when enabled from CLI/Web.
+- YouTube, Bilibili, and generic `yt-dlp` comment adapters normalize public comments into `NormalizedComment`.
+- Comment sync writes `comments.json` and `comments.md`; comment insight writes `comment_insights.json` and `comment_insights.md`.
+- Comment stages are `comments_fetch` and `comments_analysis`; both are non-blocking soft-fail stages.
+- Comment timestamps render through existing preview seek targets.
+- Fast mode uses a smaller high-value comment bound; complete mode uses a larger bounded sync.
+- Comment opinions remain separate from `analysis.json` and the main factual summary.
+- Web displays the video-side feature region as peer tabs: `评论区` first, `高光片段` second.
+- Comment insight text is not injected into the left `全文总结` / `原文细读` result tabs.
+- Web exposes a local API configuration entry for DeepSeek/OpenAI-compatible and Gemini. API Keys are stored only in current process memory; status responses expose only masked Key tails and non-sensitive metadata.
+
+## v1.4.3 final-fix notes
+
+- DeepSeek HTTP 400 errors preserve sanitized upstream error details so unsupported model names such as retired aliases can be diagnosed from the UI/API response.
+- Web job list/detail responses snapshot job state before formatting, avoiding nested lock acquisition while polling.
+- Web job persistence writes a deterministic temporary JSON file and atomically replaces the store file, avoiding the observed Windows `tempfile.mkstemp` hang.
+- A real Bilibili knowledge package was repaired after model configuration correction and generated successful text analysis plus comment insight artifacts.
+- Final local QA on 2026-07-25 passed focused 99-test comment/Web/export coverage, full 237-test unit coverage, `compileall`, CLI/Web help, `node --check`, `git diff --check`, and a browser spot-check of the peer video-side feature tabs.
+- The API configuration increment adds a unified `ProviderConfigResolver` priority chain: Web session configuration, environment variables, then project defaults. Web-launched CLI tasks receive transient Provider environment overrides; Web in-process chat and retry calls receive Provider objects from the same resolver.
+- API configuration local QA on 2026-07-25 passed focused 127-test Provider/comment/Web/export/analysis coverage and full 249-test unit coverage. `compileall` was run with `PYTHONPYCACHEPREFIX` under `%TEMP%` because the repository `.local` cache path was not writable in this Windows session.
+- Adaptive long-video segmentation adds `SegmentationPolicyRouter`, semantic windows, reducer metadata, coverage-gap checks, and transcript-backed gap repair. Dense 30-minute-plus videos prefer window analysis; dense 60-minute-plus videos default to hierarchical Map/Reduce unless subtitles are sparse.
+- `analysis.json` includes `segmentation.policy_version=adaptive-v2`, duration bucket, strategy, target ranges, actual counts, coverage ratio, largest uncovered gap, reanalysis count, and quality notes.
+- Mock-backed 71-minute tutorial coverage verifies more than five chapters, more than three highlights, tutorial step hierarchy, and no unsupported 20–30 minute coverage gaps in the fixture.
+- Standard summary now renders six core sections: `一句话`, `摘要`, `亮点`, `思考`, `章节总结`, and renderer-owned `原文资料`. The former fixed `内容概览` / `核心观点` / `关键结论` split is retained only through legacy-field compatibility and is not used for new output.
+- `professional_terms` is collected in the same summary analysis response and may merge across long-video windows. The final Web/Markdown module appears between `摘要` and `亮点` only when 3–8 distinct, relevant terms have reliable non-placeholder explanations.
+- Segmentation routing remains independent from summary section order and professional-term visibility.
+- Standard-summary correction QA on 2026-07-26 passes 85 focused tests and all 271 unit tests, plus compileall, CLI/Web help, JavaScript syntax, and diff checks.
+
+## v1.3.1 acceptance branch
+
+- The branch includes the v1.3 Agent and CLI contract work plus Web UI acceptance fixes.
+- Web UI uses an AppShell structure with Sidebar, Toolbar, primary content, and responsive Inspector.
+- Legacy competing layout rules for the old multi-column workspace were removed or neutralized during the UI work.
+- Sidebar and Inspector controls expose expanded/current state, Escape close behavior, and focus return.
+- Split-view dividers expose separator semantics and support pointer and keyboard resizing.
+- Inspector width is clamped against viewport, main-content minimum width, and Inspector minimum width; saved widths are corrected on resize.
+- Preview timestamp clicks use `seekPreview(seconds)`: local media seeks with `currentTime`, YouTube uses the IFrame player, and Bilibili reloads the existing preview iframe with `t=<seconds>`.
+- Local video preview supports original, 16:9, 4:3, 1:1, and 9:16 ratio display with fit/fill modes.
+- Knowledge-record deletion validates package paths before deletion, uses recursive directory deletion for non-empty packages, returns clearer errors, and avoids removing database records before filesystem deletion succeeds.
+- Focused verification on this branch: `python -m unittest tests.test_web_ui tests.test_web` passes with 78 tests.
+- Full release verification and manual browser matrix acceptance remain open before merge/tag/release.
+
+## v1.3 Agent and CLI contract
+
+- Public commands: `analyze`, `inspect`, `export`, `resume`, `doctor`, and `config`.
+- Every command supports versioned JSON output; long tasks support JSONL lifecycle events.
+- stdout is reserved for results/events; diagnostics and warnings use stderr.
+- Exit codes `0` through `8` are centralized and locked by tests.
+- Secret-free CLI task records support recovery by `task_id`.
+- Web starts `analyze --jsonl` and reads public lifecycle events.
+- The Agent Skill calls only public CLI commands.
+- Configuration, task, manifest, analysis, and export request Schemas have explicit compatibility checks.
+- A real local video completed a 30-second no-LLM Agent CLI flow and passed `inspect`.
+- A real external-tool failure was repaired and resumed with the same task ID.
+- Latest v1.3 Agent/CLI verification: 170 unit tests plus compile/help/JavaScript checks passed on the earlier `feat/v1.3-agent-cli` handoff.
+- `doctor --json` is healthy on the audited machine: 11 checks pass, with optional warnings for unconfigured Gemini and Obsidian only.
 
 ## v1.2.1 export increment
 
-- Summary and tutorial profiles share a common schema; tutorial adds optional prerequisites, steps, glossary, action items, and warnings.
+- `summary`, `tutorial`, `viral`, and `close-reading` share a common analysis envelope but use mode-specific `content` structures. Legacy fields such as `summary`, `highlights`, `chapters`, and `steps` remain as compatibility fields for old knowledge packages.
+- The common analysis envelope records `schema_version`, `analysis_profile`, `processing_profile`, `source`, `generation.visual_context_used`, `generation.comments_included=false`, segmentation metadata, and warnings.
+- `tutorial + complete` is the only path that can generate and export tutorial step screenshots under `assets/tutorial/`. `summary`, `viral`, and `close-reading` do not export screenshots.
+- Main reports distinguish video facts from AI inference and use “未明确说明” for missing information instead of inventing details.
 - Profile priority is explicit selection, existing package profile, heuristic recognition, then summary fallback.
 - Markdown export can combine analysis, safe chat fields, unchanged `user_notes.md`, and source links without model calls.
 - Local Vault export writes `.md` atomically, never targets `.obsidian`, and returns an encoded Obsidian URI.
@@ -142,6 +238,10 @@ highlight_notes.md
 export_note.md
 chat.json
 user_notes.md
+comments.json
+comments.md
+comment_insights.json
+comment_insights.md
 audio/audio_16k.wav
 frames/*.jpg
 ```
@@ -165,7 +265,7 @@ CLI `inspect` reports existing package anomalies without mutating them. Web pack
 
 Implemented:
 
-- Three-pane knowledge workspace.
+- AppShell knowledge workspace with Sidebar, Toolbar, primary content, and Inspector.
 - Knowledge-package library.
 - URL and local path processing tasks.
 - Runtime Python reporting.
@@ -173,12 +273,12 @@ Implemented:
 - YouTube official IFrame API preview.
 - Bilibili official iframe preview.
 - Summary, chapter, timeline, transcript, and frame display.
-- Configurable pane order and widths.
+- Configurable pane order and clamped widths.
 - Grounded AI chat.
 
 Limitations:
 
-- Bilibili iframe playback cannot be reliably controlled or synchronized by the application.
+- Bilibili preview timestamp jumps are implemented by reloading the official iframe with `t=<seconds>`; final playback behavior still depends on the embedded player.
 - Some online videos prohibit embedding and fall back to the external source.
 - Frame capture API returns `501`.
 
@@ -198,7 +298,7 @@ Implemented:
 -> knowledge_id
 -> grouped transcript loading
 -> local BM25-style retrieval
--> DeepSeek or Gemini text Provider
+-> DeepSeek text Provider or Gemini video route planner
 -> timestamp citations
 -> output/<knowledge_id>/chat.json
 ```
@@ -207,7 +307,7 @@ Implemented:
 - Stored history is reloaded when switching packages.
 - The server reloads package context and does not trust client-provided evidence.
 - DeepSeek text chat is configured in the audited local environment.
-- Gemini text Provider exists but Gemini is not configured in the audited local environment.
+- Gemini text/image/video Provider exists but Gemini is not configured in the audited local environment.
 
 ## Gemini
 
@@ -218,7 +318,11 @@ Implemented:
 - `KeyframeAnalysisService` returns `skipped` without calling the Provider when no frames are available.
 - Text and image capabilities are resolved separately; visual wording in a chat question does not silently turn a text request into an image request.
 - Image requests and service behavior are covered by fake-opener and fake-Provider tests.
-- There is no CLI or Web trigger for keyframe analysis in v1.2, and no real Gemini API request has been performed.
+- Complete local-video processing can call keyframe analysis after the text result is written.
+- `complete_with_video_url()` uses the official `file_data.file_uri` request shape for public YouTube URLs.
+- `upload_video()` uses the official resumable Files API contract, polls to `ACTIVE`, and reuses only the remote file resource ID.
+- Web chat exposes the selected route and degradation status; capability is never inferred from YouTube UI.
+- No real Gemini API request has been performed in the audited environment.
 
 ## Notes And Obsidian
 
@@ -232,8 +336,7 @@ Implemented:
 
 ## Disabled Or Historical Paths
 
-- Comment retrieval and analysis are disabled.
-- `--comments` remains only for old command compatibility and never enters a comment pipeline.
+- Comment sync is explicit opt-in and limited to public comments returned by the platform extractor; it is not a default processing stage.
 - Ollama is not an active backend.
 - `bilibili-cli` is not an active dependency or runtime command.
 - The unreachable pre-orchestrator branch, legacy adapters, Ollama summarizer, and legacy LLM adapter have been removed from active source.
@@ -249,9 +352,13 @@ Implemented:
 - Gemini default: `gemini-3.1-flash-lite`.
 - Environment variables can explicitly override defaults; unknown model names are passed through and never silently substituted.
 - Web runtime diagnostics show the effective provider and model without exposing Keys.
+- Web API configuration status returns Provider, Base URL, model, source, configured state, Key tail, and last test result; it never returns full API Keys.
+- Web API Keys are not persisted to `localStorage`, `sessionStorage`, `.local/web_jobs.json`, knowledge packages, Markdown, exports, or repository files.
 
 ## Known Risks
 
 - A browser closed before its final keepalive request is accepted can leave the latest keystrokes unsaved; normal edits are persisted after 800 ms.
 - The local JSON job store is intentionally single-process and is not a Scale queue.
+- Web session API Keys disappear after service restart. Users must re-enter them for real DeepSeek/Gemini tests after restarting the local Web server.
+- Manual viewport/theme/zoom browser acceptance is still pending for the v1.3.1 UI branch.
 - Archived documents can describe retired routes and must not be treated as current specifications.

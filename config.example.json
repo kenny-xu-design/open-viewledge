@@ -1,4 +1,5 @@
 {
+  "schema_version": "1.0",
   "output_dir": "output",
   "whisper_model": "small",
   "language": "zh",

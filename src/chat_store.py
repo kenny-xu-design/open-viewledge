@@ -23,24 +23,88 @@ class ChatStore:
         path = self._path(knowledge_id)
         with _CHAT_LOCK:
             if not path.exists():
-                return {"knowledge_id": knowledge_id, "updated_at": "", "messages": []}
+                return self._default(knowledge_id)
             payload = json.loads(path.read_text(encoding="utf-8"))
         messages = payload.get("messages") if isinstance(payload, dict) else []
-        return {
-            "knowledge_id": knowledge_id,
-            "updated_at": str(payload.get("updated_at") or "") if isinstance(payload, dict) else "",
-            "messages": self._normalize_messages(messages if isinstance(messages, list) else []),
-        }
+        result = self._default(knowledge_id)
+        if isinstance(payload, dict):
+            for key in (
+                "chat_id",
+                "source_url",
+                "source_fingerprint",
+                "provider",
+                "model",
+                "route",
+                "route_status",
+                "remote_session_id",
+                "remote_file_id",
+                "remote_expires_at",
+                "recovery_state",
+                "degradation_reason",
+                "updated_at",
+            ):
+                result[key] = str(payload.get(key) or "")
+        result["messages"] = self._normalize_messages(messages if isinstance(messages, list) else [])
+        return result
 
     def append(self, knowledge_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
         with _CHAT_LOCK:
             payload = self.load(knowledge_id)
             payload["messages"] = (payload["messages"] + self._normalize_messages(messages))[-MAX_MESSAGES:]
-            return self._save(knowledge_id, payload["messages"])
+            return self._save(knowledge_id, payload)
 
     def replace(self, knowledge_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
         with _CHAT_LOCK:
-            return self._save(knowledge_id, self._normalize_messages(messages)[-MAX_MESSAGES:])
+            payload = self.load(knowledge_id)
+            payload["messages"] = self._normalize_messages(messages)[-MAX_MESSAGES:]
+            return self._save(knowledge_id, payload)
+
+    def update_state(self, knowledge_id: str, **values: str) -> dict[str, Any]:
+        allowed = {
+            "chat_id",
+            "source_url",
+            "source_fingerprint",
+            "provider",
+            "model",
+            "route",
+            "route_status",
+            "remote_session_id",
+            "remote_file_id",
+            "remote_expires_at",
+            "recovery_state",
+            "degradation_reason",
+        }
+        with _CHAT_LOCK:
+            payload = self.load(knowledge_id)
+            for key, value in values.items():
+                if key in allowed:
+                    payload[key] = str(value or "")
+            if not payload["chat_id"]:
+                payload["chat_id"] = uuid.uuid4().hex
+            return self._save(knowledge_id, payload)
+
+    def reset_for_source(
+        self,
+        knowledge_id: str,
+        *,
+        source_url: str,
+        source_fingerprint: str,
+        provider: str,
+        model: str,
+    ) -> dict[str, Any]:
+        payload = self._default(knowledge_id)
+        payload.update(
+            {
+                "chat_id": uuid.uuid4().hex,
+                "source_url": source_url,
+                "source_fingerprint": source_fingerprint,
+                "provider": provider,
+                "model": model,
+                "recovery_state": "source_changed",
+            }
+        )
+        with _CHAT_LOCK:
+            return self._save(knowledge_id, payload)
 
     def clear(self, knowledge_id: str) -> None:
         path = self._path(knowledge_id)
@@ -48,13 +112,12 @@ class ChatStore:
             if path.exists():
                 path.unlink()
 
-    def _save(self, knowledge_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    def _save(self, knowledge_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         path = self._path(knowledge_id)
-        payload = {
-            "knowledge_id": knowledge_id,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "messages": messages,
-        }
+        payload = {**self._default(knowledge_id), **payload}
+        payload["knowledge_id"] = knowledge_id
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        payload["messages"] = self._normalize_messages(payload.get("messages") or [])[-MAX_MESSAGES:]
         handle, temporary_name = tempfile.mkstemp(prefix="chat-", suffix=".json", dir=path.parent)
         try:
             with os.fdopen(handle, "w", encoding="utf-8") as temporary:
@@ -90,5 +153,27 @@ class ChatStore:
                 normalized["provider"] = str(item.get("provider") or "")
                 normalized["model"] = str(item.get("model") or "")
                 normalized["warning"] = str(item.get("warning") or "")
+                normalized["route"] = str(item.get("route") or "")
+                normalized["route_status"] = str(item.get("route_status") or "")
             result.append(normalized)
         return result
+
+    @staticmethod
+    def _default(knowledge_id: str) -> dict[str, Any]:
+        return {
+            "chat_id": "",
+            "knowledge_id": knowledge_id,
+            "source_url": "",
+            "source_fingerprint": "",
+            "provider": "",
+            "model": "",
+            "route": "",
+            "route_status": "",
+            "remote_session_id": "",
+            "remote_file_id": "",
+            "remote_expires_at": "",
+            "recovery_state": "",
+            "degradation_reason": "",
+            "updated_at": "",
+            "messages": [],
+        }

@@ -93,6 +93,7 @@ def meaningful_analysis(data: dict[str, Any]) -> bool:
             data.get("chapters") if isinstance(data.get("chapters"), list) else [],
             data.get("terminology") if isinstance(data.get("terminology"), list) else [],
             data.get("actions") if isinstance(data.get("actions"), list) else [],
+            data.get("content") if isinstance(data.get("content"), dict) else {},
         )
     )
 

@@ -120,3 +120,13 @@ Tracked examples contain empty secret values only.
 ## D014: Scale And SaaS Are Later Phases
 
 v1.2 completes the local product. Scale and SaaS work must remain separate and must build on, rather than fork, the local pipeline and package contract.
+
+## D015: The Public CLI Is The Automation Boundary
+
+From v1.3, Web, Agent Skills, and automation invoke only the public `python -m src.main <command>` contract. JSON results, JSONL events, exit codes, and Schema versions are centralized. Internal Python call construction is not a public integration contract.
+
+## D016: v1.5 Is Account-Free And Local
+
+v1.5 does not implement registration, login, or email verification. It creates a default local workspace and uses one Provider Catalog and credential-reading service across Web, CLI, and Worker.
+
+Text, visual, and ASR Provider configuration is independent. Optional missing Providers do not block unrelated capabilities. Secrets prefer Windows Credential Manager or the system Keyring and are never returned to the frontend in full.

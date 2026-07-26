@@ -20,5 +20,11 @@ class WebSource(SourceAdapter):
     def acquire_subtitles(self, work_dir: Path, language: str) -> Path | None:
         raise NotImplementedError("普通网页没有视频字幕接口。")
 
-    def acquire_media(self, work_dir: Path, sample_seconds: int | None = None) -> Path:
+    def acquire_media(
+        self,
+        work_dir: Path,
+        sample_seconds: int | None = None,
+        *,
+        audio_only: bool = False,
+    ) -> Path:
         raise NotImplementedError("普通网页媒体采集将在后续阶段实现。")

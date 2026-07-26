@@ -45,7 +45,13 @@ class LocalMediaSource(SourceAdapter):
     def acquire_subtitles(self, work_dir: Path, language: str) -> Path | None:
         return None
 
-    def acquire_media(self, work_dir: Path, sample_seconds: int | None = None) -> Path:
+    def acquire_media(
+        self,
+        work_dir: Path,
+        sample_seconds: int | None = None,
+        *,
+        audio_only: bool = False,
+    ) -> Path:
         if not self.path:
             raise RuntimeError("请先调用 resolve()。")
         return self.path

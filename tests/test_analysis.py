@@ -134,6 +134,18 @@ class DeepSeekProviderTests(unittest.TestCase):
         self.assertEqual(result.provider, "deepseek")
         self.assertEqual(sleeps, [1.0])
 
+    def test_bad_request_includes_safe_upstream_message(self) -> None:
+        error = RuntimeError("raw wrapper")
+        error.status_code = 400  # type: ignore[attr-defined]
+        error.response = SimpleNamespace(  # type: ignore[attr-defined]
+            text='{"error":{"message":"The supported API model names are deepseek-v4-pro or deepseek-v4-flash, but you passed deepseek-chat."}}'
+        )
+        client = _client([error])
+        provider = DeepSeekProvider(api_key="test-key", client=client, sleep=lambda _: None)
+
+        with self.assertRaisesRegex(UserFacingError, "deepseek-v4-flash.*deepseek-chat"):
+            provider.complete([{"role": "user", "content": "test"}])
+
     def test_missing_key_has_actionable_error(self) -> None:
         provider = DeepSeekProvider(api_key="", client=_client([]))
         with self.assertRaisesRegex(UserFacingError, "DEEPSEEK_API_KEY"):

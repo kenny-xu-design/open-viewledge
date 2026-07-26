@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import logging
 import mimetypes
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -19,17 +22,26 @@ from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
 from . import __version__
+from .cli_contract import sanitize_message
 from .analysis.retry import reanalyze_knowledge_package
-from .chat import answer_question
+from .chat import answer_question, prepare_grounded_request
 from .chat_store import ChatStore
 from .config import load_config
 from .exporters import export_directory_to_vault, refresh_compatible_export, render_directory_export, selection_for_request
 from .job_store import Job, JobStore
 from .knowledge_validation import inspect_knowledge_package
 from .note_store import NoteConflictError, NoteStore
-from .providers.llm import ProviderRegistry
+from .processing_profiles import normalize_processing_profile
+from .provider_config import (
+    ProviderConfigResolver,
+    WebProviderConfigStore,
+    sanitize_provider_error,
+    test_provider_connection,
+)
+from .providers.llm import GeminiProvider, ProviderRegistry
 from .runtime_tools import runtime_tool_statuses
 from .utils import UserFacingError
+from .video_chat import GeminiVideoChatRouter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = PROJECT_ROOT / "output"
@@ -50,12 +62,30 @@ LIBRARY_FILES = {
     "source.md",
     "export_note.md",
     "user_notes.md",
+    "visual_insights.json",
+    "visual_insights.md",
+    "comments.json",
+    "comments.md",
+    "comment_insights.json",
+    "comment_insights.md",
 }
 MEDIA_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"}
 
 JOB_STORE = JobStore(LOCAL_STATE_ROOT / "web_jobs.json")
 JOBS: dict[str, Job] = {job.id: job for job in JOB_STORE.load_jobs()}
 JOBS_LOCK = threading.RLock()
+JOB_ENV_OVERRIDES: dict[str, dict[str, str]] = {}
+LOGGER = logging.getLogger(__name__)
+WEB_PROVIDER_CONFIG = WebProviderConfigStore()
+
+
+class KnowledgeDeletionError(RuntimeError):
+    def __init__(self, code: str, message: str, target: Path, cause: OSError, deleted: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.target = target
+        self.cause = cause
+        self.deleted = list(deleted or [])
 
 
 def build_cli_command(payload: dict[str, Any], python_executable: str | None = None) -> list[str]:
@@ -69,6 +99,7 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
 
     backend = str(payload.get("backend") or "deepseek")
     mode = str(payload.get("mode") or "summary")
+    processing_profile = normalize_processing_profile(str(payload.get("processingProfile") or "complete"))
     export = str(payload.get("export") or "none")
     lang = str(payload.get("lang") or "").strip()
 
@@ -79,13 +110,24 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
     if export not in SUPPORTED_EXPORTS:
         raise ValueError("export 参数不合法。")
 
-    command = [python_executable, "-m", "src.main"]
+    command = [python_executable, "-m", "src.main", "analyze"]
     command.extend(["--url" if source_type == "url" else "--file", source])
     if lang:
         command.extend(["--lang", lang])
-    command.extend(["--backend", backend, "--mode", mode])
+    command.extend(
+        [
+            "--backend",
+            backend,
+            "--mode",
+            mode,
+            "--processing-profile",
+            processing_profile,
+        ]
+    )
     if payload.get("noFrames"):
         command.append("--no-frames")
+    if payload.get("comments"):
+        command.append("--comments")
     if export != "none":
         command.extend(["--export", export])
     if payload.get("noSummary"):
@@ -99,6 +141,7 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
         if sample_value <= 0:
             raise ValueError("sampleSeconds 必须是正整数。")
         command.extend(["--sample-seconds", str(sample_value)])
+    command.append("--jsonl")
     return command
 
 
@@ -113,7 +156,13 @@ def _clean_source_value(value: str) -> str:
 
 def start_job(payload: dict[str, Any]) -> Job:
     command = build_cli_command(payload)
-    job = Job(id=uuid.uuid4().hex[:12], command=command)
+    env_overrides = ProviderConfigResolver(WEB_PROVIDER_CONFIG).env_overrides()
+    job = Job(
+        id=uuid.uuid4().hex[:12],
+        command=command,
+        analysis_profile=str(payload.get("mode") or "summary"),
+        processing_profile=normalize_processing_profile(str(payload.get("processingProfile") or "complete")),
+    )
     with JOBS_LOCK:
         JOBS[job.id] = job
         try:
@@ -121,6 +170,8 @@ def start_job(payload: dict[str, Any]) -> Job:
         except OSError:
             JOBS.pop(job.id, None)
             raise
+        if env_overrides:
+            JOB_ENV_OVERRIDES[job.id] = env_overrides
     thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
     thread.start()
     return job
@@ -130,6 +181,8 @@ def _run_job(job: Job) -> None:
     before = _snapshot_output_dirs()
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
+    with JOBS_LOCK:
+        env.update(JOB_ENV_OVERRIDES.pop(job.id, {}))
     job.status = "running"
     job.started_at = time.time()
     _persist_job(job)
@@ -148,12 +201,13 @@ def _run_job(job: Job) -> None:
         )
         assert process.stdout is not None
         for line in process.stdout:
-            _append_log(job, line.rstrip())
+            _handle_cli_output_line(job, line.rstrip())
         job.returncode = process.wait()
-        job.output_dir = _find_new_output_dir(before)
+        if not job.output_dir:
+            job.output_dir = _find_new_output_dir(before)
         job.knowledge_id = Path(job.output_dir).name if job.output_dir else ""
         job.status = "success" if job.returncode == 0 else "failed"
-        if job.returncode != 0:
+        if job.returncode != 0 and not job.error:
             job.error = f"CLI 退出码：{job.returncode}"
     except Exception as exc:
         job.status = "failed"
@@ -162,6 +216,42 @@ def _run_job(job: Job) -> None:
     finally:
         job.finished_at = time.time()
         _persist_job(job)
+
+
+def _handle_cli_output_line(job: Job, line: str) -> None:
+    if not line:
+        return
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError:
+        _append_log(job, line)
+        return
+    if not isinstance(payload, dict) or not payload.get("event"):
+        _append_log(job, line)
+        return
+    event = str(payload.get("event"))
+    if event == "task_created":
+        job.cli_task_id = str(payload.get("task_id") or "")
+        job.analysis_profile = str(payload.get("analysis_profile") or job.analysis_profile)
+        job.processing_profile = normalize_processing_profile(
+            str(payload.get("processing_profile") or job.processing_profile)
+        )
+    elif event == "task_completed" and isinstance(payload.get("result"), dict):
+        result = payload["result"]
+        job.output_dir = str(result.get("output_dir") or "")
+        job.knowledge_id = str(result.get("knowledge_id") or "")
+        job.analysis_profile = str(result.get("analysis_profile") or job.analysis_profile)
+        job.processing_profile = normalize_processing_profile(
+            str(result.get("processing_profile") or job.processing_profile)
+        )
+    elif event == "task_failed" and isinstance(payload.get("error"), dict):
+        job.error = str(payload["error"].get("message") or "")
+    stage = str(payload.get("stage") or "")
+    progress = payload.get("progress")
+    detail = f"{event}{' ' + stage if stage else ''}"
+    if isinstance(progress, (int, float)):
+        detail += f" {float(progress):.0%}"
+    _append_log(job, detail)
 
 
 def _append_runtime_logs(job: Job) -> None:
@@ -195,7 +285,7 @@ def runtime_status_payload() -> dict[str, Any]:
         "inProjectVenv": _is_project_venv_python(),
         "warning": _runtime_python_warning(),
         "tools": tools,
-        "providers": ProviderRegistry().statuses(),
+        "providers": ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses(),
     }
 
 
@@ -212,6 +302,7 @@ def _is_project_venv_python(python_executable: str | None = None) -> bool:
 def _append_log(job: Job, line: str) -> None:
     if not line:
         return
+    line = sanitize_message(line)
     with JOBS_LOCK:
         job.logs.append(line)
         if len(job.logs) > 400:
@@ -250,11 +341,80 @@ def _find_new_output_dir(before: dict[Path, float]) -> str:
     return str(newest.relative_to(PROJECT_ROOT)).replace("\\", "/")
 
 
+def _snapshot_job(job: Job) -> Job:
+    return Job(
+        id=job.id,
+        command=list(job.command),
+        schema_version=job.schema_version,
+        analysis_profile=job.analysis_profile,
+        processing_profile=job.processing_profile,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        status=job.status,
+        returncode=job.returncode,
+        logs=list(job.logs),
+        cli_task_id=job.cli_task_id,
+        knowledge_id=job.knowledge_id,
+        output_dir=job.output_dir,
+        error=job.error,
+    )
+
+
+def provider_config_payload() -> dict[str, Any]:
+    return {
+        "providers": ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses(),
+        "message": "API Key 默认仅用于当前本地运行会话，服务重启后需要重新填写。",
+    }
+
+
+def apply_provider_config(payload: dict[str, Any]) -> dict[str, Any]:
+    WEB_PROVIDER_CONFIG.set_config(
+        str(payload.get("provider") or ""),
+        api_key=str(payload["apiKey"]) if "apiKey" in payload else None,
+        base_url=str(payload["baseUrl"]) if "baseUrl" in payload else None,
+        model=str(payload["model"]) if "model" in payload else None,
+    )
+    return provider_config_payload()
+
+
+def clear_provider_config(provider: str) -> dict[str, Any]:
+    WEB_PROVIDER_CONFIG.clear(provider)
+    return provider_config_payload()
+
+
+def test_provider_config(payload: dict[str, Any]) -> dict[str, Any]:
+    provider_name = str(payload.get("provider") or "")
+    temporary_store = WebProviderConfigStore()
+    temporary_store.set_config(
+        provider_name,
+        api_key=str(payload.get("apiKey") or ""),
+        base_url=str(payload.get("baseUrl") or ""),
+        model=str(payload.get("model") or ""),
+    )
+    provider = ProviderConfigResolver(temporary_store).provider(provider_name)
+    result = test_provider_connection(provider)
+    result["testedAt"] = time.time()
+    WEB_PROVIDER_CONFIG.set_last_test(provider_name, result)
+    return {"test": result, **provider_config_payload()}
+
+
+def _with_api_config_hint(message: str) -> str:
+    text = sanitize_provider_error(message)
+    triggers = ("未配置", "api_key", "鉴权", "HTTP 400", "HTTP 401", "HTTP 403", "HTTP 429", "Gemini", "DeepSeek")
+    if any(item.lower() in text.lower() for item in triggers) and "API 配置" not in text:
+        return f"{text} 请前往“API 配置”检查 Provider、模型和 Key。"
+    return text
+
+
 def job_to_dict(job: Job) -> dict[str, Any]:
     output_files: list[dict[str, str]] = []
+    output_available = False
     if job.output_dir:
         output_path = (PROJECT_ROOT / job.output_dir).resolve()
         if output_path.exists():
+            output_available = True
             output_files = [
                 {
                     "name": path.name,
@@ -271,10 +431,13 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "startedAt": job.started_at,
         "finishedAt": job.finished_at,
         "status": job.status,
+        "analysisProfile": job.analysis_profile,
+        "processingProfile": job.processing_profile,
         "returncode": job.returncode,
+        "cliTaskId": job.cli_task_id,
         "logs": job.logs,
-        "knowledgeId": job.knowledge_id,
-        "outputDir": job.output_dir,
+        "knowledgeId": job.knowledge_id if output_available else "",
+        "outputDir": job.output_dir if output_available else "",
         "outputFiles": output_files,
         "error": job.error,
     }
@@ -308,6 +471,9 @@ def list_library_items() -> list[dict[str, Any]]:
                 "updatedAt": directory.stat().st_mtime,
                 "hasAnalysis": bool(analysis.get("summary") or analysis.get("highlights") or analysis.get("chapters")),
                 "analysisStatus": inspection.analysis_status,
+                "analysisProfile": manifest.get("analysis_profile") or "summary",
+                "processingProfile": manifest.get("processing_profile") or "complete",
+                "firstReadableResultDurationMs": manifest.get("first_readable_result_duration_ms"),
                 "integrity": inspection.level,
                 "integrityIssues": [issue.message for issue in inspection.issues[:5]],
                 "chapterCount": _timeline_count(directory),
@@ -332,6 +498,9 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
             "error": "知识包中的 analysis.json 无效，请运行 CLI inspect 查看详情。",
         }
     manifest_view = dict(manifest)
+    manifest_view.setdefault("analysis_profile", "summary")
+    manifest_view.setdefault("processing_profile", "complete")
+    manifest_view.setdefault("stage_metrics", {})
     if inspection.level == "invalid" and str(manifest_view.get("status") or "").startswith("completed"):
         manifest_view["status"] = "invalid"
         manifest_view["errors"] = [
@@ -339,6 +508,9 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
             *[issue.message for issue in inspection.issues if issue.severity == "error"][:5],
         ]
     timeline_payload = _load_json_file(directory / "timeline.json")
+    visual_insights = _load_json_file(directory / "visual_insights.json")
+    comments_payload = _load_json_file(directory / "comments.json")
+    comment_insights = _load_json_file(directory / "comment_insights.json")
     timeline = timeline_payload.get("items", []) if isinstance(timeline_payload, dict) else []
     if not isinstance(timeline, list):
         timeline = []
@@ -383,6 +555,9 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
         "source": source,
         "manifest": manifest_view,
         "analysis": analysis,
+        "visualInsights": visual_insights,
+        "comments": comments_payload.get("items", []) if isinstance(comments_payload.get("items"), list) else [],
+        "commentInsights": comment_insights,
         "inspection": inspection.to_dict(),
         "timeline": timeline,
         "files": files,
@@ -417,10 +592,14 @@ def _external_player_descriptor(source_url: str) -> dict[str, str] | None:
     if host in {"bilibili.com", "www.bilibili.com", "m.bilibili.com", "b23.tv"}:
         match = re.search(r"(?i)(BV[0-9A-Za-z]{10})", source_url)
         if match:
+            from urllib.parse import parse_qs
+
+            page = parse_qs(parsed.query).get("p", ["1"])[0]
+            page = page if page.isdigit() and int(page) > 0 else "1"
             return {
                 "provider": "bilibili",
                 "videoId": match.group(1),
-                "url": f"https://player.bilibili.com/player.html?bvid={match.group(1)}&p=1&danmaku=0",
+                "url": f"https://player.bilibili.com/player.html?bvid={match.group(1)}&p={page}&danmaku=0",
             }
     return None
 
@@ -486,7 +665,13 @@ def chat_with_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("history 必须是数组。")
     question = str(payload.get("question") or "")
     requested_provider = str(payload.get("provider") or "auto")
-    registry = ProviderRegistry()
+    resolver = ProviderConfigResolver(WEB_PROVIDER_CONFIG)
+    registry = ProviderRegistry(
+        {
+            "deepseek": resolver.provider("deepseek"),
+            "gemini": resolver.provider("gemini"),
+        }
+    )
     visual_terms = ("画面", "截图", "界面", "按钮", "图表", "图像", "视觉")
     visual_question = any(term in question for term in visual_terms)
     provider = registry.resolve(
@@ -495,17 +680,101 @@ def chat_with_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
         str(payload.get("model") or "") or None,
     )
     store = ChatStore(resolve_library_dir)
-    stored_history = store.load(knowledge_id).get("messages", [])
-    result = answer_question(
-        question=question,
-        groups=groups,
-        analysis=knowledge.get("analysis") if isinstance(knowledge.get("analysis"), dict) else {},
-        source=knowledge.get("source") if isinstance(knowledge.get("source"), dict) else {},
-        history=stored_history if stored_history else client_history,
-        provider=provider,
-        knowledge_id=knowledge_id,
-    )
-    if visual_question:
+    stored_state = store.load(knowledge_id)
+    stored_history = stored_state.get("messages", [])
+    source = knowledge.get("source") if isinstance(knowledge.get("source"), dict) else {}
+    source_url = str(source.get("canonical_url") or source.get("source_url") or knowledge.get("source_url") or "")
+    fingerprint = _chat_source_fingerprint(source_url, source, knowledge_id)
+    if stored_state.get("source_fingerprint") and stored_state.get("source_fingerprint") != fingerprint:
+        stored_state = store.reset_for_source(
+            knowledge_id,
+            source_url=source_url,
+            source_fingerprint=fingerprint,
+            provider=provider.name,
+            model=provider.model_name,
+        )
+        stored_history = []
+
+    if isinstance(provider, GeminiProvider):
+        request = prepare_grounded_request(
+            question=question,
+            groups=groups,
+            analysis=knowledge.get("analysis") if isinstance(knowledge.get("analysis"), dict) else {},
+            source=source,
+            history=stored_history if stored_history else client_history,
+            allow_fallback_context=True,
+        )
+        if request is None:
+            raise ValueError("当前知识包没有可用于视频对话的上下文。")
+        media_path = None
+        try:
+            media_path = resolve_media_path(knowledge_id)
+        except FileNotFoundError:
+            pass
+        directory = resolve_library_dir(knowledge_id)
+        frame_paths = _chat_frame_paths(directory, knowledge)
+        routed = GeminiVideoChatRouter(provider).answer(
+            request.messages,
+            source_url=source_url,
+            media_path=media_path,
+            frame_paths=frame_paths,
+            remote_file_id=str(stored_state.get("remote_file_id") or ""),
+        )
+        result = {
+            "answer": routed.response.content,
+            "citations": request.citations,
+            "provider": routed.response.provider,
+            "model": routed.response.model,
+            "usage": routed.response.usage,
+            "knowledge_id": knowledge_id,
+            "route": routed.route,
+            "route_status": routed.route_status,
+            "route_attempts": routed.attempts,
+        }
+        if routed.route_status == "degraded":
+            result["warning"] = (
+                "Gemini 视频路由已降级为"
+                f" {routed.route}。{routed.degradation_reason or '仍可基于现有知识包回答。'}"
+            )
+        store.update_state(
+            knowledge_id,
+            source_url=source_url,
+            source_fingerprint=fingerprint,
+            provider=routed.response.provider,
+            model=routed.response.model,
+            route=routed.route,
+            route_status=routed.route_status,
+            remote_file_id=routed.remote_file_id,
+            remote_expires_at=routed.remote_expires_at,
+            recovery_state="degraded" if routed.route_status == "degraded" else "ready",
+            degradation_reason=routed.degradation_reason,
+        )
+    else:
+        result = answer_question(
+            question=question,
+            groups=groups,
+            analysis=knowledge.get("analysis") if isinstance(knowledge.get("analysis"), dict) else {},
+            source=source,
+            history=stored_history if stored_history else client_history,
+            provider=provider,
+            knowledge_id=knowledge_id,
+        )
+        result["route"] = "text_only"
+        result["route_status"] = "available"
+        result["route_attempts"] = [
+            {"route": "text_only", "status": "available", "reason": ""}
+        ]
+        store.update_state(
+            knowledge_id,
+            source_url=source_url,
+            source_fingerprint=fingerprint,
+            provider=result["provider"],
+            model=result["model"],
+            route="text_only",
+            route_status="available",
+            recovery_state="ready",
+        )
+    if visual_question and not isinstance(provider, GeminiProvider):
         result["warning"] = "当前聊天请求未附带关键帧，本次仅基于字幕和已有文本分析回答。"
     new_messages = [] if stored_history and stored_history[-1].get("role") == "user" and stored_history[-1].get("content") == question else [{"role": "user", "content": question}]
     new_messages.append(
@@ -516,9 +785,53 @@ def chat_with_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
             "provider": result["provider"],
             "model": result["model"],
             "warning": result.get("warning", ""),
+            "route": result.get("route", ""),
+            "route_status": result.get("route_status", ""),
         }
     )
     store.append(knowledge_id, new_messages)
+    return result
+
+
+def _chat_source_fingerprint(source_url: str, source: dict[str, Any], knowledge_id: str) -> str:
+    identity = {
+        "knowledge_id": knowledge_id,
+        "source_url": source_url,
+        "source_id": str(source.get("source_id") or ""),
+        "platform": str(source.get("platform") or ""),
+    }
+    return hashlib.sha256(
+        json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _chat_frame_paths(directory: Path, knowledge: dict[str, Any]) -> list[Path]:
+    relative_paths = []
+    highlights = (knowledge.get("analysis") or {}).get("highlights", [])
+    if isinstance(highlights, list):
+        relative_paths.extend(
+            str(item.get("image") or "")
+            for item in highlights
+            if isinstance(item, dict) and item.get("image")
+        )
+    frames_dir = directory / "frames"
+    if frames_dir.is_dir():
+        relative_paths.extend(
+            f"frames/{path.name}"
+            for path in sorted(frames_dir.iterdir())
+            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+        )
+    result = []
+    for relative in relative_paths:
+        candidate = (directory / relative).resolve()
+        try:
+            candidate.relative_to(directory)
+        except ValueError:
+            continue
+        if candidate.is_file() and candidate not in result:
+            result.append(candidate)
+        if len(result) >= 8:
+            break
     return result
 
 
@@ -557,9 +870,76 @@ def delete_knowledge_packages(knowledge_ids: list[str]) -> list[str]:
 
     # Resolve and validate every target before removing the first directory so
     # malformed IDs cannot cause a partially applied batch deletion.
-    for directory in targets:
-        shutil.rmtree(directory)
+    deleted: list[str] = []
+    for knowledge_id, directory in zip(normalized_ids, targets, strict=True):
+        try:
+            _remove_knowledge_directory(directory)
+        except OSError as exc:
+            error = _classify_delete_error(directory, exc, deleted)
+            LOGGER.error(
+                "knowledge_delete_failed code=%s exception=%s winerror=%s target=%s",
+                error.code,
+                type(exc).__name__,
+                getattr(exc, "winerror", None),
+                directory,
+            )
+            raise error from exc
+        deleted.append(knowledge_id)
     return normalized_ids
+
+
+def _remove_knowledge_directory(directory: Path) -> None:
+    output_root = OUTPUT_ROOT.resolve()
+    target = directory.resolve()
+    try:
+        relative = target.relative_to(output_root)
+    except ValueError as exc:
+        raise ValueError("知识包路径超出允许的输出目录。") from exc
+    if len(relative.parts) != 1 or target == output_root:
+        raise ValueError("知识包路径不符合安全删除规则。")
+    if not target.exists():
+        raise FileNotFoundError(target)
+    if not target.is_dir():
+        raise ValueError("知识包目标不是目录。")
+    shutil.rmtree(target, onexc=_retry_readonly_delete)
+
+
+def _retry_readonly_delete(function: Any, path: str, exc: BaseException) -> None:
+    if not isinstance(exc, PermissionError):
+        raise exc
+    target = Path(path)
+    try:
+        target.chmod(target.stat().st_mode | stat.S_IWRITE | stat.S_IREAD)
+        function(path)
+    except OSError:
+        raise exc
+
+
+def _classify_delete_error(target: Path, exc: OSError, deleted: list[str]) -> KnowledgeDeletionError:
+    winerror = getattr(exc, "winerror", None)
+    if winerror in {32, 33}:
+        return KnowledgeDeletionError(
+            "knowledge_package_locked",
+            "知识包文件正在被播放器、编辑器、同步软件或其他进程占用。请关闭相关程序后重试。",
+            target,
+            exc,
+            deleted,
+        )
+    if isinstance(exc, PermissionError) or winerror == 5:
+        return KnowledgeDeletionError(
+            "knowledge_package_access_denied",
+            "无法删除知识包。请检查输出目录 ACL、只读属性、同步软件保护，以及 Web 服务的运行权限。",
+            target,
+            exc,
+            deleted,
+        )
+    return KnowledgeDeletionError(
+        "knowledge_package_delete_io_error",
+        "删除知识包时发生文件系统错误，请检查磁盘和同步软件状态后重试。",
+        target,
+        exc,
+        deleted,
+    )
 
 
 def resolve_library_file(knowledge_id: str, relative_name: str) -> Path:
@@ -573,6 +953,13 @@ def resolve_library_file(knowledge_id: str, relative_name: str) -> Path:
     if len(parts) == 2 and parts[0] == "frames":
         if Path(parts[1]).suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
             raise ValueError("不允许访问该关键帧文件。")
+    elif (
+        len(parts) == 3
+        and parts[0] == "assets"
+        and parts[1] == "highlights"
+        and Path(parts[2]).suffix.lower() == ".webp"
+    ):
+        pass
     elif len(parts) != 1:
         raise ValueError("不允许访问该文件。")
     candidate = (directory / Path(*parts)).resolve()
@@ -661,21 +1048,29 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/runtime":
             self._send_json(runtime_status_payload())
         elif parsed.path == "/api/providers":
-            self._send_json({"providers": ProviderRegistry().statuses()})
+            self._send_json({"providers": ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses()})
+        elif parsed.path == "/api/provider-config":
+            self._send_json(provider_config_payload())
         elif parsed.path.startswith("/api/library/"):
             self._handle_library_get(parsed.path)
         elif parsed.path == "/api/jobs":
             with JOBS_LOCK:
-                jobs = [job_to_dict(job) for job in sorted(JOBS.values(), key=lambda item: item.created_at, reverse=True)]
+                job_snapshots = [
+                    _snapshot_job(job)
+                    for job in sorted(JOBS.values(), key=lambda item: item.created_at, reverse=True)
+                ]
+            jobs = [job_to_dict(job) for job in job_snapshots]
             self._send_json({"jobs": jobs})
         elif parsed.path.startswith("/api/jobs/") or parsed.path.startswith("/api/tasks/"):
             job_id = parsed.path.rsplit("/", 1)[-1]
             with JOBS_LOCK:
                 job = JOBS.get(job_id)
+                job_snapshot = _snapshot_job(job) if job else None
             if not job:
                 self._send_json({"error": "任务不存在。"}, HTTPStatus.NOT_FOUND)
                 return
-            self._send_json({"job": job_to_dict(job)})
+            assert job_snapshot is not None
+            self._send_json({"job": job_to_dict(job_snapshot)})
         elif parsed.path.startswith("/output/"):
             self._send_output_file(parsed.path)
         else:
@@ -713,14 +1108,18 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             try:
                 directory = resolve_library_dir(knowledge_id)
                 config = load_config(PROJECT_ROOT / "config.example.json")
-                reanalyze_knowledge_package(directory, config)
+                reanalyze_knowledge_package(
+                    directory,
+                    config,
+                    provider=ProviderConfigResolver(WEB_PROVIDER_CONFIG).provider("deepseek"),
+                )
                 self._send_json({"knowledge": load_knowledge_package(knowledge_id)})
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except FileNotFoundError:
                 self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
             except UserFacingError as exc:
-                self._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+                self._send_json({"error": _with_api_config_hint(str(exc))}, HTTPStatus.BAD_GATEWAY)
             except OSError:
                 self._send_json({"error": "重新分析结果写入失败，请检查输出目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -745,9 +1144,23 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
             except UserFacingError as exc:
-                self._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+                self._send_json({"error": _with_api_config_hint(str(exc))}, HTTPStatus.BAD_GATEWAY)
             except Exception:
                 self._send_json({"error": "上下文对话请求失败。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/provider-config":
+            try:
+                self._send_json(apply_provider_config(self._read_json_body()))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/api/provider-config/test":
+            try:
+                self._send_json(test_provider_config(self._read_json_body()))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._send_json({"error": sanitize_provider_error(str(exc))}, HTTPStatus.BAD_GATEWAY)
             return
         if parsed.path.endswith("/capture-frame") and parsed.path.startswith("/api/library/"):
             self._send_json({"error": "服务端关键帧保存接口尚未接入"}, HTTPStatus.NOT_IMPLEMENTED)
@@ -763,7 +1176,7 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
         except Exception as exc:
-            self._send_json({"error": f"创建任务失败：{exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            self._send_json({"error": _with_api_config_hint(f"创建任务失败：{exc}")}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"job": job_to_dict(job)}, HTTPStatus.CREATED)
 
@@ -807,6 +1220,13 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/provider-config/"):
+            provider = unquote(parsed.path.rsplit("/", 1)[-1])
+            try:
+                self._send_json(clear_provider_config(provider))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
         if parsed.path == "/api/library":
             try:
                 payload = self._read_json_body()
@@ -819,8 +1239,17 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except FileNotFoundError:
                 self._send_json({"error": "选择的知识记录不存在或已被删除。"}, HTTPStatus.NOT_FOUND)
-            except OSError:
-                self._send_json({"error": "知识记录删除失败，请检查输出目录是否可写。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            except KnowledgeDeletionError as exc:
+                status = HTTPStatus.LOCKED if exc.code == "knowledge_package_locked" else HTTPStatus.FORBIDDEN if exc.code == "knowledge_package_access_denied" else HTTPStatus.INTERNAL_SERVER_ERROR
+                self._send_json(
+                    {
+                        "error": str(exc),
+                        "code": exc.code,
+                        "deleted": exc.deleted,
+                        "retryable": exc.code in {"knowledge_package_locked", "knowledge_package_access_denied"},
+                    },
+                    status,
+                )
             return
         if parsed.path.startswith("/api/library/") and parsed.path.endswith("/chat"):
             try:
@@ -1171,6 +1600,15 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div class="grid-2">
           <div class="field">
+            <label>处理模式</label>
+            <select id="processingProfile">
+              <option value="complete">complete（兼容完整流程）</option>
+              <option value="fast">fast（优先文本）</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field">
             <label>字幕语言</label>
             <select id="lang">
               <option value="">默认 zh</option>
@@ -1188,6 +1626,7 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div class="checks">
           <label><input id="noFrames" type="checkbox"> 跳过关键帧</label>
+          <label><input id="comments" type="checkbox"> 同步公开评论</label>
           <label><input id="noSummary" type="checkbox"> 只生成 transcript，不调用 LLM</label>
         </div>
         <button class="primary" type="submit">启动任务</button>
@@ -1229,9 +1668,11 @@ INDEX_HTML = r"""<!doctype html>
         source: $("source").value.trim(),
         backend: $("backend").value,
         mode: $("mode").value,
+        processingProfile: $("processingProfile").value,
         lang: $("lang").value,
         export: $("exportMode").value,
         noFrames: $("noFrames").checked,
+        comments: $("comments").checked,
         noSummary: $("noSummary").checked
       };
       const response = await fetch("/api/jobs", {

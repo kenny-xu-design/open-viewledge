@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .processing_profiles import ProcessingProfile, normalize_processing_profile
+from .schema_compat import UnsupportedSchemaVersion, require_supported_schema
+from .utils import UserFacingError
 
-SCHEMA_VERSION = 1
+
+SCHEMA_VERSION = "1.0"
 MAX_JOBS = 200
 MAX_LOG_LINES = 400
 
@@ -19,6 +22,9 @@ MAX_LOG_LINES = 400
 class Job:
     id: str
     command: list[str]
+    schema_version: str = SCHEMA_VERSION
+    analysis_profile: str = "summary"
+    processing_profile: ProcessingProfile = "complete"
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -26,6 +32,7 @@ class Job:
     status: str = "queued"
     returncode: int | None = None
     logs: list[str] = field(default_factory=list)
+    cli_task_id: str = ""
     knowledge_id: str = ""
     output_dir: str = ""
     error: str = ""
@@ -37,9 +44,22 @@ class Job:
 
     @classmethod
     def from_record(cls, value: dict[str, Any]) -> "Job":
+        try:
+            schema_version = require_supported_schema(
+                value.get("schema_version"), supported_major=1, object_name="Web 任务记录"
+            )
+        except UnsupportedSchemaVersion as exc:
+            raise UserFacingError(str(exc)) from exc
+        try:
+            processing_profile = normalize_processing_profile(value.get("processing_profile"))
+        except ValueError as exc:
+            raise UserFacingError(f"Web 任务记录损坏：{exc}") from exc
         return cls(
             id=str(value.get("id") or ""),
             command=[str(item) for item in value.get("command", []) if isinstance(item, (str, int, float))],
+            schema_version=schema_version,
+            analysis_profile=str(value.get("analysis_profile") or "summary"),
+            processing_profile=processing_profile,
             created_at=float(value.get("created_at") or time.time()),
             updated_at=float(value.get("updated_at") or value.get("created_at") or time.time()),
             started_at=_optional_float(value.get("started_at")),
@@ -47,6 +67,7 @@ class Job:
             status=str(value.get("status") or "failed"),
             returncode=_optional_int(value.get("returncode")),
             logs=[str(item) for item in value.get("logs", []) if isinstance(item, str)][-MAX_LOG_LINES:],
+            cli_task_id=str(value.get("cli_task_id") or ""),
             knowledge_id=str(value.get("knowledge_id") or ""),
             output_dir=str(value.get("output_dir") or ""),
             error=str(value.get("error") or ""),
@@ -90,6 +111,13 @@ class JobStore:
                 payload = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 payload = {}
+            if isinstance(payload, dict) and payload:
+                try:
+                    require_supported_schema(
+                        payload.get("schema_version"), supported_major=1, object_name="Web 任务存储"
+                    )
+                except UnsupportedSchemaVersion as exc:
+                    raise UserFacingError(str(exc)) from exc
             values = payload.get("jobs", []) if isinstance(payload, dict) else []
             for value in values if isinstance(values, list) else []:
                 if not isinstance(value, dict):
@@ -120,17 +148,18 @@ class JobStore:
                 for item in sorted(self._jobs.values(), key=lambda job: job.created_at, reverse=True)
             ],
         }
-        handle, temporary_name = tempfile.mkstemp(prefix="web-jobs-", suffix=".json", dir=self.path.parent)
+        temporary_path = self.path.with_name(
+            f"{self.path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+        )
         try:
-            with os.fdopen(handle, "w", encoding="utf-8") as temporary:
+            with temporary_path.open("x", encoding="utf-8") as temporary:
                 json.dump(payload, temporary, ensure_ascii=False, indent=2)
                 temporary.write("\n")
                 temporary.flush()
-                os.fsync(temporary.fileno())
-            os.replace(temporary_name, self.path)
+            os.replace(temporary_path, self.path)
         finally:
-            if os.path.exists(temporary_name):
-                os.unlink(temporary_name)
+            if temporary_path.exists():
+                temporary_path.unlink()
 
 
 def _optional_float(value: Any) -> float | None:

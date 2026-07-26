@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import os
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError, field_validator
 
 from .defaults import (
     DEFAULT_DEEPSEEK_BASE_URL,
@@ -13,9 +13,11 @@ from .defaults import (
     DEFAULT_SUMMARY_BACKEND,
 )
 from .utils import load_json
+from .schema_compat import UnsupportedSchemaVersion, require_supported_schema
 
 
 class AppConfig(BaseModel):
+    schema_version: str = "1.0"
     output_dir: str = "output"
     whisper_model: str = "small"
     language: str = "zh"
@@ -35,6 +37,11 @@ class AppConfig(BaseModel):
     obsidian_export_subdir: str = "外源/视频"
     obsidian_export_overwrite: bool = False
 
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, value: str) -> str:
+        return require_supported_schema(value, supported_major=1, object_name="配置文件")
+
 
 def load_config(config_path: Path) -> AppConfig:
     data = load_json(config_path) if config_path.exists() else {}
@@ -47,4 +54,9 @@ def load_config(config_path: Path) -> AppConfig:
     for key, value in env_values.items():
         if value not in {"", False}:
             data[key] = value
-    return AppConfig(**data)
+    try:
+        return AppConfig(**data)
+    except (ValidationError, UnsupportedSchemaVersion) as exc:
+        from .utils import UserFacingError
+
+        raise UserFacingError(f"配置文件无效：{exc}") from exc

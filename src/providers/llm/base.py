@@ -22,6 +22,7 @@ class LLMProvider(ABC):
     model_name: str
     is_cloud: bool = False
     supports_images: bool = False
+    supports_video: bool = False
 
     @abstractmethod
     def is_available(self) -> bool: ...

@@ -1,24 +1,47 @@
 "use strict";
 
-document.documentElement.dataset.uiVersion = "workspace-15";
+document.documentElement.dataset.uiVersion = "workspace-16";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const DEFAULT_MODULE_ORDER = ["result", "media", "collaboration"];
-const EXPORT_SECTION_LABELS = { metadata: "基本信息", summary: "摘要", highlights: "亮点", prerequisites: "前置条件", steps: "操作步骤", glossary: "关键术语", thoughts: "思考", action_items: "可执行动作", warnings: "注意事项", chapters: "章节", keyframes: "关键帧", chat: "AI 对话", user_notes: "我的笔记", source_materials: "原文资料" };
+const EXPORT_SECTION_LABELS = { metadata: "基本信息", summary: "摘要", highlights: "亮点", prerequisites: "前置条件", steps: "操作步骤", glossary: "关键术语", thoughts: "思考", action_items: "可执行动作", warnings: "注意事项", chapters: "章节", keyframes: "关键帧", chat: "AI 对话", comment_insights: "评论区洞察", user_notes: "我的笔记", source_materials: "原文资料" };
 const EXPORT_PRESETS = { light: ["metadata", "summary", "highlights", "chapters"], "summary-chat": ["metadata", "summary", "highlights", "chat", "user_notes"], full: Object.keys(EXPORT_SECTION_LABELS) };
+const ANALYSIS_MODE_META = {
+  summary: { label: "标准摘要", description: "适合资讯、访谈、介绍和一般知识视频" },
+  tutorial: { label: "教程提取", description: "适合软件、编程、设计和制作教程" },
+  viral: { label: "爆款分析", description: "适合热门、短视频、广告和自媒体内容" },
+  "close-reading": { label: "深度精读", description: "适合课程、演讲、长访谈和观点内容" },
+};
+const PROFILE_RENDER_SECTIONS = {
+  summary: [["一句话", "one_sentence", "text"], ["摘要", "summary", "text"], ["专业术语", "professional_terms", "terms"], ["亮点", "highlights", "highlights"], ["思考", "thoughts", "thoughts"], ["章节总结", "chapter_summaries", "chapters"]],
+  tutorial: [["教程目标", "tutorial_goal", "text"], ["最终成果", "final_result", "text"], ["前置条件", "prerequisites", "list"], ["工具与材料", "tools_and_materials", "list"], ["流程总览", "workflow_overview", "text"], ["教程阶段与章节", "chapter_summaries", "tutorialChapters"], ["完整教程步骤", "steps", "steps"], ["关键参数与设置", "key_parameters", "list"], ["常见错误与排查", "troubleshooting", "list"], ["完成验收清单", "acceptance_checklist", "checklist"], ["可复用命令或模板", "reusable_commands_or_templates", "list"], ["教程局限", "limitations", "list"]],
+  viral: [["内容定位", "content_positioning", "text"], ["目标受众", "target_audience", "list"], ["标题与封面承诺", "title_and_cover_promise", "text"], ["前 30 秒钩子", "first_30_seconds_hook", "text"], ["内容结构", "content_structure", "list"], ["节奏与留存设计", "retention_design", "list"], ["情绪与叙事机制", "emotion_and_narrative", "list"], ["视觉包装与剪辑", "visual_packaging_and_editing", "list"], ["互动与传播设计", "interaction_and_distribution", "list"], ["可复用内容公式", "reusable_content_formula", "list"], ["可借鉴点", "takeaways", "list"], ["风险与局限", "risks_and_limitations", "list"]],
+  "close-reading": [["核心命题", "core_thesis", "text"], ["关键概念", "key_concepts", "list"], ["论证地图", "argument_map", "list"], ["逐章精读", "chapter_close_reading", "chapters"], ["证据评估", "evidence_assessment", "list"], ["隐含假设", "implicit_assumptions", "list"], ["可能的反方观点", "counterarguments", "list"], ["论证局限", "argument_limits", "list"], ["视觉证据", "visual_evidence", "list"], ["延伸联系", "extended_connections", "list"], ["待核查事实", "facts_to_verify", "list"]],
+};
 const SETTINGS = {
   moduleOrder: "vs.moduleOrder",
   moduleWidths: "vs.moduleWidths",
   activeResultTab: "vs.activeResultTab",
+  activeInsightTab: "vs.activeInsightTab",
   transcriptFollowMode: "vs.transcriptFollowMode",
   playbackRate: "vs.playbackRate",
+  videoAspectRatio: "vs.videoAspectRatio",
+  videoObjectFit: "vs.videoObjectFit",
 };
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const WIDE_SHELL_QUERY = "(min-width: 1280px)";
+const SINGLE_PANE_QUERY = "(max-width: 959px)";
+
+function uiScrollBehavior() {
+  return typeof window.matchMedia === "function" && window.matchMedia(REDUCED_MOTION_QUERY).matches ? "auto" : "smooth";
+}
 
 const state = {
   selectedKnowledgeId: "",
   libraryItems: [],
   activeResultTab: localStorage.getItem(SETTINGS.activeResultTab) || "summary",
+  activeInsightTab: localStorage.getItem(SETTINGS.activeInsightTab) || "comments",
   activeSource: null,
   currentTime: 0,
   currentChapter: -1,
@@ -35,6 +58,7 @@ const state = {
   scrollPositions: { summary: 0, transcript: 0 },
   noteStateByKnowledgeId: {},
   providerStatuses: {},
+  providerConfig: {},
   deleteMode: false,
   selectedDeleteIds: new Set(),
   deleting: false,
@@ -48,6 +72,8 @@ let mediaController = null;
 let toastTimer = 0;
 let taskPoller = 0;
 let activeSourceType = "url";
+let lastSidebarTrigger = null;
+let lastInspectorTrigger = null;
 
 class MediaController {
   load(source) { this.source = source; }
@@ -144,11 +170,18 @@ class YouTubeMediaController extends MediaController {
 }
 
 class BilibiliEmbedController extends MediaController {
-  constructor(element, videoId, source) { super(); this.element = element; this.videoId = videoId; this.load(source); }
+  constructor(element, videoId, source, embedUrl) { super(); this.element = element; this.videoId = videoId; this.embedUrl = embedUrl; this.load(source); }
   destroy() { this.element.src = "about:blank"; }
   play() { showToast("请在播放器内点击播放"); }
-  seek() {}
+  seek(seconds) {
+    state.currentTime = Math.max(0, Number(seconds) || 0);
+    const url = new URL(this.embedUrl, window.location.href);
+    url.searchParams.set("bvid", this.videoId);
+    url.searchParams.set("t", String(Math.floor(state.currentTime)));
+    this.element.src = url.toString();
+  }
   getCurrentTime() { return state.currentTime; }
+  supportsSeek() { return true; }
   fullscreen() { this.element.requestFullscreen?.(); }
 }
 
@@ -201,8 +234,12 @@ document.addEventListener("DOMContentLoaded", init);
 async function init() {
   applyPersistedLayout();
   bindEvents();
+  updateAnalysisModeDescriptions();
+  syncShellAccessibility();
+  requestAnimationFrame(reconcileLayoutWidths);
   loadRuntimeInfo();
   loadProviderStatuses();
+  loadProviderConfig();
   setResultTab(state.activeResultTab, false);
   $("#followPlayback").checked = state.transcriptFollowMode;
   $("#footerFollow").checked = state.transcriptFollowMode;
@@ -247,6 +284,7 @@ function applyPersistedLayout() {
 }
 
 function bindEvents() {
+  bindSegmentedControls();
   $("#newSummary").addEventListener("click", openNewTask);
   $("#refreshJobs").addEventListener("click", loadJobHistory);
   $("#focusSearch").addEventListener("click", focusSidebarSearch);
@@ -255,11 +293,16 @@ function bindEvents() {
   $("#toggleDeleteMode").addEventListener("click", handleDeleteAction);
   $("#confirmDeleteKnowledge").addEventListener("click", confirmDeleteKnowledge);
   $("#reloadKnowledge").addEventListener("click", () => state.selectedKnowledgeId && loadKnowledge(state.selectedKnowledgeId, true));
-  $("#toggleSidebar").addEventListener("click", toggleSidebar);
-  $("#collapseSidebar").addEventListener("click", toggleSidebar);
-  $("#mobileMenu").addEventListener("click", () => $("#app").classList.add("drawer-open"));
-  $("#drawerScrim").addEventListener("click", closeDrawer);
+  $("#toggleSidebar").addEventListener("click", (event) => toggleSidebar(event.currentTarget));
+  $("#collapseSidebar").addEventListener("click", () => closeSidebar(true));
+  $("#toggleInspector").addEventListener("click", (event) => toggleInspector(event.currentTarget));
+  $("#closeInspector").addEventListener("click", () => closeInspector(true));
+  $("#drawerScrim").addEventListener("click", () => closeActiveSheet(true));
   $("#summarySettings").addEventListener("click", () => $("#settingsDialog").showModal());
+  $("#taskMode").addEventListener("change", updateAnalysisModeDescriptions);
+  $("#taskProcessingProfile").addEventListener("change", updateAnalysisModeDescriptions);
+  $("#settingsMode").addEventListener("change", updateAnalysisModeDescriptions);
+  $("#apiSettings").addEventListener("click", openApiConfig);
   $("#layoutSettings").addEventListener("click", openLayoutSettings);
   $("#openExternal").addEventListener("click", openOriginal);
   $("#downloadSource").addEventListener("click", () => downloadFile("index.md"));
@@ -272,9 +315,9 @@ function bindEvents() {
   $("#vaultKnowledgeExport").addEventListener("click", saveKnowledgeExportToVault);
   $$('[data-export-preset]').forEach((button) => button.addEventListener("click", () => setExportPreset(button.dataset.exportPreset)));
   $("#retryAnalysis").addEventListener("click", retryAnalysis);
-  $("#chapterDirectory").addEventListener("click", () => $(".chapter", $("#summaryView"))?.scrollIntoView({ behavior: "smooth" }));
+  $("#chapterDirectory").addEventListener("click", () => $(".chapter", $("#summaryView"))?.scrollIntoView({ behavior: uiScrollBehavior() }));
   $("#readTranscript").addEventListener("click", () => setResultTab(state.activeResultTab === "summary" ? "transcript" : "summary"));
-  $("#backToTop").addEventListener("click", () => $("#resultScroll").scrollTo({ top: 0, behavior: "smooth" }));
+  $("#backToTop").addEventListener("click", () => $("#resultScroll").scrollTo({ top: 0, behavior: uiScrollBehavior() }));
   $("#transcriptSearch").addEventListener("input", renderTranscriptGroups);
   $("#sendChat").addEventListener("click", sendChat);
   $("#clearChat").addEventListener("click", clearCurrentChat);
@@ -286,14 +329,22 @@ function bindEvents() {
   $("#chatInput").addEventListener("keydown", (event) => {
     if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); sendChat(); }
   });
-  $("#expandChat").addEventListener("click", () => { setMobileView("collaboration"); $("#chatPane").scrollIntoView({ behavior: "smooth", block: "start" }); });
+  $$("[data-toggle-secret]").forEach((button) => button.addEventListener("click", () => toggleSecretField(button.dataset.toggleSecret, button)));
+  $$("[data-provider-apply]").forEach((button) => button.addEventListener("click", () => applyApiProviderConfig(button.dataset.providerApply)));
+  $$("[data-provider-test]").forEach((button) => button.addEventListener("click", () => testApiProviderConfig(button.dataset.providerTest)));
+  $$("[data-provider-clear]").forEach((button) => button.addEventListener("click", () => clearApiProviderConfig(button.dataset.providerClear)));
+  $("#expandChat").addEventListener("click", (event) => { openInspector(event.currentTarget); $("#chatPane").scrollIntoView({ behavior: uiScrollBehavior(), block: "start" }); });
   $("#playbackRate").addEventListener("change", (event) => setPlaybackRate(Number(event.target.value)));
+  $("#videoAspectRatio").addEventListener("change", applyLocalVideoDisplay);
+  $("#videoObjectFit").addEventListener("change", applyLocalVideoDisplay);
   $("#followPlayback").addEventListener("change", (event) => setFollowMode(event.target.checked));
   $("#footerFollow").addEventListener("change", (event) => setFollowMode(event.target.checked));
   $("#resultScroll").addEventListener("scroll", () => state.scrollPositions[state.activeResultTab] = $("#resultScroll").scrollTop, { passive: true });
 
   $$("[data-result-tab]").forEach((button) => button.addEventListener("click", () => setResultTab(button.dataset.resultTab)));
+  $$("[data-insight-tab]").forEach((button) => button.addEventListener("click", () => setInsightTab(button.dataset.insightTab)));
   $$("[data-mobile-tab]").forEach((button) => button.addEventListener("click", () => setMobileView(button.dataset.mobileTab)));
+  $(".mobile-tabs").addEventListener("keydown", handleWorkspaceTabKeydown);
   $$("[data-media]").forEach((button) => button.addEventListener("click", () => handleMediaAction(button.dataset.media)));
   $$("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
   $$("[data-filter]").forEach((button) => button.addEventListener("click", () => setLibraryFilter(button.dataset.filter, button)));
@@ -313,28 +364,86 @@ function bindEvents() {
   });
   $("#insightContent").addEventListener("click", (event) => {
     const target = event.target.closest("[data-seek]");
-    if (target) seekTo(Number(target.dataset.seek));
+    if (target) { event.preventDefault(); seekPreview(Number(target.dataset.seek)); }
   });
   $("#chatHistory").addEventListener("click", (event) => {
     const target = event.target.closest("[data-seek]");
-    if (target) seekTo(Number(target.dataset.seek));
+    if (target) { event.preventDefault(); seekPreview(Number(target.dataset.seek)); }
     if (event.target.closest("[data-regenerate]")) regenerateLastAnswer();
   });
   $("#noteEditor").addEventListener("input", saveNoteDraft);
   $("#insertTimestamp").addEventListener("click", insertNoteTimestamp);
   $$('[id^="layoutPosition"]').forEach((select) => select.addEventListener("change", updateLayoutFromControls));
+  $$(".nav-groups details").forEach((details) => details.addEventListener("toggle", () => {
+    $("summary", details)?.setAttribute("aria-expanded", String(details.open));
+  }));
   $("#resetLayout").addEventListener("click", resetWorkspaceLayout);
   $("#newTaskForm").addEventListener("submit", submitTask);
+  $("#taskSource").addEventListener("invalid", () => setTaskSourceError(true));
+  $("#taskSource").addEventListener("input", () => {
+    if ($("#taskSource").validity.valid) setTaskSourceError(false);
+  });
   $("#paneResizer").addEventListener("pointerdown", startResize);
   $("#rightPaneResizer").addEventListener("pointerdown", startResize);
-  $$(".pane-resizer").forEach((resizer) => resizer.addEventListener("dblclick", resetModuleWidths));
+  $$(".pane-resizer").forEach((resizer) => {
+    resizer.addEventListener("dblclick", resetModuleWidths);
+    resizer.addEventListener("keydown", handleDividerKeydown);
+  });
   document.addEventListener("keydown", handleKeyboard);
   window.addEventListener("hashchange", selectFromHash);
-  window.addEventListener("resize", () => window.innerWidth >= 980 && closeDrawer());
+  window.addEventListener("resize", handleViewportChange);
   window.addEventListener("beforeunload", () => {
     clearInterval(taskPoller);
     flushPendingNotesOnUnload();
   });
+}
+
+function bindSegmentedControls() {
+  $$('[data-segmented-control]').forEach((control) => {
+    control.addEventListener("keydown", handleSegmentedControlKeydown);
+  });
+}
+
+function handleSegmentedControlKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const options = $$('[role="radio"]:not(:disabled)', event.currentTarget);
+  if (!options.length) return;
+  const currentIndex = Math.max(0, options.indexOf(document.activeElement));
+  let nextIndex = currentIndex;
+  if (event.key === "Home") nextIndex = 0;
+  else if (event.key === "End") nextIndex = options.length - 1;
+  else if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + options.length) % options.length;
+  else nextIndex = (currentIndex + 1) % options.length;
+  event.preventDefault();
+  options[nextIndex].focus();
+  options[nextIndex].click();
+}
+
+function handleWorkspaceTabKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = $$("[data-mobile-tab]", event.currentTarget);
+  const current = Math.max(0, tabs.indexOf(document.activeElement));
+  const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  event.preventDefault();
+  tabs[next].click();
+  tabs[next].focus();
+}
+
+function setTaskSourceError(invalid) {
+  const input = $("#taskSource");
+  const field = $("#taskSourceField");
+  const error = $("#taskSourceError");
+  field.dataset.invalid = String(invalid);
+  input.setAttribute("aria-invalid", String(invalid));
+  input.setAttribute("aria-describedby", invalid ? "taskSourceDescription taskSourceError" : "taskSourceDescription");
+  error.hidden = !invalid;
+}
+
+function setTaskButtonLoading(loading) {
+  const button = $("#startTask");
+  button.disabled = loading;
+  button.setAttribute("aria-busy", String(loading));
+  button.textContent = loading ? "正在处理…" : "开始处理";
 }
 
 async function api(path, options = {}) {
@@ -358,6 +467,141 @@ async function loadProviderStatuses() {
     state.providerStatuses = {};
   }
   renderProviderStatus();
+}
+
+async function loadProviderConfig() {
+  try {
+    const data = await api("/api/provider-config");
+    state.providerConfig = Object.fromEntries((data.providers || []).map((item) => [item.provider || item.name, item]));
+    renderApiConfig();
+  } catch (error) {
+    state.providerConfig = {};
+    renderApiConfigError(error.message);
+  }
+}
+
+function openApiConfig() {
+  loadProviderConfig();
+  $("#apiConfigDialog").showModal();
+}
+
+function renderApiConfig() {
+  renderOneApiProvider("deepseek");
+  renderOneApiProvider("gemini");
+}
+
+function renderApiConfigError(message) {
+  ["deepseek", "gemini"].forEach((provider) => {
+    const result = $(`#${provider}TestResult`);
+    if (result) {
+      result.className = "api-test-result failed";
+      result.textContent = `配置状态读取失败：${message}`;
+    }
+  });
+}
+
+function renderOneApiProvider(provider) {
+  const config = state.providerConfig[provider] || {};
+  const status = $(`#${provider}ConfigStatus`);
+  const keyHint = $(`#${provider}KeyHint`);
+  const testResult = $(`#${provider}TestResult`);
+  if (!status || !keyHint || !testResult) return;
+  const tested = config.lastTest || {};
+  const statusText = !config.configured ? "未配置" : tested.ok === true ? "测试成功" : tested.ok === false ? "测试失败" : "已配置未测试";
+  status.textContent = `${statusText} · ${sourceLabel(config.keySource)} · ${config.model || ""}`.trim();
+  keyHint.textContent = config.keyTail ? `已保存 Key 尾号：${config.keyTail}` : "未保存 Web 会话 Key，可使用环境变量或填写后应用。";
+  if (provider === "deepseek") {
+    $("#deepseekBaseUrl").value = config.baseUrl || "https://api.deepseek.com";
+    $("#deepseekModel").value = config.model || "deepseek-v4-flash";
+    $("#deepseekApiKey").value = "";
+  } else {
+    $("#geminiModel").value = config.model || "gemini-3.1-flash-lite";
+    $("#geminiApiKey").value = "";
+  }
+  if (tested.ok === true) {
+    testResult.className = "api-test-result success";
+    testResult.textContent = `最近测试成功：${tested.model || config.model || ""}，${tested.durationMs ?? 0} ms。`;
+  } else if (tested.ok === false) {
+    testResult.className = "api-test-result failed";
+    testResult.textContent = `最近测试失败：${tested.error || "请检查配置。"}（${tested.errorType || "provider_error"}）`;
+  } else {
+    testResult.className = "api-test-result";
+    testResult.textContent = "尚未测试当前配置。";
+  }
+}
+
+function collectProviderConfig(provider, includeEmptyKey = false) {
+  const payload = { provider };
+  if (provider === "deepseek") {
+    const key = $("#deepseekApiKey").value;
+    if (key || includeEmptyKey) payload.apiKey = key;
+    payload.baseUrl = $("#deepseekBaseUrl").value.trim();
+    payload.model = $("#deepseekModel").value.trim();
+  } else {
+    const key = $("#geminiApiKey").value;
+    if (key || includeEmptyKey) payload.apiKey = key;
+    payload.model = $("#geminiModel").value.trim();
+  }
+  return payload;
+}
+
+async function applyApiProviderConfig(provider) {
+  try {
+    const data = await api("/api/provider-config", {
+      method: "POST",
+      body: JSON.stringify(collectProviderConfig(provider)),
+    });
+    updateProviderConfigState(data);
+    showToast(`${providerLabel(provider)} 配置已应用`);
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function testApiProviderConfig(provider) {
+  const result = $(`#${provider}TestResult`);
+  result.className = "api-test-result";
+  result.textContent = "正在测试连接…";
+  try {
+    const data = await api("/api/provider-config/test", {
+      method: "POST",
+      body: JSON.stringify(collectProviderConfig(provider, true)),
+    });
+    updateProviderConfigState(data);
+  } catch (error) {
+    result.className = "api-test-result failed";
+    result.textContent = `测试失败：${error.message}`;
+  }
+}
+
+async function clearApiProviderConfig(provider) {
+  try {
+    const data = await api(`/api/provider-config/${encodeURIComponent(provider)}`, { method: "DELETE" });
+    updateProviderConfigState(data);
+    showToast(`${providerLabel(provider)} Web 会话配置已清除`);
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function updateProviderConfigState(data) {
+  state.providerConfig = Object.fromEntries((data.providers || []).map((item) => [item.provider || item.name, item]));
+  state.providerStatuses = Object.fromEntries((data.providers || []).map((item) => [item.provider || item.name, item]));
+  renderApiConfig();
+  renderProviderStatus();
+  loadRuntimeInfo();
+}
+
+function toggleSecretField(id, button) {
+  const input = $(`#${id}`);
+  if (!input) return;
+  const visible = input.type === "text";
+  input.type = visible ? "password" : "text";
+  button.textContent = visible ? "显示" : "隐藏";
+}
+
+function sourceLabel(source) {
+  return ({ web_session: "Web 会话", environment: "环境变量", default: "默认值", missing: "未配置" })[source] || source || "未知来源";
 }
 
 function renderProviderStatus() {
@@ -450,7 +694,7 @@ async function loadKnowledge(id, force = false) {
   state.loading = true;
   renderLibrary();
   setLoadingState();
-  closeDrawer();
+  if (!isWideShell()) closeSidebar(false);
   try {
     let knowledge = force ? null : knowledgeCache.get(id);
     if (!knowledge) {
@@ -671,7 +915,12 @@ async function retryAnalysis() {
 function renderMedia(knowledge) {
   const surface = $("#mediaSurface");
   const media = knowledge.media || {};
+  const savedRatio = localStorage.getItem(SETTINGS.videoAspectRatio);
+  const savedFit = localStorage.getItem(SETTINGS.videoObjectFit);
+  $("#videoAspectRatio").value = ["original", "16/9", "4/3", "1/1", "9/16"].includes(savedRatio) ? savedRatio : "original";
+  $("#videoObjectFit").value = savedFit === "cover" ? "cover" : "contain";
   surface.className = "media-surface";
+  surface.style.removeProperty("aspect-ratio");
   surface.innerHTML = "";
   if (media.kind === "video" && media.available) {
     const video = document.createElement("video");
@@ -679,7 +928,7 @@ function renderMedia(knowledge) {
     video.preload = "metadata";
     video.playsInline = true;
     video.addEventListener("timeupdate", throttle(handleTimeUpdate, 300));
-    video.addEventListener("loadedmetadata", updateTimeDisplay);
+    video.addEventListener("loadedmetadata", () => { updateTimeDisplay(); applyLocalVideoDisplay(); });
     video.addEventListener("play", () => setPlayIcon(true));
     video.addEventListener("pause", () => setPlayIcon(false));
     surface.appendChild(video);
@@ -709,7 +958,7 @@ function renderMedia(knowledge) {
     player.allowFullscreen = true;
     player.referrerPolicy = "strict-origin-when-cross-origin";
     surface.appendChild(player);
-    mediaController = new BilibiliEmbedController(player, media.embed.videoId, knowledge.source);
+    mediaController = new BilibiliEmbedController(player, media.embed.videoId, knowledge.source, media.embed.url);
   } else if (media.externalUrl) {
     renderExternalMedia(surface, knowledge);
   } else {
@@ -726,14 +975,31 @@ function syncMediaControls() {
   const seekable = Boolean(mediaController?.supportsSeek());
   const htmlMedia = mediaController instanceof HtmlMediaController;
   const iframeMedia = mediaController instanceof YouTubeMediaController || mediaController instanceof BilibiliEmbedController;
-  const externallyControlled = mediaController instanceof BilibiliEmbedController || mediaController instanceof ExternalLinkController;
-  $$('[data-media="play"], [data-media="back"], [data-media="forward"]').forEach((button) => {
-    button.disabled = externallyControlled;
-    button.title = externallyControlled ? "当前平台播放器需在播放器内控制；时间引用会在原网站打开" : "";
-  });
-  $("#playbackRate").disabled = !seekable;
+  const externalOnly = mediaController instanceof ExternalLinkController;
+  const embeddedBilibili = mediaController instanceof BilibiliEmbedController;
+  $('[data-media="play"]').disabled = externalOnly || embeddedBilibili;
+  $$('[data-media="back"], [data-media="forward"]').forEach((button) => button.disabled = externalOnly);
+  $('[data-media="play"]').title = embeddedBilibili ? "请在 B站播放器内点击播放" : externalOnly ? "请打开原视频播放" : "";
+  $("#playbackRate").disabled = !(htmlMedia || mediaController instanceof YouTubeMediaController);
   $('[data-media="repeat"]').disabled = !htmlMedia;
   $('[data-media="fullscreen"]').disabled = !(htmlMedia || iframeMedia);
+  $("#localVideoDisplay").classList.toggle("hidden", !(mediaController instanceof LocalVideoController));
+}
+
+function applyLocalVideoDisplay() {
+  if (!(mediaController instanceof LocalVideoController)) return;
+  const video = mediaController.element;
+  const ratioSetting = $("#videoAspectRatio").value;
+  const fitSetting = $("#videoObjectFit").value === "cover" ? "cover" : "contain";
+  const originalRatio = video.videoWidth > 0 && video.videoHeight > 0 ? video.videoWidth / video.videoHeight : 16 / 9;
+  const selectedRatio = ratioSetting === "original" ? originalRatio : Number(ratioSetting.split("/")[0]) / Number(ratioSetting.split("/")[1]);
+  const surface = $("#mediaSurface");
+  surface.classList.add("local-video-surface");
+  surface.style.aspectRatio = String(selectedRatio);
+  surface.style.setProperty("--media-aspect", String(selectedRatio));
+  video.style.objectFit = fitSetting;
+  localStorage.setItem(SETTINGS.videoAspectRatio, ratioSetting);
+  localStorage.setItem(SETTINGS.videoObjectFit, fitSetting);
 }
 
 function renderExternalMedia(surface, knowledge, message = "") {
@@ -789,7 +1055,14 @@ function renderStatus(manifest) {
   else if (status === "completed_with_warnings") className = "warning";
   else if (status === "failed" || status === "invalid") className = "error";
   const errors = Array.isArray(manifest.errors) && manifest.errors.length ? ` · ${manifest.errors[0]}` : "";
-  element.className = `processing-status ${className}`;
+  const semanticClass = className === "success"
+    ? "ui-inline-status--success"
+    : className === "warning"
+      ? "ui-inline-status--warning"
+      : className === "error"
+        ? "ui-inline-status--danger"
+        : "";
+  element.className = `processing-status ui-inline-status ${semanticClass}`.trim();
   element.innerHTML = `<svg><use href="#${className === "error" || className === "warning" ? "i-warning" : "i-check"}"/></svg><span>${escapeHtml(statusLabel(status))}${manifest.current_stage ? ` · ${escapeHtml(stageLabel(manifest.current_stage))}` : ""}${escapeHtml(errors)}</span>`;
 }
 
@@ -797,24 +1070,162 @@ function renderSummary(knowledge) {
   const analysis = knowledge.analysis || {};
   const timeline = Array.isArray(knowledge.timeline) ? knowledge.timeline : [];
   const sections = [];
-  if (analysis.summary) sections.push(`<section class="result-section"><h2>摘要</h2><p>${escapeHtml(analysis.summary)}</p></section>`);
+  const summaryCoreRendered = (analysis.analysis_profile || "summary") === "summary" && analysis.content && Object.keys(analysis.content).length;
+  if (analysis.content && Object.keys(analysis.content).length) sections.push(renderProfileReport(analysis, knowledge.id));
+  else if (analysis.summary) sections.push(`<section class="result-section"><h2>摘要</h2><p>${escapeHtml(analysis.summary)}</p></section>`);
   else if (analysis.status === "failed") sections.push(`<div class="analysis-empty">AI 分析失败：${escapeHtml(analysis.error || "请检查 DeepSeek 配置后重试。")} 字幕和时间轴仍可正常查看。</div>`);
   else sections.push('<div class="analysis-empty">AI 分析已跳过。字幕、时间轴和原文细读仍可正常查看。</div>');
 
-  if (Array.isArray(analysis.highlights) && analysis.highlights.length) {
-    sections.push(`<section class="result-section"><h2>亮点</h2><ul class="highlight-list">${analysis.highlights.map((item) => `
-      <li class="highlight-item"><span class="highlight-icon">${escapeHtml(item.icon || "◆")}</span><div class="highlight-copy"><strong>${escapeHtml(item.title || "亮点")}</strong>${item.explanation ? `<p>${escapeHtml(item.explanation)}</p>` : ""}<div class="tag-list">${(item.tags || []).map((tag) => `<button class="tag-button" data-tag="${escapeAttr(tag)}">#${escapeHtml(tag)}</button>`).join("")}</div></div></li>`).join("")}</ul></section>`);
+  if (!summaryCoreRendered && Array.isArray(analysis.highlights) && analysis.highlights.length) {
+    sections.push(`<section class="result-section"><h2>亮点</h2><ul class="highlight-list">${analysis.highlights.map((item) => {
+      const imageUrl = knowledgeAssetUrl(knowledge.id, item.image);
+      const detail = item.summary || item.explanation || "";
+      return `<li class="highlight-item${imageUrl ? " has-image" : ""}">${imageUrl ? `<img class="highlight-image" src="${imageUrl}" alt="${escapeAttr(item.title || "亮点画面")}" loading="lazy" data-preview-image="${imageUrl}">` : `<span class="highlight-icon">${escapeHtml(item.icon || "◆")}</span>`}<div class="highlight-copy"><strong>${escapeHtml(item.title || "亮点")}</strong>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}<div class="tag-list">${(item.tags || []).map((tag) => `<button class="tag-button" data-tag="${escapeAttr(tag)}">#${escapeHtml(tag)}</button>`).join("")}</div></div></li>`;
+    }).join("")}</ul></section>`);
   }
-  if (Array.isArray(analysis.thoughts) && analysis.thoughts.length) {
-    sections.push(`<section class="result-section"><h2>思考</h2><ol class="thought-list">${analysis.thoughts.slice(0, 3).map((item) => `<li><button class="thought-button" data-question="${escapeAttr(item.question || "")}">${escapeHtml(item.question || "")}</button></li>`).join("")}</ol></section>`);
+  if (!summaryCoreRendered && Array.isArray(analysis.thoughts) && analysis.thoughts.length) {
+    sections.push(`<section class="result-section"><h2>思考</h2><ol class="thought-list">${analysis.thoughts.map((item) => `<li><button class="thought-button" data-question="${escapeAttr(item.question || "")}">${escapeHtml(item.question || "")}</button></li>`).join("")}</ol></section>`);
   }
 
   const chapters = Array.isArray(analysis.chapters) && analysis.chapters.length ? analysis.chapters : timeline;
-  if (chapters.length) {
+  if (!summaryCoreRendered && chapters.length) {
     sections.push(`<section class="result-section" id="chapterSection"><h2>视频章节总结</h2><div class="chapter-list">${chapters.map((chapter, index) => renderChapter(chapter, index, knowledge.id)).join("")}</div></section>`);
   }
   sections.push(`<section class="result-section"><h2>原文资料</h2><div class="source-entry"><button class="quiet-button" data-open-transcript>查看分组字幕</button>${knowledge.files?.["transcript.raw.jsonl"] ? '<button class="icon-button small" data-open-raw aria-label="打开逐句原始数据"><svg><use href="#i-file"/></svg></button>' : ""}</div></section>`);
   $("#summaryView").innerHTML = sections.join("");
+}
+
+function renderProfileReport(analysis, knowledgeId) {
+  const profile = analysis.analysis_profile || "summary";
+  const meta = ANALYSIS_MODE_META[profile] || ANALYSIS_MODE_META.summary;
+  const content = analysis.content || {};
+  const sections = PROFILE_RENDER_SECTIONS[profile] || PROFILE_RENDER_SECTIONS.summary;
+  if (profile === "summary") {
+    return sections.map(([title, key, kind]) => {
+      const value = content[key];
+      const html = renderProfileValue(value, kind, profile, knowledgeId);
+      if (kind === "terms" && !html) return "";
+      const fallback = html || "<p>未明确说明</p>";
+      const factualBasis = key === "summary" && content.factual_basis
+        ? `<blockquote>视频事实依据：${escapeHtml(content.factual_basis)}</blockquote>`
+        : "";
+      const inferences = key === "thoughts" && Array.isArray(content.ai_inferences)
+        ? content.ai_inferences.map((item) => `<li><strong>AI 推断：</strong>${escapeHtml(item)}</li>`).join("")
+        : "";
+      const merged = inferences
+        ? `${html ? html.replace(/<\/ul>$/, "") : "<ul>"}${inferences}</ul>`
+        : fallback;
+      return `<section class="result-section"><h2>${escapeHtml(title)}</h2>${merged}${factualBasis}</section>`;
+    }).join("");
+  }
+  const body = sections.map(([title, key, kind]) => renderProfileField(title, content[key], kind, profile, knowledgeId)).join("");
+  const evidence = [
+    content.factual_basis ? `<section class="result-section"><h2>视频事实依据</h2><p>${escapeHtml(content.factual_basis)}</p></section>` : "",
+    Array.isArray(content.ai_inferences) && content.ai_inferences.length ? `<section class="result-section"><h2>AI 推断</h2><ul>${content.ai_inferences.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section>` : "",
+  ].join("");
+  return `<section class="result-section profile-report-header"><h2>${escapeHtml(meta.label)}</h2><p>${escapeHtml(meta.description)}</p></section>${body}${evidence}`;
+}
+
+function renderProfileField(title, value, kind, profile, knowledgeId) {
+  const html = renderProfileValue(value, kind, profile, knowledgeId) || "<p>未明确说明</p>";
+  return `<section class="result-section"><h2>${escapeHtml(title)}</h2>${html}</section>`;
+}
+
+function renderProfileValue(value, kind, profile, knowledgeId) {
+  if (kind === "text") return value ? `<p>${escapeHtml(value)}</p>` : "";
+  if (kind === "list") return renderSimpleList(value);
+  if (kind === "checklist") return Array.isArray(value) && value.length ? `<ul>${value.map((item) => `<li>☐ ${escapeHtml(item)}</li>`).join("")}</ul>` : "";
+  if (kind === "chapters") return renderProfileChapters(value);
+  if (kind === "tutorialChapters") return renderTutorialChapters(value, profile, knowledgeId);
+  if (kind === "steps") return renderTutorialSteps(value, profile, knowledgeId);
+  if (kind === "terms") return renderProfessionalTerms(value);
+  if (kind === "highlights") return renderSummaryHighlights(value);
+  if (kind === "thoughts") return renderSummaryThoughts(value);
+  return "";
+}
+
+function renderProfessionalTerms(value) {
+  if (!Array.isArray(value)) return "";
+  const seen = new Set();
+  const terms = value.filter((item) => {
+    const term = textFromValue(item?.term).trim();
+    const definition = textFromValue(item?.definition).trim();
+    const identity = term.toLocaleLowerCase().replace(/\s+/g, "");
+    if (!identity || !definition || seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  }).slice(0, 8);
+  if (terms.length < 3) return "";
+  return `<dl>${terms.map((item) => `<dt>${escapeHtml(item.term)}</dt><dd>${escapeHtml(item.definition)}</dd>`).join("")}</dl>`;
+}
+
+function renderSummaryHighlights(value) {
+  if (!Array.isArray(value) || !value.length) return "";
+  return `<ul class="highlight-list">${value.map((item) => {
+    const seconds = item?.timestamp ?? item?.start;
+    const time = seconds != null ? `<button class="time-button" data-seek="${Number(seconds) || 0}">${escapeHtml(formatTime(seconds))}</button>` : "";
+    const title = textFromValue(item?.title) || "亮点";
+    const detail = textFromValue(item?.explanation || item?.summary);
+    return `<li class="highlight-item"><span class="highlight-icon">◆</span><div class="highlight-copy"><strong>${time}${escapeHtml(title)}</strong>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div></li>`;
+  }).join("")}</ul>`;
+}
+
+function renderSummaryThoughts(value) {
+  if (!Array.isArray(value) || !value.length) return "";
+  return `<ul class="thought-list">${value.map((item) => {
+    const question = textFromValue(item?.question || item);
+    return `<li><button class="thought-button" data-question="${escapeAttr(question)}">${escapeHtml(question)}</button></li>`;
+  }).join("")}</ul>`;
+}
+
+function renderSimpleList(value) {
+  if (!Array.isArray(value) || !value.length) return "";
+  return `<ul>${value.map((item) => `<li>${escapeHtml(textFromValue(item))}</li>`).join("")}</ul>`;
+}
+
+function renderProfileChapters(value) {
+  if (!Array.isArray(value) || !value.length) return "";
+  return `<div class="chapter-list">${value.map((item, index) => {
+    const title = textFromValue(item?.title) || `章节 ${index + 1}`;
+    const time = item?.start != null ? `<span class="time-pill">${escapeHtml(formatTime(item.start))}</span>` : "";
+    const summary = textFromValue(item?.summary || item);
+    return `<article class="chapter"><h3>${time}${escapeHtml(title)}</h3>${summary ? `<p>${escapeHtml(summary)}</p>` : ""}</article>`;
+  }).join("")}</div>`;
+}
+
+function renderTutorialChapters(value, profile, knowledgeId) {
+  if (!Array.isArray(value) || !value.length) return "";
+  const steps = Array.isArray(state.activeSource?.analysis?.content?.steps) ? state.activeSource.analysis.content.steps : [];
+  return `<div class="chapter-list">${value.map((chapter, index) => {
+    const chapterId = chapter?.id || `ch${index + 1}`;
+    const childSteps = steps.filter((step) => step.chapter_id === chapterId || step.chapterId === chapterId);
+    const time = chapter?.start != null ? `<span class="time-pill">${escapeHtml(formatTime(chapter.start))}</span>` : "";
+    const summary = textFromValue(chapter?.summary || chapter);
+    return `<details class="chapter tutorial-stage" open><summary><h3>${time}${escapeHtml(chapter?.title || `阶段 ${index + 1}`)}</h3></summary>${summary ? `<p>${escapeHtml(summary)}</p>` : ""}${childSteps.length ? renderTutorialSteps(childSteps, profile, knowledgeId) : ""}</details>`;
+  }).join("")}</div>`;
+}
+
+function renderTutorialSteps(value, profile, knowledgeId) {
+  if (!Array.isArray(value) || !value.length) return "";
+  return `<div class="chapter-list">${value.map((item, index) => {
+    const imageUrl = profile === "tutorial" ? knowledgeAssetUrl(knowledgeId, item.image) : "";
+    const lines = [
+      ["目标", item.objective],
+      ["操作", item.action || item.description],
+      ["预期结果", item.expected_result],
+      ["参数", Array.isArray(item.parameters) ? item.parameters.join("；") : ""],
+      ["注意", Array.isArray(item.cautions) ? item.cautions.join("；") : ""],
+    ].filter(([, text]) => String(text || "").trim()).map(([label, text]) => `<li><strong>${label}：</strong>${escapeHtml(text)}</li>`).join("");
+    const time = item.timestamp != null ? `<button class="time-button" data-seek="${Number(item.timestamp) || 0}">${escapeHtml(formatTime(item.timestamp))}</button>` : "";
+    return `<article class="chapter tutorial-step"><h3>${time}${escapeHtml(item.title || `步骤 ${index + 1}`)}</h3>${imageUrl ? `<img class="chapter-frame" src="${imageUrl}" alt="${escapeAttr(item.title || "教程步骤截图")}" loading="lazy" data-preview-image="${imageUrl}">` : ""}<ul>${lines || "<li>未明确说明</li>"}</ul></article>`;
+  }).join("")}</div>`;
+}
+
+function textFromValue(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") return value.text || value.summary || value.description || value.explanation || value.title || "";
+  return String(value);
 }
 
 function renderInsightPanel(knowledge) {
@@ -822,26 +1233,43 @@ function renderInsightPanel(knowledge) {
   const timeline = Array.isArray(knowledge.timeline) ? knowledge.timeline : [];
   const source = highlights.length ? highlights : timeline;
   const usingHighlights = highlights.length > 0;
-  $("#insightMode").textContent = usingHighlights ? "AI 结果" : "字幕时间轴";
-  $("#insightCount").textContent = source.length;
-  if (!source.length) {
-    $("#insightContent").innerHTML = '<div class="module-empty">当前知识包没有高光或时间轴数据。</div>';
+  const comments = Array.isArray(knowledge.comments) ? knowledge.comments : [];
+  const commentInsight = knowledge.commentInsights || {};
+  const insightItems = ["hot_topics", "consensus", "controversies", "corrections", "frequent_questions"]
+    .flatMap((key) => Array.isArray(commentInsight[key]) ? commentInsight[key].slice(0, 3) : []);
+  const commentItems = insightItems.length ? insightItems : comments.slice(0, 8).map((item) => item.text || item.content || "");
+  const filteredComments = commentItems.filter(Boolean).slice(0, 8);
+  const activeTab = state.activeInsightTab === "highlights" ? "highlights" : "comments";
+  $$("[data-insight-tab]").forEach((button) => {
+    const active = button.dataset.insightTab === activeTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  if (activeTab === "comments") {
+    $("#insightContent").innerHTML = filteredComments.length
+      ? `<section class="insight-section" data-feature="comments">${filteredComments.map((item) => `<article class="insight-item comment-insight-item"><div class="insight-row"><span class="insight-marker comment"></span><strong>${escapeHtml(item)}</strong></div></article>`).join("")}</section>`
+      : '<div class="module-empty">当前知识包没有同步评论区数据。</div>';
     return;
   }
-  $("#insightContent").innerHTML = source.map((item, index) => {
-    const hasTime = item.start != null && Number.isFinite(Number(item.start));
-    const detail = usingHighlights ? item.explanation : item.summary;
-    const tags = usingHighlights ? (item.tags || []) : (item.keywords || []);
-    return `<article class="insight-item" data-insight-index="${index}">
-      <div class="insight-row">
-        <span class="insight-marker ${usingHighlights ? "ai" : "timeline"}"></span>
-        <strong>${escapeHtml(item.title || (usingHighlights ? `高光 ${index + 1}` : `片段 ${index + 1}`))}</strong>
-        ${hasTime ? `<button class="timestamp-button" data-seek="${Number(item.start)}">${formatTime(item.start)}</button>` : ""}
-      </div>
-      ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
-      ${tags.length ? `<div class="tag-list">${tags.slice(0, 5).map((tag) => `<span class="static-tag">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
-    </article>`;
-  }).join("");
+  if (source.length) {
+    $("#insightContent").innerHTML = `<section class="insight-section" data-feature="highlights">${source.map((item, index) => {
+      const itemTime = usingHighlights ? (item.timestamp ?? item.start) : item.start;
+      const hasTime = itemTime != null && Number.isFinite(Number(itemTime));
+      const detail = usingHighlights ? (item.summary || item.explanation) : item.summary;
+      const tags = usingHighlights ? (item.tags || []) : (item.keywords || []);
+      return `<article class="insight-item" data-insight-index="${index}">
+        <div class="insight-row">
+          <span class="insight-marker ${usingHighlights ? "ai" : "timeline"}"></span>
+          <strong>${escapeHtml(item.title || (usingHighlights ? `高光 ${index + 1}` : `片段 ${index + 1}`))}</strong>
+          ${hasTime ? `<button class="timestamp-button" data-seek="${Number(itemTime)}">${formatTime(itemTime)}</button>` : ""}
+        </div>
+        ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
+        ${tags.length ? `<div class="tag-list">${tags.map((tag) => `<span class="static-tag">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+      </article>`;
+    }).join("")}</section>`;
+    return;
+  }
+  $("#insightContent").innerHTML = '<div class="module-empty">当前知识包没有高光片段，已保留此功能位。</div>';
 }
 
 function renderChapter(chapter, index, knowledgeId) {
@@ -903,9 +1331,15 @@ function setResultTab(tab, restoreScroll = true) {
   if (restoreScroll) requestAnimationFrame(() => $("#resultScroll").scrollTop = state.scrollPositions[next] || 0);
 }
 
+function setInsightTab(tab) {
+  state.activeInsightTab = tab === "highlights" ? "highlights" : "comments";
+  localStorage.setItem(SETTINGS.activeInsightTab, state.activeInsightTab);
+  if (state.activeSource) renderInsightPanel(state.activeSource);
+}
+
 function handleResultClick(event) {
   const seek = event.target.closest("[data-seek]");
-  if (seek) { event.preventDefault(); event.stopPropagation(); seekTo(Number(seek.dataset.seek)); return; }
+  if (seek) { event.preventDefault(); event.stopPropagation(); seekPreview(Number(seek.dataset.seek)); return; }
   const toggle = event.target.closest("[data-toggle-chapter]");
   if (toggle) { toggle.closest(".chapter").classList.toggle("collapsed"); return; }
   const thought = event.target.closest("[data-question]");
@@ -920,7 +1354,7 @@ function handleResultClick(event) {
 
 function handleTranscriptClick(event) {
   const seek = event.target.closest("[data-seek]");
-  if (seek) { seekTo(Number(seek.dataset.seek)); return; }
+  if (seek) { event.preventDefault(); seekPreview(Number(seek.dataset.seek)); return; }
   const copy = event.target.closest("[data-copy-group]");
   if (copy) {
     const group = state.transcriptGroups.find((item) => String(item.index) === copy.dataset.copyGroup);
@@ -931,8 +1365,8 @@ function handleTranscriptClick(event) {
 function handleMediaAction(action) {
   if (!mediaController) return;
   if (action === "play") togglePlay();
-  else if (action === "back") seekTo(Math.max(0, mediaController.getCurrentTime() - 10));
-  else if (action === "forward") seekTo(mediaController.getCurrentTime() + 10);
+  else if (action === "back") seekPreview(Math.max(0, mediaController.getCurrentTime() - 10));
+  else if (action === "forward") seekPreview(mediaController.getCurrentTime() + 10);
   else if (action === "repeat") { const element = mediaController.element; if (element) { element.loop = !element.loop; showToast(element.loop ? "已开启循环" : "已关闭循环"); } }
   else if (action === "capture") captureFrame();
   else if (action === "fullscreen") mediaController.fullscreen();
@@ -947,14 +1381,13 @@ function togglePlay() {
   mediaController?.play();
 }
 
-function seekTo(seconds) {
+function seekPreview(seconds) {
   state.currentTime = Math.max(0, seconds || 0);
   if (mediaController?.supportsSeek()) mediaController.seek(state.currentTime);
-  else mediaController?.openExternally(state.currentTime);
   updateTimeDisplay();
   updateActiveChapter();
   setMobileView("media");
-  $("#mediaSection").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("#mediaSection").scrollIntoView({ behavior: uiScrollBehavior(), block: "start" });
 }
 
 function handleTimeUpdate() {
@@ -979,7 +1412,7 @@ function updateActiveChapter() {
   });
   if (active !== state.currentChapter) {
     state.currentChapter = active;
-    if (state.transcriptFollowMode && active >= 0 && state.activeResultTab === "transcript") items[active]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (state.transcriptFollowMode && active >= 0 && state.activeResultTab === "transcript") items[active]?.scrollIntoView({ behavior: uiScrollBehavior(), block: "center" });
   }
 }
 
@@ -1030,7 +1463,7 @@ async function requestChat(question, appendUser) {
       body: JSON.stringify({ knowledge_id: knowledgeId, question, provider: chatState.provider, model: null, history: chatState.messages.slice(0, -1) }),
     });
     if (state.selectedKnowledgeId !== knowledgeId || data.knowledge_id !== knowledgeId) return;
-    chatState.messages.push({ role: "assistant", content: data.answer || "", citations: data.citations || [], provider: data.provider || "", model: data.model || "", warning: data.warning || "" });
+    chatState.messages.push({ role: "assistant", content: data.answer || "", citations: data.citations || [], provider: data.provider || "", model: data.model || "", warning: data.warning || "", route: data.route || "", route_status: data.route_status || "" });
   } catch (error) {
     if (error.name !== "AbortError" && state.selectedKnowledgeId === knowledgeId) {
       chatState.messages.push({ role: "system", content: error.message || "上下文对话请求失败" });
@@ -1096,7 +1529,8 @@ function renderChatHistory() {
     const citations = Array.isArray(item.citations) ? item.citations : [];
     const citationHtml = citations.length ? `<div class="chat-citations">${citations.map((citation) => `<button type="button" data-seek="${Number(citation.start || 0)}" title="${escapeAttr(citation.excerpt || citation.title || "字幕证据")}">[${Number(citation.index || 0)}] ${formatTime(Number(citation.start || 0))}</button>`).join("")}</div>` : "";
     const warningHtml = item.warning ? `<div class="chat-warning">${escapeHtml(item.warning)}</div>` : "";
-    const modelHtml = item.role === "assistant" && item.model ? `<small class="chat-model">${escapeHtml(providerLabel(item.provider))} · ${escapeHtml(item.model)} · ${citations.length} 条证据 <button type="button" data-regenerate>重新生成</button></small>` : "";
+    const routeHtml = item.route ? ` · ${escapeHtml(videoChatRouteLabel(item.route, item.route_status))}` : "";
+    const modelHtml = item.role === "assistant" && item.model ? `<small class="chat-model">${escapeHtml(providerLabel(item.provider))} · ${escapeHtml(item.model)}${routeHtml} · ${citations.length} 条证据 <button type="button" data-regenerate>重新生成</button></small>` : "";
     return `<div class="chat-message ${escapeAttr(item.role)}"><div>${escapeHtml(item.content)}</div>${warningHtml}${citationHtml}${modelHtml}</div>`;
   }).join("") : '<div class="chat-empty">针对当前视频提问，回答会附带可跳转的字幕时间引用。</div>';
   if (currentChatState().loading) root.insertAdjacentHTML("beforeend", '<div class="chat-message assistant loading">正在检索当前视频并请求模型…</div>');
@@ -1105,25 +1539,53 @@ function renderChatHistory() {
 
 function focusChatQuestion(question) {
   $("#chatInput").value = question || "";
-  setMobileView("collaboration");
-  $("#chatPane").scrollIntoView({ behavior: "smooth", block: "start" });
-  setTimeout(() => $("#chatInput").focus(), 200);
+  openInspector($("#toggleInspector"));
+  $("#chatPane").scrollIntoView({ behavior: uiScrollBehavior(), block: "start" });
+  requestAnimationFrame(() => $("#chatInput").focus());
 }
 
 function openNewTask() {
   $("#taskProgress").classList.add("hidden");
   $("#newTaskForm").reset();
   $("#taskFrames").checked = true;
+  $("#taskComments").checked = false;
+  setTaskSourceError(false);
+  setTaskButtonLoading(false);
   setTaskSourceType("url");
+  updateAnalysisModeDescriptions();
   $("#newTaskDialog").showModal();
   loadJobHistory();
 }
 
+function updateAnalysisModeDescriptions() {
+  const mode = $("#taskMode")?.value || "summary";
+  const processing = $("#taskProcessingProfile")?.value || "complete";
+  const taskMeta = ANALYSIS_MODE_META[mode] || ANALYSIS_MODE_META.summary;
+  const taskDescription = mode === "tutorial" && processing === "complete"
+    ? `${taskMeta.description}。将提取完整教程步骤并生成对应操作截图。`
+    : taskMeta.description;
+  if ($("#taskModeDescription")) $("#taskModeDescription").textContent = taskDescription;
+  const settingsMode = $("#settingsMode")?.value || mode;
+  const settingsMeta = ANALYSIS_MODE_META[settingsMode] || ANALYSIS_MODE_META.summary;
+  if ($("#settingsModeDescription")) $("#settingsModeDescription").textContent = settingsMeta.description;
+}
+
 function setTaskSourceType(type) {
   activeSourceType = type === "file" ? "file" : "url";
-  $$("[data-source-type]").forEach((button) => button.classList.toggle("active", button.dataset.sourceType === activeSourceType));
+  $$("[data-source-type]").forEach((button) => {
+    const selected = button.dataset.sourceType === activeSourceType;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-checked", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
   $("#taskSourceLabel").textContent = activeSourceType === "url" ? "视频链接" : "本地文件路径";
   $("#taskSource").placeholder = activeSourceType === "url" ? "https://www.bilibili.com/video/BV…" : "E:\\Downloads_E\\video.mp4";
+  $("#taskSourceError").textContent = activeSourceType === "url" ? "请输入视频链接。" : "请输入本地文件路径。";
+}
+
+function knowledgeAssetUrl(knowledgeId, relativePath) {
+  if (!knowledgeId || !relativePath || String(relativePath).includes("..")) return "";
+  return `/api/library/${encodeURIComponent(knowledgeId)}/file/${String(relativePath).split("/").map(encodeURIComponent).join("/")}`;
 }
 
 async function submitTask(event) {
@@ -1133,14 +1595,15 @@ async function submitTask(event) {
     source: $("#taskSource").value,
     backend: $("#taskBackend").value,
     mode: $("#taskMode").value,
+    processingProfile: $("#taskProcessingProfile").value,
     lang: $("#taskLanguage").value,
     export: $("#taskExport").value,
     noFrames: !$("#taskFrames").checked,
+    comments: $("#taskComments").checked,
     noSummary: $("#taskNoSummary").checked,
     sampleSeconds: $("#taskSampleSeconds").value,
   };
-  const button = $("#startTask");
-  button.disabled = true;
+  setTaskButtonLoading(true);
   try {
     const data = await api("/api/process", { method: "POST", body: JSON.stringify(payload) });
     state.taskStatus = data.job;
@@ -1148,7 +1611,7 @@ async function submitTask(event) {
     pollTask(data.job.id);
   } catch (error) {
     showToast(error.message);
-    button.disabled = false;
+    setTaskButtonLoading(false);
   }
 }
 
@@ -1161,7 +1624,7 @@ function pollTask(jobId) {
       renderTaskProgress(data.job);
       if (["success", "failed", "interrupted"].includes(data.job.status)) {
         clearInterval(taskPoller);
-        $("#startTask").disabled = false;
+        setTaskButtonLoading(false);
         if (data.job.status === "success") {
           await refreshLibrary();
           const outputId = (data.job.outputDir || "").split("/").pop();
@@ -1171,6 +1634,7 @@ function pollTask(jobId) {
       }
     } catch (error) {
       clearInterval(taskPoller);
+      setTaskButtonLoading(false);
       showToast(error.message);
     }
   };
@@ -1179,7 +1643,7 @@ function pollTask(jobId) {
 }
 
 function renderTaskProgress(job) {
-  const stageOrder = ["resolve_source", "collect_metadata", "acquire_transcript", "normalize_transcript", "group_transcript", "build_timeline", "extract_frames", "run_analysis", "export_knowledge_package"];
+  const stageOrder = ["resolve_source", "collect_metadata", "acquire_transcript", "normalize_transcript", "group_transcript", "build_timeline", "run_analysis", "extract_frames", "visual_analysis", "highlight_snapshot", "comments_fetch", "comments_analysis", "export_knowledge_package"];
   const logs = job.logs || [];
   const latestStage = [...logs].reverse().find((line) => line.includes("阶段：")) || "";
   const stage = latestStage.split("阶段：").pop();
@@ -1195,58 +1659,254 @@ function renderTaskProgress(job) {
         : stageLabel(stage || "queued");
   $("#taskPercent").textContent = `${percent}%`;
   $("#progressBar").style.width = `${percent}%`;
+  $("#taskProgressBar").setAttribute("aria-valuenow", String(percent));
+  $("#taskProgressBar").setAttribute("aria-valuetext", $("#taskStatusText").textContent);
   $("#taskLogs").textContent = logs.slice(-10).join("\n") || "等待任务日志…";
 }
 
-function toggleSidebar() {
-  $("#app").classList.toggle("drawer-open");
+function isWideShell() { return window.matchMedia(WIDE_SHELL_QUERY).matches; }
+function isSinglePane() { return window.matchMedia(SINGLE_PANE_QUERY).matches; }
+
+function toggleSidebar(trigger = $("#toggleSidebar")) {
+  const app = $("#app");
+  lastSidebarTrigger = trigger;
+  if (isWideShell()) {
+    app.classList.toggle("sidebar-hidden");
+    app.classList.remove("sidebar-open");
+    syncShellAccessibility();
+    return;
+  }
+  if (app.classList.contains("sidebar-open")) closeSidebar(true);
+  else openSidebar(trigger);
 }
 
-function closeDrawer() { $("#app").classList.remove("drawer-open"); }
-function focusSidebarSearch() { $("#app").classList.add("drawer-open"); setTimeout(() => $("#librarySearch").focus(), 80); }
+function openSidebar(trigger = $("#toggleSidebar"), focusSearch = false) {
+  const app = $("#app");
+  lastSidebarTrigger = trigger;
+  app.classList.remove("sidebar-hidden", "inspector-open");
+  app.classList.add("sidebar-open");
+  syncShellAccessibility();
+  requestAnimationFrame(() => (focusSearch ? $("#librarySearch") : $("#sidebar")).focus());
+}
 
-function startResize(event) {
-  if (window.innerWidth < 1180) return;
-  const resizer = event.currentTarget;
+function closeSidebar(returnFocus = false) {
+  const app = $("#app");
+  if (isWideShell()) app.classList.add("sidebar-hidden");
+  app.classList.remove("sidebar-open");
+  syncShellAccessibility();
+  if (returnFocus) (lastSidebarTrigger || $("#toggleSidebar")).focus();
+}
+
+function focusSidebarSearch() { openSidebar($("#toggleSidebar"), true); }
+
+function toggleInspector(trigger = $("#toggleInspector")) {
+  const app = $("#app");
+  lastInspectorTrigger = trigger;
+  const expanded = isWideShell() ? !app.classList.contains("inspector-hidden") : app.classList.contains("inspector-open");
+  if (expanded) closeInspector(true);
+  else openInspector(trigger);
+}
+
+function openInspector(trigger = $("#toggleInspector")) {
+  const app = $("#app");
+  lastInspectorTrigger = trigger;
+  app.classList.remove("inspector-hidden", "sidebar-open");
+  if (!isWideShell()) app.classList.add("inspector-open");
+  syncShellAccessibility();
+  if (!isWideShell()) requestAnimationFrame(() => $("#collaborationPane").focus());
+}
+
+function closeInspector(returnFocus = false) {
+  const app = $("#app");
+  if (isWideShell()) app.classList.add("inspector-hidden");
+  app.classList.remove("inspector-open");
+  syncShellAccessibility();
+  if (returnFocus) (lastInspectorTrigger || $("#toggleInspector")).focus();
+}
+
+function closeActiveSheet(returnFocus = false) {
+  if ($("#app").classList.contains("sidebar-open")) closeSidebar(returnFocus);
+  else if ($("#app").classList.contains("inspector-open")) closeInspector(returnFocus);
+}
+
+function syncShellAccessibility() {
+  const app = $("#app");
+  const wide = isWideShell();
+  const sidebarExpanded = wide ? !app.classList.contains("sidebar-hidden") : app.classList.contains("sidebar-open");
+  const inspectorExpanded = wide ? !app.classList.contains("inspector-hidden") : app.classList.contains("inspector-open");
+  const sidebar = $("#sidebar");
+  const inspector = $("#collaborationPane");
+  $("#toggleSidebar").setAttribute("aria-expanded", String(sidebarExpanded));
+  $("#toggleSidebar").setAttribute("aria-label", sidebarExpanded ? "隐藏知识库" : "打开知识库");
+  $("#toggleInspector").setAttribute("aria-expanded", String(inspectorExpanded));
+  $("#toggleInspector").setAttribute("aria-label", inspectorExpanded ? "隐藏检查器" : "打开检查器");
+  sidebar.setAttribute("aria-hidden", String(!sidebarExpanded));
+  inspector.setAttribute("aria-hidden", String(!inspectorExpanded));
+  sidebar.inert = !sidebarExpanded;
+  inspector.inert = !inspectorExpanded;
+  [sidebar, inspector].forEach((layer) => {
+    if (wide) {
+      layer.removeAttribute("role");
+      layer.removeAttribute("aria-modal");
+    } else {
+      layer.setAttribute("role", "dialog");
+      layer.setAttribute("aria-modal", "true");
+    }
+  });
+  $("#drawerScrim").setAttribute("aria-hidden", String(!(app.classList.contains("sidebar-open") || app.classList.contains("inspector-open"))));
+}
+
+function handleViewportChange() {
+  $("#app").classList.remove("sidebar-open", "inspector-open");
+  syncShellAccessibility();
+  requestAnimationFrame(reconcileLayoutWidths);
+}
+
+function activeModalLayer() {
+  if (isWideShell()) return null;
+  if ($("#app").classList.contains("sidebar-open")) return $("#sidebar");
+  if ($("#app").classList.contains("inspector-open")) return $("#collaborationPane");
+  return null;
+}
+
+function trapLayerFocus(event) {
+  if (event.key !== "Tab") return false;
+  const layer = activeModalLayer();
+  if (!layer) return false;
+  const focusable = $$('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])', layer)
+    .filter((element) => element.getClientRects().length);
+  if (!focusable.length) { event.preventDefault(); layer.focus(); return true; }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); return true; }
+  if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); return true; }
+  return false;
+}
+
+function dividerModules(resizer) {
+  if (isSinglePane() || (resizer.id === "rightPaneResizer" && !isWideShell())) return null;
+  if (!isWideShell()) return [$("#resultPane"), $("#centerPane")];
   const dividerOrder = Number(resizer.style.order);
-  const modules = $$(".workspace-module").sort((a, b) => Number(a.style.order) - Number(b.style.order));
+  const modules = $$(".workspace-module").filter((module) => !module.matches("[aria-hidden=true]")).sort((a, b) => Number(a.style.order) - Number(b.style.order));
   const left = [...modules].reverse().find((module) => Number(module.style.order) < dividerOrder);
   const right = modules.find((module) => Number(module.style.order) > dividerOrder);
-  if (!left || !right) return;
+  return left && right ? [left, right] : null;
+}
+
+function moduleMinimumWidth(module) {
+  const minimum = Number.parseFloat(getComputedStyle(module).minWidth);
+  return Number.isFinite(minimum) ? minimum : 0;
+}
+
+function moduleMaximumWidth(module) {
+  const maximum = Number.parseFloat(getComputedStyle(module).maxWidth);
+  return Number.isFinite(maximum) ? maximum : Infinity;
+}
+
+function dividerBounds(left, right) {
+  const total = left.getBoundingClientRect().width + right.getBoundingClientRect().width;
+  const minimum = Math.round(Math.max(moduleMinimumWidth(left), total - moduleMaximumWidth(right)));
+  const rightMinimum = Math.round(moduleMinimumWidth(right));
+  const maximum = Math.max(minimum, Math.round(Math.min(moduleMaximumWidth(left), total - rightMinimum)));
+  return { minimum, rightMinimum, maximum, total };
+}
+
+function setDividerWidths(resizer, left, right, nextLeft) {
+  const { minimum, maximum, total } = dividerBounds(left, right);
+  const leftWidth = clamp(nextLeft, minimum, maximum);
+  const rightWidth = total - leftWidth;
+  left.style.flexBasis = `${leftWidth}px`;
+  right.style.flexBasis = `${rightWidth}px`;
+  state.moduleWidths[left.dataset.module] = Math.round(leftWidth);
+  state.moduleWidths[right.dataset.module] = Math.round(rightWidth);
+  updateDividerAria(resizer, left, right);
+}
+
+function startResize(event) {
+  if (event.button !== 0) return;
+  const resizer = event.currentTarget;
+  const modules = dividerModules(resizer);
+  if (!modules) return;
+  const [left, right] = modules;
   const startX = event.clientX;
   const leftWidth = left.getBoundingClientRect().width;
-  const rightWidth = right.getBoundingClientRect().width;
   resizer.setPointerCapture(event.pointerId);
   resizer.classList.add("dragging");
-  const move = (moveEvent) => {
-    const delta = moveEvent.clientX - startX;
-    const nextLeft = clamp(leftWidth + delta, 300, leftWidth + rightWidth - 300);
-    const nextRight = leftWidth + rightWidth - nextLeft;
-    left.style.flexBasis = `${nextLeft}px`;
-    right.style.flexBasis = `${nextRight}px`;
-    state.moduleWidths[left.dataset.module] = Math.round(nextLeft);
-    state.moduleWidths[right.dataset.module] = Math.round(nextRight);
-  };
+  const move = (moveEvent) => setDividerWidths(resizer, left, right, leftWidth + moveEvent.clientX - startX);
   const end = () => {
     resizer.classList.remove("dragging");
     resizer.removeEventListener("pointermove", move);
     resizer.removeEventListener("pointerup", end);
+    resizer.removeEventListener("pointercancel", end);
     localStorage.setItem(SETTINGS.moduleWidths, JSON.stringify(state.moduleWidths));
   };
   resizer.addEventListener("pointermove", move);
   resizer.addEventListener("pointerup", end);
+  resizer.addEventListener("pointercancel", end);
+}
+
+function handleDividerKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const modules = dividerModules(event.currentTarget);
+  if (!modules) return;
+  event.preventDefault();
+  const [left, right] = modules;
+  const { minimum, maximum } = dividerBounds(left, right);
+  const current = left.getBoundingClientRect().width;
+  const step = event.shiftKey ? 48 : 16;
+  const next = event.key === "Home" ? minimum : event.key === "End" ? maximum : current + (event.key === "ArrowRight" ? step : -step);
+  setDividerWidths(event.currentTarget, left, right, next);
+  localStorage.setItem(SETTINGS.moduleWidths, JSON.stringify(state.moduleWidths));
+}
+
+function updateDividerAria(resizer, left, right) {
+  if (!left || !right) return;
+  const { minimum, maximum } = dividerBounds(left, right);
+  const current = Math.round(left.getBoundingClientRect().width);
+  resizer.setAttribute("aria-valuemin", String(minimum));
+  resizer.setAttribute("aria-valuemax", String(maximum));
+  resizer.setAttribute("aria-valuenow", String(clamp(current, minimum, maximum)));
+  resizer.setAttribute("aria-valuetext", `${left.dataset.module} ${current} 像素`);
+  resizer.setAttribute("aria-controls", `${left.id} ${right.id}`);
+}
+
+function updateAllDividerAria() {
+  $$(".pane-resizer").forEach((resizer) => {
+    const modules = dividerModules(resizer);
+    if (modules) updateDividerAria(resizer, ...modules);
+  });
+}
+
+function reconcileLayoutWidths() {
+  if (!isSinglePane()) {
+    $$(".pane-resizer").forEach((resizer) => {
+      const modules = dividerModules(resizer);
+      if (!modules) return;
+      const [left, right] = modules;
+      const { minimum, rightMinimum, total } = dividerBounds(left, right);
+      if (total < minimum + rightMinimum) return;
+      setDividerWidths(resizer, left, right, left.getBoundingClientRect().width);
+    });
+    localStorage.setItem(SETTINGS.moduleWidths, JSON.stringify(state.moduleWidths));
+  }
+  updateAllDividerAria();
 }
 
 function resetModuleWidths() {
   state.moduleWidths = {};
   localStorage.removeItem(SETTINGS.moduleWidths);
   $$(".workspace-module").forEach((module) => module.style.removeProperty("flex-basis"));
+  requestAnimationFrame(updateAllDividerAria);
 }
 
 function setMobileView(view) {
-  const next = ["result", "media", "collaboration"].includes(view) ? view : "result";
+  const next = ["result", "media"].includes(view) ? view : "result";
   $("#app").dataset.mobileView = next;
-  $$("[data-mobile-tab]").forEach((button) => button.setAttribute("aria-selected", String(button.dataset.mobileTab === next)));
+  $$("[data-mobile-tab]").forEach((button) => {
+    const active = button.dataset.mobileTab === next;
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
 }
 
 function openLayoutSettings() {
@@ -1255,18 +1915,19 @@ function openLayoutSettings() {
 }
 
 function syncLayoutControls() {
-  state.moduleOrder.forEach((module, index) => {
-    $(`#layoutPosition${index + 1}`).value = module;
-  });
+  $("#layoutPosition1").value = state.moduleOrder[0];
+  $("#layoutPosition2").value = state.moduleOrder[1];
+  $("#layoutPosition3").value = "collaboration";
 }
 
 function updateLayoutFromControls(event) {
-  const selects = [$("#layoutPosition1"), $("#layoutPosition2"), $("#layoutPosition3")];
+  const selects = [$("#layoutPosition1"), $("#layoutPosition2")];
   const changedIndex = selects.indexOf(event.currentTarget);
+  if (changedIndex < 0) return;
   const selected = event.currentTarget.value;
-  const duplicateIndex = selects.findIndex((select, index) => index !== changedIndex && select.value === selected);
-  if (duplicateIndex >= 0) selects[duplicateIndex].value = state.moduleOrder[changedIndex];
-  state.moduleOrder = selects.map((select) => select.value);
+  const otherIndex = changedIndex === 0 ? 1 : 0;
+  if (selects[otherIndex].value === selected) selects[otherIndex].value = state.moduleOrder[changedIndex];
+  state.moduleOrder = [...selects.map((select) => select.value), "collaboration"];
   localStorage.setItem(SETTINGS.moduleOrder, JSON.stringify(state.moduleOrder));
   applyModuleOrder();
 }
@@ -1292,9 +1953,8 @@ function resetWorkspaceLayout() {
 
 function readModuleOrder() {
   const value = readJsonSetting(SETTINGS.moduleOrder, DEFAULT_MODULE_ORDER);
-  return Array.isArray(value) && value.length === 3 && new Set(value).size === 3 && value.every((item) => DEFAULT_MODULE_ORDER.includes(item))
-    ? value
-    : [...DEFAULT_MODULE_ORDER];
+  if (!Array.isArray(value) || value.length !== 3 || new Set(value).size !== 3 || !value.every((item) => DEFAULT_MODULE_ORDER.includes(item))) return [...DEFAULT_MODULE_ORDER];
+  return [...value.filter((item) => item !== "collaboration"), "collaboration"];
 }
 
 function readJsonSetting(key, fallback) {
@@ -1471,15 +2131,20 @@ function setFollowMode(value) {
 
 function setLibraryFilter(filter, button) {
   state.filter = filter;
-  $$("[data-filter]").forEach((item) => item.classList.toggle("active", item === button));
+  $$("[data-filter]").forEach((item) => {
+    const active = item === button;
+    item.classList.toggle("active", active);
+    if (active) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
+  });
   renderLibrary();
 }
 
 function setLoadingState() {
   $("#sourceInfo").innerHTML = '<h1>正在加载记录…</h1><p>请稍候</p>';
   $("#summaryView").innerHTML = '<div class="result-empty"><p>正在读取知识包…</p></div>';
-  $("#processingStatus").className = "processing-status";
-  $("#processingStatus").innerHTML = '<svg><use href="#i-refresh"/></svg><span>加载中</span>';
+  $("#processingStatus").className = "processing-status ui-inline-status ui-inline-status--info";
+  $("#processingStatus").innerHTML = '<span class="ui-spinner" aria-hidden="true"></span><span>加载中</span>';
 }
 
 function renderLoadError(message) {
@@ -1521,19 +2186,23 @@ async function copyText(text) {
 }
 
 function handleKeyboard(event) {
+  if (event.defaultPrevented) return;
+  if (trapLayerFocus(event)) return;
   const editing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
   if (event.ctrlKey && event.key.toLowerCase() === "k") { event.preventDefault(); focusSidebarSearch(); return; }
   if (event.key === "Escape") {
-    closeDrawer();
     const openDialogs = $$("dialog[open]");
     if (openDialogs.length) openDialogs.forEach((dialog) => dialog.close());
+    else if (activeModalLayer()) closeActiveSheet(true);
+    else if ($("#collaborationPane").contains(document.activeElement)) closeInspector(true);
+    else if ($("#sidebar").contains(document.activeElement)) closeSidebar(true);
     else if (state.deleteMode) setDeleteMode(false);
     return;
   }
   if (editing) return;
   if (event.code === "Space") { event.preventDefault(); togglePlay(); }
-  if (event.key === "ArrowLeft") { event.preventDefault(); seekTo(Math.max(0, (mediaController?.getCurrentTime() || 0) - 5)); }
-  if (event.key === "ArrowRight") { event.preventDefault(); seekTo((mediaController?.getCurrentTime() || 0) + 5); }
+  if (event.key === "ArrowLeft") { event.preventDefault(); seekPreview(Math.max(0, (mediaController?.getCurrentTime() || 0) - 5)); }
+  if (event.key === "ArrowRight") { event.preventDefault(); seekPreview((mediaController?.getCurrentTime() || 0) + 5); }
 }
 
 function selectFromHash() {
@@ -1549,11 +2218,12 @@ function decodeHashId() {
 
 function timestampLink(url, seconds) {
   if (!isSafeHttpUrl(url)) return "";
-  const host = new URL(url).hostname.toLowerCase();
-  const separator = url.includes("?") ? "&" : "?";
-  if (host.includes("youtube.com") || host === "youtu.be") return `${url}${separator}t=${Math.floor(seconds)}s`;
-  if (host.includes("bilibili.com") || host === "b23.tv") return `${url}${separator}t=${Math.floor(seconds)}`;
-  return url;
+  const target = new URL(url);
+  const host = target.hostname.toLowerCase();
+  if (host.includes("youtube.com") || host === "youtu.be") target.searchParams.set("t", `${Math.floor(seconds)}s`);
+  else if (host.includes("bilibili.com") || host === "b23.tv") target.searchParams.set("t", String(Math.floor(seconds)));
+  else return url;
+  return target.toString();
 }
 
 function statusLabel(status) {
@@ -1561,7 +2231,12 @@ function statusLabel(status) {
 }
 
 function stageLabel(stage) {
-  return ({ queued: "等待处理", resolve_source: "识别来源", collect_metadata: "读取来源信息", acquire_transcript: "获取字幕或转写", normalize_transcript: "标准化字幕", group_transcript: "字幕分组", build_timeline: "构建时间轴", extract_frames: "生成关键帧", run_analysis: "结构化分析", export_knowledge_package: "导出知识包" })[stage] || stage || "处理中";
+  return ({ queued: "等待处理", resolve_source: "识别来源", collect_metadata: "读取来源信息", acquire_transcript: "获取字幕或转写", normalize_transcript: "标准化字幕", group_transcript: "字幕分组", build_timeline: "构建时间轴", run_analysis: "结构化分析", extract_frames: "生成关键帧", visual_analysis: "分析关键帧", highlight_snapshot: "生成教程截图", comments_fetch: "同步评论", comments_analysis: "评论区洞察", export_knowledge_package: "导出知识包" })[stage] || stage || "处理中";
+}
+
+function videoChatRouteLabel(route, status) {
+  const label = ({ gemini_youtube_url: "YouTube 原生视频", gemini_files_api: "Files API 视频", gemini_frames_text: "关键帧+文本", text_only: "纯文本" })[route] || route;
+  return status === "degraded" ? `${label}（已降级）` : label;
 }
 
 function platformLabel(platform) {

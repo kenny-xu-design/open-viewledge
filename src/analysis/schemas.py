@@ -4,6 +4,7 @@ import json
 import re
 
 from ..domain.models import AnalysisResult
+from ..cli_contract import sanitize_message
 from ..utils import UserFacingError
 from .entities import normalize_analysis_entities
 
@@ -16,22 +17,36 @@ def parse_analysis_response(
     *,
     usage: dict[str, int] | None = None,
     max_duration: float | None = None,
+    processing_profile: str = "complete",
+    source: dict | None = None,
+    visual_context_used: bool = False,
 ) -> AnalysisResult:
     cleaned = _strip_code_fence(raw_response)
+    safe_raw_response = sanitize_message(raw_response)
     try:
         payload = json.loads(cleaned)
         if not isinstance(payload, dict):
             raise ValueError("顶层必须是 JSON 对象")
+        payload = _sanitize_payload(payload)
+        if not _raw_payload_has_content(payload):
+            raise ValueError("结构化分析没有包含任何有效内容")
+        _validate_profile_payload(payload, profile)
         payload = _normalize_analysis_payload(payload)
         payload.update(
             {
                 "status": "success",
                 "error": "",
-                "raw_response": raw_response,
+                "raw_response": safe_raw_response,
                 "analysis_profile": profile,
                 "provider": provider,
                 "model": model,
                 "usage": usage or {},
+                "processing_profile": processing_profile,
+                "source": source or {},
+                "generation": {
+                    "visual_context_used": visual_context_used,
+                    "comments_included": False,
+                },
             }
         )
         result = AnalysisResult.model_validate(payload)
@@ -42,11 +57,14 @@ def parse_analysis_response(
         result = AnalysisResult(
             status="failed",
             error="模型输出不是合法的结构化 JSON。",
-            raw_response=raw_response,
+            raw_response=safe_raw_response,
             analysis_profile=profile,
             provider=provider,
             model=model,
             usage=usage or {},
+            processing_profile=processing_profile,
+            source=source or {},
+            generation={"visual_context_used": visual_context_used, "comments_included": False},
         )
         raise AnalysisParseError(f"模型输出不是合法的结构化 JSON：{exc}", result) from exc
 
@@ -87,6 +105,65 @@ def _normalize_analysis_payload(payload: dict) -> dict:
         normalized["action_items"] = [{"text": str(item), "timestamp": None} for item in normalized["actions"] if str(item).strip()]
 
     return normalized
+
+
+def _sanitize_payload(value):
+    if isinstance(value, str):
+        return sanitize_message(value)
+    if isinstance(value, list):
+        return [_sanitize_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _sanitize_payload(item) for key, item in value.items()}
+    return value
+
+
+def _raw_payload_has_content(payload: dict) -> bool:
+    legacy_keys = (
+        "one_sentence_summary",
+        "summary",
+        "highlights",
+        "thoughts",
+        "chapters",
+        "terminology",
+        "actions",
+        "glossary",
+        "action_items",
+        "prerequisites",
+        "steps",
+        "warnings",
+    )
+    if any(payload.get(key) not in (None, "", [], {}) for key in legacy_keys):
+        return True
+    content = payload.get("content")
+    if isinstance(content, dict):
+        return any(value not in (None, "", [], {}) for value in content.values())
+    return False
+
+
+def _validate_profile_payload(payload: dict, profile: str) -> None:
+    if profile != "summary":
+        return
+    content = payload.get("content")
+    if not isinstance(content, dict) or "one_sentence" not in content:
+        return
+    one_sentence = str(content.get("one_sentence") or "").strip()
+    if not one_sentence:
+        raise ValueError("summary.content.one_sentence 不能为空")
+    if "\n" in one_sentence or "\r" in one_sentence:
+        raise ValueError("summary.content.one_sentence 必须只占一行")
+    if re.match(r"^\s*(?:[-*+]|\d+[.)、])\s*", one_sentence):
+        raise ValueError("summary.content.one_sentence 不得使用列表")
+    without_closing_quote = one_sentence.rstrip('”’"\'')
+    sentence_marks = re.findall(r"[。！？!?]", without_closing_quote)
+    english_period_sentence = (
+        not sentence_marks
+        and without_closing_quote.endswith(".")
+        and not re.search(r"\.\s+\S", without_closing_quote[:-1])
+    )
+    if not english_period_sentence and (
+        len(sentence_marks) != 1 or without_closing_quote[-1] not in "。！？!?"
+    ):
+        raise ValueError("summary.content.one_sentence 必须严格为一个完整句子")
 
 
 def _normalize_action(item: object) -> str:
@@ -140,6 +217,7 @@ def _validate_meaningful_content(result: AnalysisResult) -> None:
             result.prerequisites,
             result.steps,
             result.warnings,
+            result.content,
         )
     ):
         raise ValueError("结构化分析没有包含任何有效内容")

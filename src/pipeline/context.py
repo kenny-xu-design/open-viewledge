@@ -7,6 +7,7 @@ from typing import Any
 
 from ..config import AppConfig
 from ..domain.models import AnalysisResult, ProcessingManifest, SourceRecord, TimelineEntry, TranscriptGroup, TranscriptSegment
+from ..processing_profiles import ProcessingProfile
 
 
 LogCallback = Callable[[str], None]
@@ -18,6 +19,7 @@ class PipelineContext:
     input_value: str
     output_dir: Path
     analysis_profile: str
+    processing_profile: ProcessingProfile = "complete"
     no_analysis: bool = False
     generate_frames: bool = True
     sample_seconds: int | None = None
@@ -32,7 +34,15 @@ class PipelineContext:
     analysis: AnalysisResult | None = None
     manifest: ProcessingManifest | None = None
     previous_manifest: dict[str, Any] = field(default_factory=dict)
+    cache_hits: set[str] = field(default_factory=set)
+    skipped_stages: set[str] = field(default_factory=set)
 
     def log(self, message: str) -> None:
         if self.log_callback:
             self.log_callback(message)
+
+    def mark_cache_hit(self, stage: str) -> None:
+        self.cache_hits.add(stage)
+
+    def mark_stage_skipped(self, stage: str) -> None:
+        self.skipped_stages.add(stage)

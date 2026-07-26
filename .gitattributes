@@ -1,2 +1,18 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Keep repository text deterministic across Windows, macOS, Linux, and GitHub.
+* text=auto eol=lf
+
+# Windows command scripts are checked out with native line endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Never apply text conversions to binary assets.
+*.gif binary
+*.ico binary
+*.jpeg binary
+*.jpg binary
+*.mp3 binary
+*.mp4 binary
+*.pdf binary
+*.png binary
+*.webm binary
+*.webp binary

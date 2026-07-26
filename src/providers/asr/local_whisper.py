@@ -16,5 +16,5 @@ class LocalWhisperProvider(ASRProvider):
 
     def transcribe(self, audio_path: Path, context: object) -> list[TranscriptSegment]:
         language = getattr(getattr(context, "config", None), "language", "zh")
-        return transcribe_segments(audio_path, language=language, source="asr")
-
+        log_callback = getattr(context, "log", None)
+        return transcribe_segments(audio_path, language=language, source="asr", log_callback=log_callback)

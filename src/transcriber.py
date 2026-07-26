@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from .cleaner import format_transcript_segment
 from .domain.models import TranscriptSegment
-from .utils import UserFacingError, console, write_text
+from .utils import UserFacingError, write_text
 
 
 LOCAL_WHISPER_MODEL_DIR = Path("models/faster-whisper-small")
@@ -37,6 +38,7 @@ def transcribe_segments(
     audio_path: Path,
     language: str | None = "zh",
     source: str = "asr",
+    log_callback: Callable[[str], None] | None = None,
 ) -> list[TranscriptSegment]:
     if not audio_path.exists():
         raise UserFacingError(f"音频文件不存在：{audio_path}")
@@ -51,7 +53,8 @@ def transcribe_segments(
         raise UserFacingError("未安装 faster-whisper。请先运行 pip install -r requirements.txt。") from exc
 
     try:
-        console.print(f"使用本地 faster-whisper 模型：{local_model_path}")
+        if log_callback:
+            log_callback(f"使用本地 faster-whisper 模型：{local_model_path}")
         model = WhisperModel(str(local_model_path), device="cpu", compute_type="int8")
         segments, _info = model.transcribe(str(audio_path), language=language or None, vad_filter=True)
         items = [

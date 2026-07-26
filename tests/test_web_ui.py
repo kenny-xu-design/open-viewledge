@@ -15,7 +15,7 @@ class WebUiContractTests(unittest.TestCase):
         cls.css = (WEB_UI / "app.css").read_text(encoding="utf-8")
         cls.js = (WEB_UI / "app.js").read_text(encoding="utf-8")
 
-    def test_three_pane_and_mobile_view_contracts_exist(self) -> None:
+    def test_app_shell_and_responsive_view_contracts_exist(self) -> None:
         self.assertIn('/static/app.workspace-', self.html)
         for element_id in (
             "sidebar",
@@ -29,8 +29,311 @@ class WebUiContractTests(unittest.TestCase):
         ):
             self.assertIn(f'id="{element_id}"', self.html)
         self.assertIn('class="workspace-header"', self.html)
-        self.assertIn("@media (max-width: 1179px)", self.css)
+        self.assertIn("Authoritative Cupertino AppShell", self.css)
+        self.assertIn("@media (min-width: 1280px)", self.css)
+        self.assertIn("@media (max-width: 1279px)", self.css)
+        self.assertIn("@media (max-width: 959px)", self.css)
         self.assertIn('data-mobile-view="result"', self.html)
+
+    def test_legacy_layout_generation_is_removed(self) -> None:
+        for legacy_contract in (
+            "sidebar-collapsed",
+            "@media (max-width: 979px)",
+            "@media (max-width: 620px)",
+            "drawer-open",
+            "grid-template-columns: var(--sidebar-width) minmax(500px, var(--center-width))",
+        ):
+            self.assertNotIn(legacy_contract, self.css + self.js, legacy_contract)
+
+    def test_sidebar_and_inspector_have_accessible_sheet_controls(self) -> None:
+        self.assertRegex(self.html, r'id="toggleSidebar"[^>]+aria-controls="sidebar"[^>]+aria-expanded="true"')
+        self.assertRegex(self.html, r'id="toggleInspector"[^>]+aria-controls="collaborationPane"[^>]+aria-expanded="true"')
+        self.assertIn('id="closeInspector" aria-label="关闭检查器"', self.html)
+        self.assertIn('id="sidebar" aria-label="知识记录导航" tabindex="-1"', self.html)
+        self.assertIn('id="collaborationPane" data-module="collaboration" aria-label="检查器" tabindex="-1"', self.html)
+        self.assertIn("function syncShellAccessibility()", self.js)
+        self.assertIn("function trapLayerFocus(event)", self.js)
+        self.assertIn('layer.setAttribute("aria-modal", "true")', self.js)
+        self.assertIn("sidebar.inert = !sidebarExpanded", self.js)
+        self.assertIn("lastSidebarTrigger", self.js)
+        self.assertIn("lastInspectorTrigger", self.js)
+
+    def test_sidebar_navigation_exposes_current_and_expanded_state(self) -> None:
+        self.assertIn('data-filter="all" aria-current="page"', self.html)
+        self.assertIn('<summary aria-expanded="true">', self.html)
+        self.assertIn('<summary aria-expanded="false">', self.html)
+        self.assertIn('item.setAttribute("aria-current", "page")', self.js)
+        self.assertIn('setAttribute("aria-expanded", String(details.open))', self.js)
+
+    def test_split_view_dividers_support_pointer_keyboard_and_values(self) -> None:
+        for divider_id in ("paneResizer", "rightPaneResizer"):
+            divider = re.search(rf'id="{divider_id}"[^>]+', self.html)
+            self.assertIsNotNone(divider)
+            for attribute in ('role="separator"', 'aria-orientation="vertical"', 'aria-valuemin=', 'aria-valuemax=', 'aria-valuenow=', 'tabindex="0"'):
+                self.assertIn(attribute, divider.group(0))
+        self.assertIn("function startResize(event)", self.js)
+        self.assertIn("function handleDividerKeydown(event)", self.js)
+        self.assertIn('event.shiftKey ? 48 : 16', self.js)
+        self.assertIn('setAttribute("aria-valuenow"', self.js)
+        self.assertIn(".pane-resizer:focus-visible::after", self.css)
+        self.assertNotRegex(self.css, r"\.pane-resizer[^}]*transition\s*:\s*[^;]*(width|flex)")
+
+    def test_divider_bounds_follow_panel_constraints_and_viewport_changes(self) -> None:
+        self.assertIn("function moduleMinimumWidth(module)", self.js)
+        self.assertIn("function moduleMaximumWidth(module)", self.js)
+        self.assertIn("function reconcileLayoutWidths()", self.js)
+        self.assertIn("requestAnimationFrame(reconcileLayoutWidths)", self.js)
+        self.assertIn('max-width: min(520px, 48vw)', self.css)
+        self.assertIn(".header-actions > * { flex: 0 0 auto; }", self.css)
+
+    def test_preview_seek_keeps_bilibili_inside_the_embed(self) -> None:
+        self.assertIn("function seekPreview(seconds)", self.js)
+        self.assertIn('url.searchParams.set("bvid", this.videoId)', self.js)
+        self.assertIn('url.searchParams.set("t", String(Math.floor(state.currentTime)))', self.js)
+        self.assertIn("supportsSeek() { return true; }", self.js)
+        seek_preview = re.search(r"function seekPreview\(seconds\)\s*\{(?P<body>.*?)\n\}", self.js, re.S)
+        self.assertIsNotNone(seek_preview)
+        self.assertNotIn("openExternally", seek_preview.group("body"))
+        self.assertIn("event.preventDefault()", self.js)
+
+    def test_local_video_display_ratios_do_not_apply_to_iframes(self) -> None:
+        for value in ("original", "16/9", "4/3", "1/1", "9/16"):
+            self.assertIn(f'value="{value}"', self.html)
+        self.assertIn('id="videoObjectFit"', self.html)
+        self.assertIn('value="contain" selected', self.html)
+        self.assertIn('value="cover"', self.html)
+        self.assertIn("video.videoWidth", self.js)
+        self.assertIn("video.videoHeight", self.js)
+        self.assertIn("mediaController instanceof LocalVideoController", self.js)
+        self.assertIn('surface.style.setProperty("--media-aspect", String(selectedRatio))', self.js)
+        self.assertIn(".media-surface.local-video-surface", self.css)
+        self.assertIn("video.style.objectFit = fitSetting", self.js)
+
+    def test_one_summary_region_uses_reading_surface(self) -> None:
+        self.assertEqual(self.html.count("reading-surface"), 1)
+        self.assertIn('id="summaryView" class="result-view reading-surface"', self.html)
+        self.assertIn(".reading-surface", self.css)
+        self.assertIn("width: min(calc(100% - 24px), 760px)", self.css)
+        self.assertIn("border-radius: var(--radius-group)", self.css)
+
+    def test_comment_feature_is_video_panel_sibling_before_highlights(self) -> None:
+        self.assertIn('class="insight-tabs" role="tablist" aria-label="视频功能"', self.html)
+        self.assertIn('data-insight-tab="comments"', self.html)
+        self.assertIn('data-insight-tab="highlights"', self.html)
+        self.assertNotIn("<h2>评论区洞察</h2>", self.js)
+        comment_tab = self.html.index('data-insight-tab="comments"')
+        highlight_tab = self.html.index('data-insight-tab="highlights"')
+        self.assertLess(comment_tab, highlight_tab)
+        self.assertIn("function setInsightTab(tab)", self.js)
+        self.assertIn(".insight-tabs button.active", self.css)
+
+    def test_dynamic_sections_do_not_truncate_to_first_five_items(self) -> None:
+        self.assertNotIn(".slice(0, 5)", self.js)
+        self.assertNotIn("analysis.thoughts.slice", self.js)
+        self.assertIn("renderTutorialChapters", self.js)
+        self.assertIn("renderTutorialSteps", self.js)
+
+    def test_summary_uses_six_core_sections_and_conditional_professional_terms(self) -> None:
+        summary_contract = re.search(r'summary:\s*\[(?P<body>.*?)\],\s*\n\s*tutorial:', self.js, re.S)
+        self.assertIsNotNone(summary_contract)
+        body = summary_contract.group("body")
+        for title in ("一句话", "摘要", "专业术语", "亮点", "思考", "章节总结"):
+            self.assertIn(f'"{title}"', body)
+        for removed in ("一句话结论", "内容概览", "核心观点", "关键结论", "待核查事项"):
+            self.assertNotIn(f'"{removed}"', body)
+        self.assertIn("if (terms.length < 3) return", self.js)
+        self.assertIn("function renderProfessionalTerms(value)", self.js)
+
+    def test_toolbar_has_visible_page_hierarchy(self) -> None:
+        self.assertIn('class="workspace-heading"', self.html)
+        self.assertIn('<small>视频知识工作台</small>', self.html)
+        self.assertIn(".workspace-heading", self.css)
+        self.assertIn("--workspace-header-height: 56px", self.css)
+
+    def test_cupertino_design_token_categories_exist(self) -> None:
+        required_tokens = {
+            "--ui-canvas",
+            "--ui-surface",
+            "--ui-surface-secondary",
+            "--ui-text-primary",
+            "--ui-text-secondary",
+            "--ui-separator",
+            "--ui-accent",
+            "--ui-success",
+            "--ui-warning",
+            "--ui-danger",
+            "--ui-info",
+            "--font-sans",
+            "--font-size-body",
+            "--line-height-body",
+            "--font-weight-semibold",
+            "--space-4",
+            "--radius-control",
+            "--shadow-overlay",
+            "--control-height",
+            "--z-toolbar",
+            "--ui-material",
+            "--material-blur",
+            "--motion-standard",
+            "--ease-out-ui",
+            "--breakpoint-single-pane",
+        }
+        for token in required_tokens:
+            self.assertIn(f"{token}:", self.css, token)
+        self.assertIn(
+            '--font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+            self.css,
+        )
+
+    def test_light_dark_and_native_color_scheme_are_defined(self) -> None:
+        self.assertIn('content="light dark"', self.html)
+        self.assertIn("color-scheme: light dark", self.css)
+        dark_theme = re.search(
+            r"@media \(prefers-color-scheme: dark\)\s*\{\s*:root\s*\{(?P<body>.*?)\}\s*\}",
+            self.css,
+            re.S,
+        )
+        self.assertIsNotNone(dark_theme)
+        for token in ("--ui-canvas", "--ui-surface", "--ui-text-primary", "--ui-separator", "--ui-accent", "--ui-focus-ring"):
+            self.assertIn(f"{token}:", dark_theme.group("body"), token)
+
+    def test_every_css_variable_use_has_a_definition(self) -> None:
+        defined = set(re.findall(r"--([a-zA-Z0-9-]+)\s*:", self.css))
+        used = set(re.findall(r"var\(--([a-zA-Z0-9-]+)", self.css))
+        self.assertEqual(used - defined, set())
+        self.assertIn("--surface:", self.css)
+        self.assertIn("--text-muted:", self.css)
+
+    def test_reduced_motion_tokens_and_scroll_behavior_exist(self) -> None:
+        reduced = re.search(
+            r"@media \(prefers-reduced-motion: reduce\)\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.S,
+        )
+        self.assertIsNotNone(reduced)
+        self.assertIn("--motion-standard: 0ms", reduced.group("body"))
+        self.assertIn("scroll-behavior: auto !important", reduced.group("body"))
+        self.assertIn("animation-iteration-count: 1 !important", reduced.group("body"))
+        self.assertIn('const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)"', self.js)
+        self.assertIn("window.matchMedia(REDUCED_MOTION_QUERY).matches", self.js)
+        self.assertNotIn('behavior: "smooth"', self.js)
+
+    def test_cupertino_component_primitives_and_states_exist(self) -> None:
+        component_css = re.search(
+            r"/\* Cupertino component primitives\.(?P<body>.*?)/\* End Cupertino component primitives\. \*/",
+            self.css,
+            re.S,
+        )
+        self.assertIsNotNone(component_css)
+        body = component_css.group("body")
+        for component in (
+            ".ui-button",
+            ".ui-icon-button",
+            ".ui-field",
+            ".ui-text-field",
+            ".ui-select",
+            ".ui-segmented-control",
+            ".ui-toggle",
+            ".ui-status-badge",
+            ".ui-inline-status",
+            ".ui-progress",
+            ".ui-spinner",
+            ".ui-empty-state",
+            ".ui-error-state",
+        ):
+            self.assertIn(component, body, component)
+        for state in (
+            ".ui-button--primary",
+            ".ui-button--secondary",
+            ".ui-button--tertiary",
+            ".ui-button--destructive",
+            '[aria-busy="true"]',
+            ":disabled",
+            '[aria-invalid="true"]',
+            '[aria-checked="true"]',
+            ".ui-status-badge--info",
+            ".ui-status-badge--success",
+            ".ui-status-badge--warning",
+            ".ui-status-badge--danger",
+            ".ui-progress--indeterminate",
+        ):
+            self.assertIn(state, body, state)
+        self.assertIsNone(re.search(r"#[0-9a-fA-F]{3,8}|rgba?\(", body))
+        self.assertNotIn("transition: all", body)
+        self.assertNotIn("scale(0)", body)
+
+    def test_migrated_button_field_select_and_status_contracts(self) -> None:
+        self.assertRegex(self.html, r'class="[^"]*ui-button--primary[^"]*" id="startTask" aria-busy="false"')
+        self.assertRegex(self.html, r'class="[^"]*ui-button--secondary[^"]*" data-close-dialog')
+        self.assertRegex(self.html, r'class="[^"]*ui-button--destructive[^"]*" id="confirmDeleteKnowledge"')
+        self.assertIn('class="icon-button ui-icon-button" id="refreshJobs"', self.html)
+        self.assertIn('aria-label="刷新任务历史"', self.html)
+        self.assertIn('id="taskSourceField" data-invalid="false"', self.html)
+        self.assertIn('class="ui-field__label" for="taskSource"', self.html)
+        self.assertIn('aria-describedby="taskSourceDescription"', self.html)
+        self.assertIn('aria-errormessage="taskSourceError"', self.html)
+        self.assertIn('id="taskSourceError" role="alert" hidden', self.html)
+        self.assertIn('class="ui-select" id="taskMode"', self.html)
+        self.assertIn("function setTaskSourceError(invalid)", self.js)
+        self.assertIn('input.setAttribute("aria-invalid", String(invalid))', self.js)
+        self.assertIn('id="modelBadge" role="status"', self.html)
+        self.assertIn('id="processingStatus" role="status" aria-live="polite"', self.html)
+
+    def test_segmented_control_has_radio_semantics_and_keyboard_navigation(self) -> None:
+        self.assertIn('role="radiogroup" aria-label="来源类型" data-segmented-control', self.html)
+        self.assertRegex(self.html, r'role="radio" aria-checked="true" tabindex="0" data-source-type="url"')
+        self.assertRegex(self.html, r'role="radio" aria-checked="false" tabindex="-1" data-source-type="file"')
+        handler = re.search(
+            r"function handleSegmentedControlKeydown\(event\) \{(?P<body>.*?)\n\}",
+            self.js,
+            re.S,
+        )
+        self.assertIsNotNone(handler)
+        for key in ("ArrowLeft", "ArrowRight", "Home", "End"):
+            self.assertIn(f'"{key}"', handler.group("body"))
+        self.assertIn("event.preventDefault()", handler.group("body"))
+        self.assertIn("options[nextIndex].focus()", handler.group("body"))
+        self.assertIn("options[nextIndex].click()", handler.group("body"))
+        self.assertIn('button.setAttribute("aria-checked", String(selected))', self.js)
+        self.assertIn("button.tabIndex = selected ? 0 : -1", self.js)
+
+    def test_toggle_keeps_native_checkbox_keyboard_behavior(self) -> None:
+        self.assertRegex(
+            self.html,
+            r'<label class="ui-toggle"><input id="taskFrames" type="checkbox" checked><span class="ui-toggle__track" aria-hidden="true"></span><span>生成关键帧</span></label>',
+        )
+        self.assertIn('.ui-toggle input:focus-visible + .ui-toggle__track', self.css)
+        self.assertIn('.ui-toggle input:disabled ~ *', self.css)
+        self.assertIn('if (event.defaultPrevented) return;', self.js)
+        self.assertIn('const editing = ["INPUT", "TEXTAREA", "SELECT"]', self.js)
+
+    def test_progress_loading_and_empty_state_are_accessible(self) -> None:
+        self.assertIn('id="taskProgress" role="status" aria-live="polite"', self.html)
+        self.assertIn('id="taskProgressBar" role="progressbar" aria-label="任务处理进度"', self.html)
+        self.assertIn('aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"', self.html)
+        self.assertIn('setAttribute("aria-valuenow", String(percent))', self.js)
+        self.assertIn('setAttribute("aria-valuetext", $("#taskStatusText").textContent)', self.js)
+        self.assertIn('function setTaskButtonLoading(loading)', self.js)
+        self.assertIn('button.setAttribute("aria-busy", String(loading))', self.js)
+        self.assertIn('class="result-empty ui-empty-state"', self.html)
+        self.assertIn('class="ui-empty-state__title"', self.html)
+        self.assertIn('class="ui-empty-state__description"', self.html)
+
+    def test_component_motion_has_reduced_motion_fallbacks(self) -> None:
+        reduced = re.search(
+            r"@media \(prefers-reduced-motion: reduce\)\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.S,
+        )
+        self.assertIsNotNone(reduced)
+        self.assertIn("--motion-spinner: 0ms", reduced.group("body"))
+        self.assertIn("--motion-progress: 0ms", reduced.group("body"))
+        self.assertIn(".ui-progress--indeterminate .ui-progress__bar", reduced.group("body"))
+
+    def test_frontend_remains_framework_free(self) -> None:
+        self.assertNotRegex(self.html, r'https?://[^"\']+(react|vue|svelte|bootstrap|material|shadcn)')
+        self.assertEqual(self.html.count("<script "), 1)
+        self.assertEqual(self.html.count('rel="stylesheet"'), 1)
 
     def test_workspace_order_is_configurable(self) -> None:
         self.assertIn('id="layoutDialog"', self.html)
@@ -48,7 +351,7 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("class LocalAudioController", self.js)
         self.assertIn("supportsSeek()", self.js)
         self.assertIn("mediaController?.destroy()", self.js)
-        self.assertIn("mediaController?.openExternally", self.js)
+        self.assertIn("function openOriginal()", self.js)
 
     def test_chat_uses_real_endpoint_and_has_no_simulated_answer(self) -> None:
         self.assertIn('api("/api/chat"', self.js)
@@ -68,6 +371,22 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('id="clearChat"', self.html)
         self.assertIn("regenerateLastAnswer", self.js)
 
+    def test_api_config_entry_and_secret_handling_exist(self) -> None:
+        self.assertIn('id="apiSettings"', self.html)
+        self.assertIn('id="apiConfigDialog"', self.html)
+        self.assertIn("API Key 默认仅用于当前本地运行会话", self.html)
+        for element_id in ("deepseekApiKey", "geminiApiKey"):
+            self.assertRegex(self.html, rf'id="{element_id}" type="password"')
+        self.assertIn('id="deepseekBaseUrl"', self.html)
+        self.assertIn('id="deepseekModel"', self.html)
+        self.assertIn('id="geminiModel"', self.html)
+        self.assertIn('/api/provider-config"', self.js)
+        self.assertIn('/api/provider-config/test"', self.js)
+        self.assertIn("toggleSecretField", self.js)
+        self.assertIn("keyTail", self.js)
+        self.assertNotIn("localStorage.setItem(SETTINGS.api", self.js)
+        self.assertNotIn("sessionStorage", self.js)
+
     def test_local_storage_is_limited_to_ui_settings(self) -> None:
         settings_match = re.search(r"const SETTINGS = \{(?P<body>.*?)\};", self.js, re.S)
         self.assertIsNotNone(settings_match)
@@ -78,8 +397,11 @@ class WebUiContractTests(unittest.TestCase):
                 "vs.moduleOrder",
                 "vs.moduleWidths",
                 "vs.activeResultTab",
+                "vs.activeInsightTab",
                 "vs.transcriptFollowMode",
                 "vs.playbackRate",
+                "vs.videoAspectRatio",
+                "vs.videoObjectFit",
             },
         )
         self.assertNotIn("vs.note", self.js)
@@ -146,11 +468,19 @@ class WebUiContractTests(unittest.TestCase):
         self.assertRegex(self.html, r'id="captureNote"[^>]*disabled')
         self.assertIn("Obsidian 兼容 Markdown", self.html)
 
-    def test_bilibili_controls_do_not_claim_programmatic_sync(self) -> None:
+    def test_processing_profile_is_exposed_separately_from_analysis_mode(self) -> None:
+        self.assertIn('id="taskMode"', self.html)
+        self.assertIn('id="taskProcessingProfile"', self.html)
+        self.assertIn('<option value="complete">complete（完整兼容）</option>', self.html)
+        self.assertIn('<option value="fast">fast（优先文本）</option>', self.html)
+        self.assertIn('processingProfile: $("#taskProcessingProfile").value', self.js)
+
+    def test_bilibili_timestamp_seek_reloads_the_embedded_player(self) -> None:
         self.assertIn("function syncMediaControls()", self.js)
         self.assertIn("mediaController instanceof BilibiliEmbedController", self.js)
-        self.assertIn("当前平台播放器需在播放器内控制", self.js)
-        self.assertIn("mediaController?.openExternally", self.js)
+        self.assertIn("请在 B站播放器内点击播放", self.js)
+        self.assertIn("this.element.src = url.toString()", self.js)
+        self.assertIn("function openOriginal()", self.js)
 
     def test_raw_transcript_is_only_loaded_on_explicit_action(self) -> None:
         self.assertNotIn("transcript.raw.jsonl", self.html)
