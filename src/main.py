@@ -109,14 +109,13 @@ def run_pipeline(
     except (UserFacingError, ValueError) as exc:
         raise ExitWithCode(ExitCode.USAGE_OR_CONFIG, str(exc)) from exc
 
-    if comments:
-        emitter.diagnostic("警告：--comments 已停用；本次不会获取或分析评论。")
     try:
         package = PipelineOrchestrator(
             cfg,
             backend=summary_backend,
             analysis_profile=analysis_mode,
             processing_profile=resolved_processing_profile,
+            comments_enabled=comments,
             no_analysis=no_summary,
             generate_frames=generate_frames,
             sample_seconds=sample_seconds,
@@ -431,7 +430,7 @@ def _run_argparse() -> None:
         default=DEFAULT_PROCESSING_PROFILE,
         help="处理模式：fast / complete。fast 优先文本并跳过关键帧；默认 complete。",
     )
-    parser.add_argument("--comments", action="store_true", help="已停用；保留此参数仅用于旧命令兼容。")
+    parser.add_argument("--comments", action="store_true", help="同步公开评论并生成独立评论区洞察。")
     parser.add_argument("--export", choices=SUPPORTED_EXPORTS, default="none", help="导出方式：none / obsidian。")
     parser.add_argument("--no-summary", action="store_true", help="只生成 transcript.md，不调用 LLM。")
     parser.add_argument("--no-frames", action="store_true", help="跳过关键帧生成。")
@@ -470,7 +469,7 @@ if typer:
             "--processing-profile",
             help="处理模式：fast / complete。fast 优先文本并跳过关键帧。",
         ),
-        comments: bool = typer.Option(False, "--comments", help="已停用的兼容参数。"),
+        comments: bool = typer.Option(False, "--comments", help="同步公开评论并生成独立评论区洞察。"),
         export: str = typer.Option("none", "--export"),
         no_summary: bool = typer.Option(False, "--no-summary"),
         config: Path = typer.Option(DEFAULT_CONFIG, "--config"),
@@ -593,7 +592,7 @@ if typer:
             "--processing-profile",
             help="旧根级用法兼容；处理模式 fast / complete。",
         ),
-        comments: bool = typer.Option(False, "--comments", help="已停用的兼容参数。"),
+        comments: bool = typer.Option(False, "--comments", help="旧根级用法兼容；同步公开评论并生成独立评论区洞察。"),
         export: str = typer.Option("none", "--export"),
         no_summary: bool = typer.Option(False, "--no-summary"),
         config: Path = typer.Option(DEFAULT_CONFIG, "--config"),

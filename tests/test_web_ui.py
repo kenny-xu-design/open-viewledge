@@ -116,6 +116,34 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("width: min(calc(100% - 24px), 760px)", self.css)
         self.assertIn("border-radius: var(--radius-group)", self.css)
 
+    def test_comment_feature_is_video_panel_sibling_before_highlights(self) -> None:
+        self.assertIn('class="insight-tabs" role="tablist" aria-label="视频功能"', self.html)
+        self.assertIn('data-insight-tab="comments"', self.html)
+        self.assertIn('data-insight-tab="highlights"', self.html)
+        self.assertNotIn("<h2>评论区洞察</h2>", self.js)
+        comment_tab = self.html.index('data-insight-tab="comments"')
+        highlight_tab = self.html.index('data-insight-tab="highlights"')
+        self.assertLess(comment_tab, highlight_tab)
+        self.assertIn("function setInsightTab(tab)", self.js)
+        self.assertIn(".insight-tabs button.active", self.css)
+
+    def test_dynamic_sections_do_not_truncate_to_first_five_items(self) -> None:
+        self.assertNotIn(".slice(0, 5)", self.js)
+        self.assertNotIn("analysis.thoughts.slice", self.js)
+        self.assertIn("renderTutorialChapters", self.js)
+        self.assertIn("renderTutorialSteps", self.js)
+
+    def test_summary_uses_six_core_sections_and_conditional_professional_terms(self) -> None:
+        summary_contract = re.search(r'summary:\s*\[(?P<body>.*?)\],\s*\n\s*tutorial:', self.js, re.S)
+        self.assertIsNotNone(summary_contract)
+        body = summary_contract.group("body")
+        for title in ("一句话", "摘要", "专业术语", "亮点", "思考", "章节总结"):
+            self.assertIn(f'"{title}"', body)
+        for removed in ("一句话结论", "内容概览", "核心观点", "关键结论", "待核查事项"):
+            self.assertNotIn(f'"{removed}"', body)
+        self.assertIn("if (terms.length < 3) return", self.js)
+        self.assertIn("function renderProfessionalTerms(value)", self.js)
+
     def test_toolbar_has_visible_page_hierarchy(self) -> None:
         self.assertIn('class="workspace-heading"', self.html)
         self.assertIn('<small>视频知识工作台</small>', self.html)
@@ -343,6 +371,22 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('id="clearChat"', self.html)
         self.assertIn("regenerateLastAnswer", self.js)
 
+    def test_api_config_entry_and_secret_handling_exist(self) -> None:
+        self.assertIn('id="apiSettings"', self.html)
+        self.assertIn('id="apiConfigDialog"', self.html)
+        self.assertIn("API Key 默认仅用于当前本地运行会话", self.html)
+        for element_id in ("deepseekApiKey", "geminiApiKey"):
+            self.assertRegex(self.html, rf'id="{element_id}" type="password"')
+        self.assertIn('id="deepseekBaseUrl"', self.html)
+        self.assertIn('id="deepseekModel"', self.html)
+        self.assertIn('id="geminiModel"', self.html)
+        self.assertIn('/api/provider-config"', self.js)
+        self.assertIn('/api/provider-config/test"', self.js)
+        self.assertIn("toggleSecretField", self.js)
+        self.assertIn("keyTail", self.js)
+        self.assertNotIn("localStorage.setItem(SETTINGS.api", self.js)
+        self.assertNotIn("sessionStorage", self.js)
+
     def test_local_storage_is_limited_to_ui_settings(self) -> None:
         settings_match = re.search(r"const SETTINGS = \{(?P<body>.*?)\};", self.js, re.S)
         self.assertIsNotNone(settings_match)
@@ -353,6 +397,7 @@ class WebUiContractTests(unittest.TestCase):
                 "vs.moduleOrder",
                 "vs.moduleWidths",
                 "vs.activeResultTab",
+                "vs.activeInsightTab",
                 "vs.transcriptFollowMode",
                 "vs.playbackRate",
                 "vs.videoAspectRatio",

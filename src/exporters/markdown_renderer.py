@@ -8,6 +8,7 @@ from typing import Any
 
 from ..domain.models import KnowledgePackage
 from ..timestamps import build_timestamp_target, format_timestamp
+from .analysis_markdown import render_profile_analysis
 from .models import ExportSelection
 
 
@@ -17,11 +18,13 @@ def render_knowledge_markdown(
     *,
     chat: dict[str, Any] | None = None,
     user_notes: str = "",
+    comment_insight: dict[str, Any] | None = None,
     highlight_image_prefix: str = "",
 ) -> str:
     source, analysis = package.source, package.analysis
     profile = (analysis.analysis_profile if analysis else source.analysis_profile) or "summary"
     sections = set(selection.normalized_sections())
+    summary_embeds_core = profile == "summary" and "summary" in sections
     lines = ["---"]
     frontmatter = {
         "title": source.title,
@@ -41,9 +44,9 @@ def render_knowledge_markdown(
     for section in selection.normalized_sections():
         if section == "metadata":
             _metadata(lines, package, profile)
-        elif section == "summary" and analysis and analysis.summary.strip():
-            lines.extend(["## 摘要", "", analysis.summary.strip(), ""])
-        elif section == "highlights" and analysis and analysis.highlights:
+        elif section == "summary" and analysis and (analysis.content or analysis.summary.strip()):
+            lines.extend(render_profile_analysis(analysis, heading_level=2, image_prefix=highlight_image_prefix))
+        elif section == "highlights" and not summary_embeds_core and analysis and analysis.highlights:
             lines.extend(["## 亮点", ""])
             for item in analysis.highlights:
                 timestamp = item.timestamp if item.timestamp is not None else item.start
@@ -51,13 +54,6 @@ def render_knowledge_markdown(
                 target = _time_link(package, selection.knowledge_id, timestamp)
                 time = f" [{format_timestamp(timestamp)}]({target})" if target else (f" {format_timestamp(timestamp)}" if timestamp is not None else "")
                 lines.append(f"- **{item.title}**：{summary}{time}")
-                if item.image:
-                    image_path = (
-                        f"{highlight_image_prefix.rstrip('/')}/{Path(item.image).name}"
-                        if highlight_image_prefix
-                        else item.image
-                    )
-                    lines.append(f"  ![[{image_path}]]")
                 tags = [f"`#{_clean_tag(tag)}`" for tag in item.tags if _clean_tag(tag)]
                 if tags:
                     lines.append("  " + " ".join(tags))
@@ -74,18 +70,25 @@ def render_knowledge_markdown(
                     lines.append(f"- 时间：[{label}]({target})" if target else f"- 时间：{label}")
                 if item.expected_result.strip():
                     lines.append(f"- 预期结果：{item.expected_result.strip()}")
+                if item.image and analysis.analysis_profile == "tutorial":
+                    image_path = (
+                        f"{highlight_image_prefix.rstrip('/')}/{Path(item.image).name}"
+                        if highlight_image_prefix
+                        else item.image
+                    )
+                    lines.extend(["", f"![[{image_path}]]"])
                 lines.append("")
-        elif section == "glossary" and analysis and analysis.glossary:
+        elif section == "glossary" and not summary_embeds_core and analysis and analysis.glossary:
             lines.extend(["## 关键术语", ""])
             lines.extend(f"- **{item.term}**：{item.definition or '视频中未展开说明'}" for item in analysis.glossary)
             lines.append("")
-        elif section == "thoughts" and analysis and analysis.thoughts:
+        elif section == "thoughts" and not summary_embeds_core and analysis and analysis.thoughts:
             lines.extend(["## 思考", ""] + [f"{i}. {item.question}" for i, item in enumerate(analysis.thoughts, 1)] + [""])
         elif section == "action_items" and analysis and analysis.action_items:
             _timed_items(lines, "可执行动作", analysis.action_items, package, selection.knowledge_id, checkbox=True)
         elif section == "warnings" and analysis and analysis.warnings:
             _timed_items(lines, "注意事项", analysis.warnings, package, selection.knowledge_id)
-        elif section == "chapters" and ((analysis and analysis.chapters) or package.timeline):
+        elif section == "chapters" and not summary_embeds_core and ((analysis and analysis.chapters) or package.timeline):
             lines.extend(["## 视频章节总结", ""])
             chapters = analysis.chapters if analysis and analysis.chapters else package.timeline
             for item in chapters:
@@ -94,13 +97,15 @@ def render_knowledge_markdown(
                 lines.append(f"### [{label}]({target}) {item.title}" if target else f"### {label} {item.title}")
                 summary = getattr(item, "summary", "")
                 frame_path = getattr(item, "frame_path", "")
-                if frame_path:
+                if frame_path and analysis.analysis_profile == "tutorial":
                     lines.extend(["", f"![[{frame_path}]]"])
                 if summary:
                     lines.extend(["", summary.strip()])
                 lines.append("")
         elif section == "chat":
             _chat(lines, chat or {}, package, selection.knowledge_id)
+        elif section == "comment_insights" and comment_insight:
+            _comment_insight(lines, comment_insight)
         elif section == "user_notes" and user_notes.strip():
             lines.extend(["## 我的笔记", "", user_notes.strip(), ""])
         elif section == "source_materials":
@@ -151,6 +156,25 @@ def _chat(lines: list[str], payload: dict[str, Any], package: KnowledgePackage, 
                     excerpt = str(citation.get("excerpt") or citation.get("title") or "字幕引用")
                     lines.append(f"- [{label}]({target})：{excerpt}" if target else f"- {label}：{excerpt}")
                 lines.append("")
+
+
+def _comment_insight(lines: list[str], payload: dict[str, Any]) -> None:
+    if not any(payload.get(key) for key in ("hot_topics", "consensus", "controversies", "corrections", "frequent_questions", "needs_verification")):
+        return
+    lines.extend(["## 评论区洞察", ""])
+    for title, key in (
+        ("热门话题", "hot_topics"),
+        ("共识", "consensus"),
+        ("争议", "controversies"),
+        ("纠错与补充", "corrections"),
+        ("高频问题", "frequent_questions"),
+        ("需要核查", "needs_verification"),
+    ):
+        values = [str(item).strip() for item in payload.get(key, []) if str(item).strip()] if isinstance(payload.get(key), list) else []
+        if values:
+            lines.extend([f"### {title}", ""])
+            lines.extend(f"- {value}" for value in values)
+            lines.append("")
 
 
 def _time_link(package: KnowledgePackage, knowledge_id: str, seconds: float | int | None) -> str:

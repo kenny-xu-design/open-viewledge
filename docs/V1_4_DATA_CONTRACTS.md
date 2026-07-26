@@ -1,8 +1,8 @@
 # v1.4 Data Contracts
 
-Status: v1.4.0-v1.4.2 contracts implemented; later-unit contracts remain design
+Status: v1.4.0-v1.4.3 contracts implemented; later-unit contracts remain design
 
-Last updated: 2026-07-24
+Last updated: 2026-07-26
 
 ## Compatibility Rules
 
@@ -112,7 +112,7 @@ Artifacts describe reusable outputs without exposing secrets.
   "artifact_id": "string",
   "job_id": "string",
   "stage": "subtitle_fetch",
-  "type": "metadata|subtitle|audio|transcript|analysis|frame|highlight_image|comments|comment_insight|export",
+  "type": "metadata|subtitle|audio|transcript|analysis|frame|tutorial_image|comments|comment_insight|export",
   "path": "relative/or/safe/local/path",
   "sha256": "string",
   "size_bytes": 0,
@@ -137,7 +137,7 @@ v1.4 compatible extension:
   "title": "string",
   "summary": "string",
   "tags": ["string"],
-  "image": "assets/highlights/highlight_001.webp",
+  "image": "",
   "image_source_timestamp": 121.0,
   "image_generation_status": "generated|reused|skipped|failed"
 }
@@ -147,23 +147,73 @@ Compatibility:
 
 - Existing `start` maps to `timestamp`.
 - Existing `explanation` maps to `summary`.
-- Missing `image` means text-only highlight.
+- Missing `image` means text-only highlight. Legacy packages may contain `assets/highlights/*.webp`, but new main-report screenshot export is restricted to tutorial steps.
 
-## Highlight Image
+## Analysis Result
 
-Storage:
+Current v1.4.3 analysis files use a common envelope plus mode-specific `content`.
 
-```text
-assets/highlights/highlight_001.webp
-assets/highlights/highlight_002.webp
+Envelope:
+
+```json
+{
+  "schema_version": "2",
+  "status": "success|failed|skipped",
+  "analysis_profile": "summary|tutorial|viral|close-reading",
+  "processing_profile": "fast|complete",
+  "source": {"platform": "string", "url": "string", "title": "string", "source_id": "string"},
+  "generation": {"visual_context_used": false, "comments_included": false},
+  "segmentation": {
+    "policy_version": "adaptive-v2",
+    "duration_seconds": 4270,
+    "duration_bucket": "60m_plus",
+    "policy": "long_tutorial",
+    "strategy": "hierarchical_semantic_map_reduce",
+    "window_seconds": 360,
+    "overlap_seconds": 60,
+    "chapter_target_range": [12, 20],
+    "highlight_target_range": [10, 18],
+    "actual_chapter_count": 10,
+    "actual_highlight_count": 9,
+    "actual_tutorial_step_count": 24,
+    "coverage_ratio": 0.94,
+    "largest_uncovered_gap_seconds": 420,
+    "reanalysis_count": 1
+  },
+  "warnings": [],
+  "content": {}
+}
 ```
 
 Rules:
 
-- One image per highlight maximum.
-- Default total image count: 5 to 8.
+- `summary`, `tutorial`, `viral`, and `close-reading` must not force the same `content` fields.
+- Canonical `summary.content` uses `one_sentence`, `summary`, `professional_terms`, `highlights`, `thoughts`, `chapter_summaries`, `factual_basis`, and `ai_inferences`. Web and Markdown render the six core sections `一句话`、`摘要`、`亮点`、`思考`、`章节总结`、`原文资料`; source materials are renderer-owned links rather than model-authored facts.
+- `summary.content.one_sentence` must be one complete sentence on one line, without list syntax or a second sentence; 80 Chinese characters is the recommended upper bound.
+- `summary.content.professional_terms` is produced in the same Provider response. Renderers show 3–8 distinct terms only when each has a non-placeholder definition; fewer than 3 hides the module without placeholder text.
+- Legacy fields such as `summary`, `highlights`, `chapters`, `steps`, `glossary`, and `action_items` remain readable and are synchronized where possible.
+- Comment insights remain in `comment_insights.json` / `comment_insights.md`, not in `analysis.json`.
+- Missing or unsupported facts should be represented as `未明确说明`.
+- API Keys, Cookie, Token, Authorization headers, and credentials are not valid analysis content.
+- Tutorial content may include top-level `chapter_summaries` and second-level `steps`; steps link back through `chapter_id`.
+- `SegmentationPolicyRouter` controls window use, window size/overlap, chapter/highlight density guidance, and hierarchical reduction only. Summary headings, professional-term visibility, empty-module handling, and Markdown order belong to the fixed Schema/Renderer contract.
+
+## Tutorial Image
+
+Storage:
+
+```text
+assets/tutorial/tutorial_step_001.webp
+assets/tutorial/tutorial_step_002.webp
+```
+
+Rules:
+
+- Only `tutorial + complete` may generate or export these images.
+- One image per key tutorial step maximum.
 - Deduplicate by timestamp window and perceptual or hash-based similarity.
 - Markdown and Obsidian exports reference relative paths only.
+- `summary`, `viral`, `close-reading`, and `tutorial + fast` do not export screenshots.
 
 ## NormalizedComment
 
@@ -280,7 +330,8 @@ Core existing files remain:
 
 v1.4 optional files:
 
-- `assets/highlights/*.webp`.
+- `assets/tutorial/*.webp`.
+- legacy `assets/highlights/*.webp`.
 - `visual_insights.json`.
 - `visual_insights.md`.
 - `comments.json`.

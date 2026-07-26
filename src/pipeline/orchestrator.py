@@ -10,9 +10,11 @@ from ..analysis import AnalysisService, KeyframeAnalysisService
 from ..analysis.profiles import resolve_analysis_profile
 from ..audio import extract_audio
 from ..cache import CacheStore, build_cache_key, source_cache_dimensions, transcript_content_hash
+from ..comments import CommentInsightService, CommentRepository, CommentSyncService
 from ..config import AppConfig
-from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, ProcessingManifest, ProviderAttempt, SourceRecord, StageMetric, TranscriptSegment, utc_now
+from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, NormalizedComment, ProcessingManifest, ProviderAttempt, SourceRecord, StageMetric, TranscriptSegment, utc_now
 from ..exporters import export_knowledge_package
+from ..exporters.analysis_markdown import render_profile_analysis
 from ..providers.asr import LocalWhisperProvider
 from ..providers.llm import DeepSeekProvider, GeminiProvider
 from ..processing_profiles import ProcessingProfile
@@ -22,7 +24,7 @@ from ..timeline import build_timeline, extract_frames
 from ..transcripts import group_segments, parse_subtitle_file, read_jsonl, write_grouped_markdown, write_jsonl, write_legacy_transcript
 from ..transcripts.normalizer import normalize_segments
 from ..utils import UserFacingError, ensure_dir, load_json, sanitize_filename, save_json, write_text
-from ..visual import generate_highlight_snapshots
+from ..visual import generate_tutorial_step_snapshots
 from ..cli_contract import sanitize_message
 from .context import PipelineContext
 from .stages import STAGES
@@ -36,6 +38,7 @@ class PipelineOrchestrator:
         backend: str | None = None,
         analysis_profile: str = "summary",
         processing_profile: ProcessingProfile = "complete",
+        comments_enabled: bool = False,
         no_analysis: bool = False,
         generate_frames: bool | None = None,
         sample_seconds: int | None = None,
@@ -49,6 +52,7 @@ class PipelineOrchestrator:
         self.backend = backend or config.summary_backend
         self.analysis_profile = analysis_profile
         self.processing_profile = processing_profile
+        self.comments_enabled = comments_enabled
         self.no_analysis = no_analysis
         self.generate_frames = config.generate_frames if generate_frames is None else generate_frames
         self.sample_seconds = sample_seconds
@@ -116,6 +120,7 @@ class PipelineOrchestrator:
             ensure_dir(context.output_dir / "audio")
             ensure_dir(context.output_dir / "frames")
             ensure_dir(context.output_dir / "assets" / "highlights")
+            ensure_dir(context.output_dir / "assets" / "tutorial")
             context.manifest.source = context.source
             self._save_manifest(context)
             source_dimensions = source_cache_dimensions(context.source, input_value)
@@ -480,11 +485,12 @@ class PipelineOrchestrator:
                     or not self.generate_frames
                     or context.source.source_type != "local_video"
                     or not context.analysis
-                    or not context.analysis.highlights
+                    or context.analysis.analysis_profile != "tutorial"
+                    or not context.analysis.steps
                 ):
                     context.mark_stage_skipped("highlight_snapshot")
                     return
-                result = generate_highlight_snapshots(
+                result = generate_tutorial_step_snapshots(
                     Path(context.source.local_path),
                     context.analysis,
                     context.timeline,
@@ -500,10 +506,79 @@ class PipelineOrchestrator:
                     context.manifest.errors.extend(result.errors)
                     raise UserFacingError("；".join(result.errors[:3]))
                 context.log(
-                    f"高光图片：新截取 {result.generated_count} 张，复用关键帧 {result.reused_count} 张。"
+                    f"教程步骤截图：新截取 {result.generated_count} 张，复用关键帧 {result.reused_count} 张。"
                 )
 
             self._stage(context, "highlight_snapshot", highlight_snapshot, soft_fail=True)
+
+            synced_comments = []
+
+            def comments_fetch() -> None:
+                nonlocal synced_comments
+                comment_key = build_cache_key(
+                    "comments",
+                    source=source_dimensions,
+                    processing_profile=self.processing_profile,
+                    sync_version="1",
+                    enabled=self.comments_enabled,
+                )
+                context.manifest.cache_keys["comments"] = comment_key
+                if not self.comments_enabled:
+                    context.mark_stage_skipped("comments_fetch")
+                    return
+                cached_comments = self._cache_get(context, "comments", comment_key)
+                if isinstance(cached_comments, list):
+                    try:
+                        synced_comments = [
+                            NormalizedComment.model_validate(item)
+                            for item in cached_comments
+                            if isinstance(item, dict)
+                        ]
+                    except ValueError:
+                        context.log("评论缓存无效，将重新同步。")
+                    else:
+                        if synced_comments:
+                            CommentRepository(context.output_dir).save(synced_comments)
+                            context.mark_cache_hit("comments_fetch")
+                            context.log(f"命中评论缓存：{len(synced_comments)} 条。")
+                            return
+                result = CommentSyncService().sync(
+                    context.source,
+                    processing_profile=self.processing_profile,
+                    enabled=self.comments_enabled,
+                    existing=CommentRepository(context.output_dir).load(),
+                )
+                if result.status != "success":
+                    context.mark_stage_skipped("comments_fetch")
+                    context.log(result.message or "未同步到评论。")
+                    return
+                synced_comments = result.comments
+                CommentRepository(context.output_dir).save(synced_comments)
+                self._cache_put(
+                    context,
+                    "comments",
+                    comment_key,
+                    [item.model_dump(mode="json") for item in synced_comments],
+                )
+                context.log(f"评论同步：{len(synced_comments)} 条，模式 {result.mode}/{result.sort}。")
+
+            self._stage(context, "comments_fetch", comments_fetch, soft_fail=True)
+
+            def comments_analysis() -> None:
+                if not synced_comments:
+                    context.mark_stage_skipped("comments_analysis")
+                    return
+                provider = DeepSeekProvider(
+                    base_url=self.config.deepseek_base_url,
+                    model_name=self.config.deepseek_model,
+                )
+                insight = CommentInsightService(provider).analyze(synced_comments)
+                CommentInsightService.save(context.output_dir, insight)
+                if insight.status == "failed":
+                    raise UserFacingError(insight.error or "评论洞察生成失败。")
+                context.log(f"评论洞察：{insight.provider}/{insight.model}。")
+
+            self._stage(context, "comments_analysis", comments_analysis, soft_fail=True)
 
             def export() -> None:
                 assert context.source and context.manifest
@@ -521,12 +596,23 @@ class PipelineOrchestrator:
                 files = export_knowledge_package(package, self.export_legacy_note)
                 optional_files = [
                     name
-                    for name in ("visual_insights.json", "visual_insights.md")
+                    for name in (
+                        "visual_insights.json",
+                        "visual_insights.md",
+                        "comments.json",
+                        "comments.md",
+                        "comment_insights.json",
+                        "comment_insights.md",
+                    )
                     if (context.output_dir / name).is_file()
                 ]
                 highlight_files = [
                     path.relative_to(context.output_dir).as_posix()
                     for path in sorted((context.output_dir / "assets" / "highlights").glob("*.webp"))
+                ]
+                tutorial_files = [
+                    path.relative_to(context.output_dir).as_posix()
+                    for path in sorted((context.output_dir / "assets" / "tutorial").glob("*.webp"))
                 ]
                 context.manifest.output_files = [path.name for path in files] + [
                     "transcript.raw.jsonl",
@@ -534,6 +620,7 @@ class PipelineOrchestrator:
                     "transcript.md",
                     *optional_files,
                     *highlight_files,
+                    *tutorial_files,
                 ]
                 self._save_manifest(context)
                 for name in context.manifest.output_files:
@@ -733,8 +820,8 @@ def _write_legacy_analysis_files(context: PipelineContext) -> None:
     analysis = context.analysis
     if not analysis:
         return
-    if analysis.summary:
-        write_text(context.output_dir / "summary.md", "# 摘要\n\n" + analysis.summary.strip() + "\n")
+    if analysis.content or analysis.summary:
+        write_text(context.output_dir / "summary.md", "# 分析报告\n\n" + "\n".join(render_profile_analysis(analysis, heading_level=2)).strip() + "\n")
     if analysis.highlights:
         write_text(context.output_dir / "highlight_notes.md", "# 亮点\n\n" + "\n".join(f"- **{item.title}**：{item.explanation}" for item in analysis.highlights) + "\n")
     if analysis.chapters:

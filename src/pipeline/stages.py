@@ -9,5 +9,7 @@ STAGES = (
     "extract_frames",
     "visual_analysis",
     "highlight_snapshot",
+    "comments_fetch",
+    "comments_analysis",
     "export_knowledge_package",
 )

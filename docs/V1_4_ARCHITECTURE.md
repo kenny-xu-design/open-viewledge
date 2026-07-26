@@ -1,6 +1,6 @@
 # v1.4 Architecture
 
-Status: v1.4.0-v1.4.2 implementation-aligned; v1.4.3-v1.4.6 remain design
+Status: v1.4.0-v1.4.3 implementation-aligned; v1.4.4-v1.4.6 remain design
 
 Last updated: 2026-07-24
 
@@ -16,8 +16,8 @@ The following conclusions come from current repository files, not prior chat his
 | Existing adapters | `LocalMediaSource`, `YtdlpSource`, inactive `WebSource`. | `src/sources/local_media.py`, `src/sources/ytdlp_source.py`, `src/sources/web_source.py` |
 | Keyframes | Generated only for local video when `generate_frames` is true. | `PipelineOrchestrator.run()` stage `extract_frames` |
 | Visual analysis | Isolated service exists, but default pipeline and Web chat do not call it. | `src/analysis/vision.py:KeyframeAnalysisService`, `src/providers/llm/gemini.py:generate_with_images()` |
-| Comments | Active retrieval is disabled; `--comments` is a warning-only compatibility option. | `src/main.py:run_pipeline()`, `docs/archive/prompts/comment_insights_prompt.md` |
-| Comment outputs | `comments.json`, `comments.md`, and `comment_insights.md` are not active package outputs. | `src/exporters/knowledge_package.py:export_knowledge_package()` output list |
+| Comments | Active retrieval is explicit opt-in through `--comments` or the Web task checkbox. | `src/main.py:run_pipeline()`, `src/comments/` |
+| Comment outputs | `comments.json`, `comments.md`, `comment_insights.json`, and `comment_insights.md` are active optional package outputs. | `src/comments/repository.py`, `src/comments/insights.py` |
 | Chat context | Current chat uses grouped transcript plus existing analysis summary/highlights/chapters. | `src/chat.py:answer_question()`, `src/web.py:chat_with_knowledge()` |
 | Gemini video input | Current Gemini Provider supports text and inline images only. | `src/providers/llm/gemini.py:complete()`, `generate_with_images()` |
 | Remote chat state | No remote interaction/session identifier is stored; `ChatStore` saves local messages only. | `src/chat_store.py:ChatStore` |
@@ -88,7 +88,7 @@ video or local media artifact
 -> keyframe_extract
 -> visual_analysis
 -> highlight_snapshot
--> assets/highlights/*.webp
+-> tutorial + complete only: assets/tutorial/*.webp
 -> package manifest and exports
 ```
 
@@ -97,7 +97,7 @@ Rules:
 - Fast mode skips visual stages by default.
 - Complete mode schedules visual stages after source/media availability.
 - Visual failures produce stage warnings and do not fail text output.
-- Highlight snapshots prefer existing frames and only perform local supplemental capture near highlight timestamps when needed.
+- Tutorial step screenshots prefer existing frames and only perform local supplemental capture near tutorial step timestamps when needed. Legacy `assets/highlights` packages remain readable, but new main-report screenshot export is restricted to tutorial steps.
 
 ## Comment Pipeline
 
@@ -129,7 +129,7 @@ Chat request
 -> route:
    1. Gemini native YouTube URL video understanding
    2. Gemini Files API video upload/reference
-   3. transcript + chapters + highlight images
+   3. transcript + chapters + available tutorial/keyframe context
    4. text-only transcript context
 -> local ChatStore record with route state
 ```

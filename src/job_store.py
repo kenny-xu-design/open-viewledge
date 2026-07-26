@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -149,17 +148,18 @@ class JobStore:
                 for item in sorted(self._jobs.values(), key=lambda job: job.created_at, reverse=True)
             ],
         }
-        handle, temporary_name = tempfile.mkstemp(prefix="web-jobs-", suffix=".json", dir=self.path.parent)
+        temporary_path = self.path.with_name(
+            f"{self.path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+        )
         try:
-            with os.fdopen(handle, "w", encoding="utf-8") as temporary:
+            with temporary_path.open("x", encoding="utf-8") as temporary:
                 json.dump(payload, temporary, ensure_ascii=False, indent=2)
                 temporary.write("\n")
                 temporary.flush()
-                os.fsync(temporary.fileno())
-            os.replace(temporary_name, self.path)
+            os.replace(temporary_path, self.path)
         finally:
-            if os.path.exists(temporary_name):
-                os.unlink(temporary_name)
+            if temporary_path.exists():
+                temporary_path.unlink()
 
 
 def _optional_float(value: Any) -> float | None:

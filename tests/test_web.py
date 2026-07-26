@@ -237,6 +237,20 @@ class WebCommandTests(unittest.TestCase):
         self.assertEqual(command[profile_index + 1], "fast")
         self.assertIn("--no-frames", command)
 
+    def test_build_command_can_enable_comments(self) -> None:
+        command = build_cli_command(
+            {
+                "sourceType": "url",
+                "source": "https://www.youtube.com/watch?v=abc123",
+                "backend": "deepseek",
+                "mode": "summary",
+                "comments": True,
+            },
+            python_executable=r"C:\test\.venv\Scripts\python.exe",
+        )
+
+        self.assertIn("--comments", command)
+
     def test_build_command_rejects_invalid_processing_profile(self) -> None:
         with self.assertRaisesRegex(ValueError, "processing_profile"):
             build_cli_command(

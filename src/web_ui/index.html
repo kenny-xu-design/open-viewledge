@@ -61,6 +61,7 @@
         <span class="model-badge ui-status-badge" id="modelBadge" role="status">模型待选择</span>
         <button type="button" class="icon-button" id="toggleInspector" aria-label="隐藏检查器" aria-controls="collaborationPane" aria-expanded="true"><svg><use href="#i-inspector"/></svg></button>
         <button type="button" class="settings-button" id="layoutSettings" aria-label="工作台布局"><svg><use href="#i-box"/></svg><span>布局</span></button>
+        <button type="button" class="settings-button" id="apiSettings" aria-label="API 配置"><svg><use href="#i-settings"/></svg><span>API 配置</span></button>
         <button type="button" class="settings-button" id="summarySettings" aria-label="总结设置"><svg><use href="#i-sliders"/></svg><span>总结设置</span></button>
       </div>
     </header>
@@ -179,9 +180,12 @@
           </div>
         </section>
 
-        <section class="insight-pane" id="insightPane">
-          <header class="module-header"><div><strong>AI 高光片段</strong><span class="module-count" id="insightCount">0</span></div><span class="module-status" id="insightMode">字幕时间轴</span></header>
-          <div class="insight-content" id="insightContent"><div class="module-empty">没有 AI 高光时，这里显示可定位的字幕时间轴。</div></div>
+        <section class="insight-pane" id="insightPane" aria-label="视频功能">
+          <header class="insight-tabs" role="tablist" aria-label="视频功能">
+            <button class="active" role="tab" data-insight-tab="comments" aria-selected="true">评论区</button>
+            <button role="tab" data-insight-tab="highlights" aria-selected="false">高光片段</button>
+          </header>
+          <div class="insight-content" id="insightContent"><div class="module-empty">这里按页签显示评论区、高光片段和后续视频功能。</div></div>
         </section>
       </div>
     </main>
@@ -230,7 +234,7 @@
         <p class="ui-field__error" id="taskSourceError" role="alert" hidden>请输入视频链接。</p>
       </div>
       <div class="form-grid">
-        <label class="field"><span>分析模式</span><select class="ui-select" id="taskMode"><option value="summary">summary</option><option value="tutorial">tutorial</option><option value="viral">viral</option><option value="close-reading">close-reading</option></select></label>
+        <label class="field"><span>分析模式</span><select class="ui-select" id="taskMode"><option value="summary">标准摘要</option><option value="tutorial">教程提取</option><option value="viral">爆款分析</option><option value="close-reading">深度精读</option></select><small id="taskModeDescription">适合资讯、访谈、介绍和一般知识视频</small></label>
         <label class="field"><span>处理模式</span><select class="ui-select" id="taskProcessingProfile"><option value="complete">complete（完整兼容）</option><option value="fast">fast（优先文本）</option></select></label>
         <label class="field"><span>AI 分析</span><input value="DeepSeek" disabled><input id="taskBackend" type="hidden" value="deepseek"></label>
         <label class="field"><span>字幕语言</span><select id="taskLanguage"><option value="">默认 zh</option><option value="zh">zh</option><option value="zh-Hans">zh-Hans</option><option value="en">en</option></select></label>
@@ -238,7 +242,7 @@
         <label class="field"><span>样本秒数</span><input id="taskSampleSeconds" type="number" min="1" placeholder="留空处理完整媒体"></label>
         <label class="field"><span>导出</span><select id="taskExport"><option value="none">知识包</option><option value="obsidian">兼容 Obsidian</option></select></label>
       </div>
-      <div class="toggle-list"><label class="ui-toggle"><input id="taskFrames" type="checkbox" checked><span class="ui-toggle__track" aria-hidden="true"></span><span>生成关键帧</span></label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
+      <div class="toggle-list"><label class="ui-toggle"><input id="taskFrames" type="checkbox" checked><span class="ui-toggle__track" aria-hidden="true"></span><span>生成关键帧</span></label><label><input id="taskComments" type="checkbox"><span>同步公开评论</span></label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
       <div class="runtime-info" id="taskRuntime" aria-live="polite">正在读取 Python 运行环境…</div>
       <div class="task-progress hidden" id="taskProgress" role="status" aria-live="polite"><div><span id="taskStatusText">正在创建任务…</span><span id="taskPercent"></span></div><div class="progress-track ui-progress" id="taskProgressBar" role="progressbar" aria-label="任务处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="ui-progress__bar" id="progressBar"></span></div><pre id="taskLogs"></pre></div>
       <section class="task-history" aria-labelledby="taskHistoryTitle">
@@ -271,7 +275,31 @@
     </div>
   </dialog>
 
-  <dialog id="settingsDialog" class="settings-dialog"><form method="dialog"><header><h2>总结设置</h2><button class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list"><label>分析模式<select id="settingsMode"><option>summary</option><option>tutorial</option><option>viral</option><option>close-reading</option></select></label><label>字幕分组<select disabled><option>60秒</option></select></label><label class="switch-label"><input id="settingsFrames" type="checkbox" checked>生成关键帧</label><div class="runtime-info" id="settingsRuntime">正在读取 Python 运行环境…</div></div><footer><button class="primary-button" value="close">完成</button></footer></form></dialog>
+  <dialog id="settingsDialog" class="settings-dialog"><form method="dialog"><header><h2>总结设置</h2><button class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list"><label>分析模式<select id="settingsMode"><option value="summary">标准摘要</option><option value="tutorial">教程提取</option><option value="viral">爆款分析</option><option value="close-reading">深度精读</option></select><small id="settingsModeDescription">适合资讯、访谈、介绍和一般知识视频</small></label><label>字幕分组<select disabled><option>60秒</option></select></label><label class="switch-label"><input id="settingsFrames" type="checkbox" checked>生成关键帧</label><div class="runtime-info" id="settingsRuntime">正在读取 Python 运行环境…</div></div><footer><button class="primary-button" value="close">完成</button></footer></form></dialog>
+  <dialog id="apiConfigDialog" class="settings-dialog api-config-dialog">
+    <form method="dialog">
+      <header><div><span class="dialog-kicker">LOCAL SESSION</span><h2>API 配置</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header>
+      <div class="settings-list api-config-list">
+        <p class="api-config-notice">API Key 默认仅用于当前本地运行会话，服务重启后需要重新填写。保存后页面只显示尾号，不会返回完整 Key。</p>
+        <section class="api-provider-card" data-provider-card="deepseek">
+          <header><strong>DeepSeek / OpenAI-compatible</strong><span class="module-status" id="deepseekConfigStatus">未配置</span></header>
+          <label>API Key<div class="secret-field"><input id="deepseekApiKey" type="password" autocomplete="off" placeholder="输入后应用，已保存时仅显示尾号"><button type="button" class="quiet-button" data-toggle-secret="deepseekApiKey">显示</button></div><small id="deepseekKeyHint"></small></label>
+          <label>Base URL<input id="deepseekBaseUrl" type="text" autocomplete="off"></label>
+          <label>Model<input id="deepseekModel" type="text" autocomplete="off"></label>
+          <div class="api-config-actions"><button type="button" class="quiet-button" data-provider-test="deepseek">测试连接</button><button type="button" class="primary-button" data-provider-apply="deepseek">应用配置</button><button type="button" class="secondary-button" data-provider-clear="deepseek">清除配置</button></div>
+          <p class="api-test-result" id="deepseekTestResult"></p>
+        </section>
+        <section class="api-provider-card" data-provider-card="gemini">
+          <header><strong>Gemini</strong><span class="module-status" id="geminiConfigStatus">未配置</span></header>
+          <label>API Key<div class="secret-field"><input id="geminiApiKey" type="password" autocomplete="off" placeholder="输入后应用，已保存时仅显示尾号"><button type="button" class="quiet-button" data-toggle-secret="geminiApiKey">显示</button></div><small id="geminiKeyHint"></small></label>
+          <label>Model<input id="geminiModel" type="text" autocomplete="off"></label>
+          <div class="api-config-actions"><button type="button" class="quiet-button" data-provider-test="gemini">测试连接</button><button type="button" class="primary-button" data-provider-apply="gemini">应用配置</button><button type="button" class="secondary-button" data-provider-clear="gemini">清除配置</button></div>
+          <p class="api-test-result" id="geminiTestResult"></p>
+        </section>
+      </div>
+      <footer><button class="primary-button" value="close">完成</button></footer>
+    </form>
+  </dialog>
   <dialog id="layoutDialog" class="settings-dialog"><form method="dialog"><header><h2>工作台布局</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list layout-settings"><p>设置两个主内容栏的位置；检查器固定在桌面右侧，并在中小屏作为 Sheet 打开。</p><label>左主栏<select id="layoutPosition1"><option value="result">摘要与原文</option><option value="media">视频与高光</option></select></label><label>右主栏<select id="layoutPosition2"><option value="media">视频与高光</option><option value="result">摘要与原文</option></select></label><label>检查器<select id="layoutPosition3" disabled><option value="collaboration">AI 对话与自写笔记</option></select></label></div><footer><button type="button" class="secondary-button" id="resetLayout">恢复默认</button><button class="primary-button" value="close">完成</button></footer></form></dialog>
   <dialog id="imageDialog" class="image-dialog"><button class="icon-button image-close" data-close-dialog aria-label="关闭预览"><svg><use href="#i-close"/></svg></button><img id="imagePreview" alt="关键帧预览"></dialog>
   <div class="drawer-scrim" id="drawerScrim"></div>

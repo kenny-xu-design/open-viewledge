@@ -13,7 +13,7 @@ from .models import ExportSelection, selection_from_preset
 from .obsidian_exporter import safe_export_filename, write_to_vault
 
 
-def load_package_for_export(directory: Path) -> tuple[KnowledgePackage, dict[str, Any], str]:
+def load_package_for_export(directory: Path) -> tuple[KnowledgePackage, dict[str, Any], str, dict[str, Any]]:
     root = directory.resolve()
     metadata = _json(root / "metadata.json")
     manifest_payload = _json(root / "manifest.json")
@@ -32,13 +32,20 @@ def load_package_for_export(directory: Path) -> tuple[KnowledgePackage, dict[str
     package = KnowledgePackage(source=source, analysis=analysis, timeline=timeline, manifest=manifest, output_dir=root)
     chat = _json(root / "chat.json")
     notes = (root / "user_notes.md").read_text(encoding="utf-8") if (root / "user_notes.md").is_file() else ""
-    return package, chat, notes
+    comment_insight = _json(root / "comment_insights.json")
+    return package, chat, notes, comment_insight
 
 
 def render_directory_export(directory: Path, selection: ExportSelection) -> tuple[str, str]:
-    package, chat, notes = load_package_for_export(directory)
+    package, chat, notes, comment_insight = load_package_for_export(directory)
     filename = selection.filename or safe_export_filename(package.source.title or selection.knowledge_id)
-    return render_knowledge_markdown(package, selection, chat=chat, user_notes=notes), safe_export_filename(Path(filename).stem)
+    return render_knowledge_markdown(
+        package,
+        selection,
+        chat=chat,
+        user_notes=notes,
+        comment_insight=comment_insight,
+    ), safe_export_filename(Path(filename).stem)
 
 
 def export_directory_to_vault(
@@ -49,26 +56,27 @@ def export_directory_to_vault(
     vault_name: str = "",
     subdir: str = "外源/视频",
 ) -> dict[str, Any]:
-    package, chat, notes = load_package_for_export(directory)
+    package, chat, notes, comment_insight = load_package_for_export(directory)
     filename = selection.filename or safe_export_filename(package.source.title or selection.knowledge_id)
     filename = safe_export_filename(Path(filename).stem)
     asset_prefix = (
         Path("assets")
         / "video-summary"
         / sanitize_filename(selection.knowledge_id, "knowledge")
-        / "highlights"
+        / "tutorial"
     ).as_posix()
     markdown = render_knowledge_markdown(
         package,
         selection,
         chat=chat,
         user_notes=notes,
+        comment_insight=comment_insight,
         highlight_image_prefix=asset_prefix,
     )
     path, uri = write_to_vault(markdown, vault_path, subdir, filename, overwrite=selection.overwrite)
     copied_assets = []
-    if package.analysis:
-        for item in package.analysis.highlights:
+    if package.analysis and package.analysis.analysis_profile == "tutorial":
+        for item in package.analysis.steps:
             if not item.image:
                 continue
             source = (directory / item.image).resolve()

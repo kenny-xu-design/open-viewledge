@@ -22,13 +22,12 @@ class MainPipelineTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.stdout.strip(), f"video-summary-skill {__version__}")
 
-    def test_comments_flag_only_emits_compatibility_warning(self) -> None:
+    def test_comments_flag_enables_comment_pipeline(self) -> None:
         package = SimpleNamespace(
             output_dir=Path("output/demo"),
             manifest=ProcessingManifest(task_id="task", status="completed"),
             analysis=AnalysisResult(status="skipped"),
         )
-        stderr = StringIO()
         with (
             patch("src.main.load_config", return_value=AppConfig()),
             patch("src.main.PipelineOrchestrator") as orchestrator,
@@ -39,10 +38,10 @@ class MainPipelineTests(unittest.TestCase):
                 comments=True,
                 export="obsidian",
                 no_summary=True,
-                emitter=CliEmitter("analyze", stderr=stderr),
+                emitter=CliEmitter("analyze", stderr=StringIO()),
             )
 
-        self.assertIn("不会获取或分析评论", stderr.getvalue())
+        self.assertTrue(orchestrator.call_args.kwargs["comments_enabled"])
         orchestrator.return_value.run.assert_called_once_with("https://example.com/video", is_url=True)
 
     def test_unexpected_pipeline_error_has_clean_exit(self) -> None:

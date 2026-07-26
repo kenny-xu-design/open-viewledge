@@ -5,12 +5,25 @@ document.documentElement.dataset.uiVersion = "workspace-16";
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const DEFAULT_MODULE_ORDER = ["result", "media", "collaboration"];
-const EXPORT_SECTION_LABELS = { metadata: "基本信息", summary: "摘要", highlights: "亮点", prerequisites: "前置条件", steps: "操作步骤", glossary: "关键术语", thoughts: "思考", action_items: "可执行动作", warnings: "注意事项", chapters: "章节", keyframes: "关键帧", chat: "AI 对话", user_notes: "我的笔记", source_materials: "原文资料" };
+const EXPORT_SECTION_LABELS = { metadata: "基本信息", summary: "摘要", highlights: "亮点", prerequisites: "前置条件", steps: "操作步骤", glossary: "关键术语", thoughts: "思考", action_items: "可执行动作", warnings: "注意事项", chapters: "章节", keyframes: "关键帧", chat: "AI 对话", comment_insights: "评论区洞察", user_notes: "我的笔记", source_materials: "原文资料" };
 const EXPORT_PRESETS = { light: ["metadata", "summary", "highlights", "chapters"], "summary-chat": ["metadata", "summary", "highlights", "chat", "user_notes"], full: Object.keys(EXPORT_SECTION_LABELS) };
+const ANALYSIS_MODE_META = {
+  summary: { label: "标准摘要", description: "适合资讯、访谈、介绍和一般知识视频" },
+  tutorial: { label: "教程提取", description: "适合软件、编程、设计和制作教程" },
+  viral: { label: "爆款分析", description: "适合热门、短视频、广告和自媒体内容" },
+  "close-reading": { label: "深度精读", description: "适合课程、演讲、长访谈和观点内容" },
+};
+const PROFILE_RENDER_SECTIONS = {
+  summary: [["一句话", "one_sentence", "text"], ["摘要", "summary", "text"], ["专业术语", "professional_terms", "terms"], ["亮点", "highlights", "highlights"], ["思考", "thoughts", "thoughts"], ["章节总结", "chapter_summaries", "chapters"]],
+  tutorial: [["教程目标", "tutorial_goal", "text"], ["最终成果", "final_result", "text"], ["前置条件", "prerequisites", "list"], ["工具与材料", "tools_and_materials", "list"], ["流程总览", "workflow_overview", "text"], ["教程阶段与章节", "chapter_summaries", "tutorialChapters"], ["完整教程步骤", "steps", "steps"], ["关键参数与设置", "key_parameters", "list"], ["常见错误与排查", "troubleshooting", "list"], ["完成验收清单", "acceptance_checklist", "checklist"], ["可复用命令或模板", "reusable_commands_or_templates", "list"], ["教程局限", "limitations", "list"]],
+  viral: [["内容定位", "content_positioning", "text"], ["目标受众", "target_audience", "list"], ["标题与封面承诺", "title_and_cover_promise", "text"], ["前 30 秒钩子", "first_30_seconds_hook", "text"], ["内容结构", "content_structure", "list"], ["节奏与留存设计", "retention_design", "list"], ["情绪与叙事机制", "emotion_and_narrative", "list"], ["视觉包装与剪辑", "visual_packaging_and_editing", "list"], ["互动与传播设计", "interaction_and_distribution", "list"], ["可复用内容公式", "reusable_content_formula", "list"], ["可借鉴点", "takeaways", "list"], ["风险与局限", "risks_and_limitations", "list"]],
+  "close-reading": [["核心命题", "core_thesis", "text"], ["关键概念", "key_concepts", "list"], ["论证地图", "argument_map", "list"], ["逐章精读", "chapter_close_reading", "chapters"], ["证据评估", "evidence_assessment", "list"], ["隐含假设", "implicit_assumptions", "list"], ["可能的反方观点", "counterarguments", "list"], ["论证局限", "argument_limits", "list"], ["视觉证据", "visual_evidence", "list"], ["延伸联系", "extended_connections", "list"], ["待核查事实", "facts_to_verify", "list"]],
+};
 const SETTINGS = {
   moduleOrder: "vs.moduleOrder",
   moduleWidths: "vs.moduleWidths",
   activeResultTab: "vs.activeResultTab",
+  activeInsightTab: "vs.activeInsightTab",
   transcriptFollowMode: "vs.transcriptFollowMode",
   playbackRate: "vs.playbackRate",
   videoAspectRatio: "vs.videoAspectRatio",
@@ -28,6 +41,7 @@ const state = {
   selectedKnowledgeId: "",
   libraryItems: [],
   activeResultTab: localStorage.getItem(SETTINGS.activeResultTab) || "summary",
+  activeInsightTab: localStorage.getItem(SETTINGS.activeInsightTab) || "comments",
   activeSource: null,
   currentTime: 0,
   currentChapter: -1,
@@ -44,6 +58,7 @@ const state = {
   scrollPositions: { summary: 0, transcript: 0 },
   noteStateByKnowledgeId: {},
   providerStatuses: {},
+  providerConfig: {},
   deleteMode: false,
   selectedDeleteIds: new Set(),
   deleting: false,
@@ -219,10 +234,12 @@ document.addEventListener("DOMContentLoaded", init);
 async function init() {
   applyPersistedLayout();
   bindEvents();
+  updateAnalysisModeDescriptions();
   syncShellAccessibility();
   requestAnimationFrame(reconcileLayoutWidths);
   loadRuntimeInfo();
   loadProviderStatuses();
+  loadProviderConfig();
   setResultTab(state.activeResultTab, false);
   $("#followPlayback").checked = state.transcriptFollowMode;
   $("#footerFollow").checked = state.transcriptFollowMode;
@@ -282,6 +299,10 @@ function bindEvents() {
   $("#closeInspector").addEventListener("click", () => closeInspector(true));
   $("#drawerScrim").addEventListener("click", () => closeActiveSheet(true));
   $("#summarySettings").addEventListener("click", () => $("#settingsDialog").showModal());
+  $("#taskMode").addEventListener("change", updateAnalysisModeDescriptions);
+  $("#taskProcessingProfile").addEventListener("change", updateAnalysisModeDescriptions);
+  $("#settingsMode").addEventListener("change", updateAnalysisModeDescriptions);
+  $("#apiSettings").addEventListener("click", openApiConfig);
   $("#layoutSettings").addEventListener("click", openLayoutSettings);
   $("#openExternal").addEventListener("click", openOriginal);
   $("#downloadSource").addEventListener("click", () => downloadFile("index.md"));
@@ -308,6 +329,10 @@ function bindEvents() {
   $("#chatInput").addEventListener("keydown", (event) => {
     if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); sendChat(); }
   });
+  $$("[data-toggle-secret]").forEach((button) => button.addEventListener("click", () => toggleSecretField(button.dataset.toggleSecret, button)));
+  $$("[data-provider-apply]").forEach((button) => button.addEventListener("click", () => applyApiProviderConfig(button.dataset.providerApply)));
+  $$("[data-provider-test]").forEach((button) => button.addEventListener("click", () => testApiProviderConfig(button.dataset.providerTest)));
+  $$("[data-provider-clear]").forEach((button) => button.addEventListener("click", () => clearApiProviderConfig(button.dataset.providerClear)));
   $("#expandChat").addEventListener("click", (event) => { openInspector(event.currentTarget); $("#chatPane").scrollIntoView({ behavior: uiScrollBehavior(), block: "start" }); });
   $("#playbackRate").addEventListener("change", (event) => setPlaybackRate(Number(event.target.value)));
   $("#videoAspectRatio").addEventListener("change", applyLocalVideoDisplay);
@@ -317,6 +342,7 @@ function bindEvents() {
   $("#resultScroll").addEventListener("scroll", () => state.scrollPositions[state.activeResultTab] = $("#resultScroll").scrollTop, { passive: true });
 
   $$("[data-result-tab]").forEach((button) => button.addEventListener("click", () => setResultTab(button.dataset.resultTab)));
+  $$("[data-insight-tab]").forEach((button) => button.addEventListener("click", () => setInsightTab(button.dataset.insightTab)));
   $$("[data-mobile-tab]").forEach((button) => button.addEventListener("click", () => setMobileView(button.dataset.mobileTab)));
   $(".mobile-tabs").addEventListener("keydown", handleWorkspaceTabKeydown);
   $$("[data-media]").forEach((button) => button.addEventListener("click", () => handleMediaAction(button.dataset.media)));
@@ -441,6 +467,141 @@ async function loadProviderStatuses() {
     state.providerStatuses = {};
   }
   renderProviderStatus();
+}
+
+async function loadProviderConfig() {
+  try {
+    const data = await api("/api/provider-config");
+    state.providerConfig = Object.fromEntries((data.providers || []).map((item) => [item.provider || item.name, item]));
+    renderApiConfig();
+  } catch (error) {
+    state.providerConfig = {};
+    renderApiConfigError(error.message);
+  }
+}
+
+function openApiConfig() {
+  loadProviderConfig();
+  $("#apiConfigDialog").showModal();
+}
+
+function renderApiConfig() {
+  renderOneApiProvider("deepseek");
+  renderOneApiProvider("gemini");
+}
+
+function renderApiConfigError(message) {
+  ["deepseek", "gemini"].forEach((provider) => {
+    const result = $(`#${provider}TestResult`);
+    if (result) {
+      result.className = "api-test-result failed";
+      result.textContent = `配置状态读取失败：${message}`;
+    }
+  });
+}
+
+function renderOneApiProvider(provider) {
+  const config = state.providerConfig[provider] || {};
+  const status = $(`#${provider}ConfigStatus`);
+  const keyHint = $(`#${provider}KeyHint`);
+  const testResult = $(`#${provider}TestResult`);
+  if (!status || !keyHint || !testResult) return;
+  const tested = config.lastTest || {};
+  const statusText = !config.configured ? "未配置" : tested.ok === true ? "测试成功" : tested.ok === false ? "测试失败" : "已配置未测试";
+  status.textContent = `${statusText} · ${sourceLabel(config.keySource)} · ${config.model || ""}`.trim();
+  keyHint.textContent = config.keyTail ? `已保存 Key 尾号：${config.keyTail}` : "未保存 Web 会话 Key，可使用环境变量或填写后应用。";
+  if (provider === "deepseek") {
+    $("#deepseekBaseUrl").value = config.baseUrl || "https://api.deepseek.com";
+    $("#deepseekModel").value = config.model || "deepseek-v4-flash";
+    $("#deepseekApiKey").value = "";
+  } else {
+    $("#geminiModel").value = config.model || "gemini-3.1-flash-lite";
+    $("#geminiApiKey").value = "";
+  }
+  if (tested.ok === true) {
+    testResult.className = "api-test-result success";
+    testResult.textContent = `最近测试成功：${tested.model || config.model || ""}，${tested.durationMs ?? 0} ms。`;
+  } else if (tested.ok === false) {
+    testResult.className = "api-test-result failed";
+    testResult.textContent = `最近测试失败：${tested.error || "请检查配置。"}（${tested.errorType || "provider_error"}）`;
+  } else {
+    testResult.className = "api-test-result";
+    testResult.textContent = "尚未测试当前配置。";
+  }
+}
+
+function collectProviderConfig(provider, includeEmptyKey = false) {
+  const payload = { provider };
+  if (provider === "deepseek") {
+    const key = $("#deepseekApiKey").value;
+    if (key || includeEmptyKey) payload.apiKey = key;
+    payload.baseUrl = $("#deepseekBaseUrl").value.trim();
+    payload.model = $("#deepseekModel").value.trim();
+  } else {
+    const key = $("#geminiApiKey").value;
+    if (key || includeEmptyKey) payload.apiKey = key;
+    payload.model = $("#geminiModel").value.trim();
+  }
+  return payload;
+}
+
+async function applyApiProviderConfig(provider) {
+  try {
+    const data = await api("/api/provider-config", {
+      method: "POST",
+      body: JSON.stringify(collectProviderConfig(provider)),
+    });
+    updateProviderConfigState(data);
+    showToast(`${providerLabel(provider)} 配置已应用`);
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function testApiProviderConfig(provider) {
+  const result = $(`#${provider}TestResult`);
+  result.className = "api-test-result";
+  result.textContent = "正在测试连接…";
+  try {
+    const data = await api("/api/provider-config/test", {
+      method: "POST",
+      body: JSON.stringify(collectProviderConfig(provider, true)),
+    });
+    updateProviderConfigState(data);
+  } catch (error) {
+    result.className = "api-test-result failed";
+    result.textContent = `测试失败：${error.message}`;
+  }
+}
+
+async function clearApiProviderConfig(provider) {
+  try {
+    const data = await api(`/api/provider-config/${encodeURIComponent(provider)}`, { method: "DELETE" });
+    updateProviderConfigState(data);
+    showToast(`${providerLabel(provider)} Web 会话配置已清除`);
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function updateProviderConfigState(data) {
+  state.providerConfig = Object.fromEntries((data.providers || []).map((item) => [item.provider || item.name, item]));
+  state.providerStatuses = Object.fromEntries((data.providers || []).map((item) => [item.provider || item.name, item]));
+  renderApiConfig();
+  renderProviderStatus();
+  loadRuntimeInfo();
+}
+
+function toggleSecretField(id, button) {
+  const input = $(`#${id}`);
+  if (!input) return;
+  const visible = input.type === "text";
+  input.type = visible ? "password" : "text";
+  button.textContent = visible ? "显示" : "隐藏";
+}
+
+function sourceLabel(source) {
+  return ({ web_session: "Web 会话", environment: "环境变量", default: "默认值", missing: "未配置" })[source] || source || "未知来源";
 }
 
 function renderProviderStatus() {
@@ -909,27 +1070,162 @@ function renderSummary(knowledge) {
   const analysis = knowledge.analysis || {};
   const timeline = Array.isArray(knowledge.timeline) ? knowledge.timeline : [];
   const sections = [];
-  if (analysis.summary) sections.push(`<section class="result-section"><h2>摘要</h2><p>${escapeHtml(analysis.summary)}</p></section>`);
+  const summaryCoreRendered = (analysis.analysis_profile || "summary") === "summary" && analysis.content && Object.keys(analysis.content).length;
+  if (analysis.content && Object.keys(analysis.content).length) sections.push(renderProfileReport(analysis, knowledge.id));
+  else if (analysis.summary) sections.push(`<section class="result-section"><h2>摘要</h2><p>${escapeHtml(analysis.summary)}</p></section>`);
   else if (analysis.status === "failed") sections.push(`<div class="analysis-empty">AI 分析失败：${escapeHtml(analysis.error || "请检查 DeepSeek 配置后重试。")} 字幕和时间轴仍可正常查看。</div>`);
   else sections.push('<div class="analysis-empty">AI 分析已跳过。字幕、时间轴和原文细读仍可正常查看。</div>');
 
-  if (Array.isArray(analysis.highlights) && analysis.highlights.length) {
+  if (!summaryCoreRendered && Array.isArray(analysis.highlights) && analysis.highlights.length) {
     sections.push(`<section class="result-section"><h2>亮点</h2><ul class="highlight-list">${analysis.highlights.map((item) => {
       const imageUrl = knowledgeAssetUrl(knowledge.id, item.image);
       const detail = item.summary || item.explanation || "";
       return `<li class="highlight-item${imageUrl ? " has-image" : ""}">${imageUrl ? `<img class="highlight-image" src="${imageUrl}" alt="${escapeAttr(item.title || "亮点画面")}" loading="lazy" data-preview-image="${imageUrl}">` : `<span class="highlight-icon">${escapeHtml(item.icon || "◆")}</span>`}<div class="highlight-copy"><strong>${escapeHtml(item.title || "亮点")}</strong>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}<div class="tag-list">${(item.tags || []).map((tag) => `<button class="tag-button" data-tag="${escapeAttr(tag)}">#${escapeHtml(tag)}</button>`).join("")}</div></div></li>`;
     }).join("")}</ul></section>`);
   }
-  if (Array.isArray(analysis.thoughts) && analysis.thoughts.length) {
-    sections.push(`<section class="result-section"><h2>思考</h2><ol class="thought-list">${analysis.thoughts.slice(0, 3).map((item) => `<li><button class="thought-button" data-question="${escapeAttr(item.question || "")}">${escapeHtml(item.question || "")}</button></li>`).join("")}</ol></section>`);
+  if (!summaryCoreRendered && Array.isArray(analysis.thoughts) && analysis.thoughts.length) {
+    sections.push(`<section class="result-section"><h2>思考</h2><ol class="thought-list">${analysis.thoughts.map((item) => `<li><button class="thought-button" data-question="${escapeAttr(item.question || "")}">${escapeHtml(item.question || "")}</button></li>`).join("")}</ol></section>`);
   }
 
   const chapters = Array.isArray(analysis.chapters) && analysis.chapters.length ? analysis.chapters : timeline;
-  if (chapters.length) {
+  if (!summaryCoreRendered && chapters.length) {
     sections.push(`<section class="result-section" id="chapterSection"><h2>视频章节总结</h2><div class="chapter-list">${chapters.map((chapter, index) => renderChapter(chapter, index, knowledge.id)).join("")}</div></section>`);
   }
   sections.push(`<section class="result-section"><h2>原文资料</h2><div class="source-entry"><button class="quiet-button" data-open-transcript>查看分组字幕</button>${knowledge.files?.["transcript.raw.jsonl"] ? '<button class="icon-button small" data-open-raw aria-label="打开逐句原始数据"><svg><use href="#i-file"/></svg></button>' : ""}</div></section>`);
   $("#summaryView").innerHTML = sections.join("");
+}
+
+function renderProfileReport(analysis, knowledgeId) {
+  const profile = analysis.analysis_profile || "summary";
+  const meta = ANALYSIS_MODE_META[profile] || ANALYSIS_MODE_META.summary;
+  const content = analysis.content || {};
+  const sections = PROFILE_RENDER_SECTIONS[profile] || PROFILE_RENDER_SECTIONS.summary;
+  if (profile === "summary") {
+    return sections.map(([title, key, kind]) => {
+      const value = content[key];
+      const html = renderProfileValue(value, kind, profile, knowledgeId);
+      if (kind === "terms" && !html) return "";
+      const fallback = html || "<p>未明确说明</p>";
+      const factualBasis = key === "summary" && content.factual_basis
+        ? `<blockquote>视频事实依据：${escapeHtml(content.factual_basis)}</blockquote>`
+        : "";
+      const inferences = key === "thoughts" && Array.isArray(content.ai_inferences)
+        ? content.ai_inferences.map((item) => `<li><strong>AI 推断：</strong>${escapeHtml(item)}</li>`).join("")
+        : "";
+      const merged = inferences
+        ? `${html ? html.replace(/<\/ul>$/, "") : "<ul>"}${inferences}</ul>`
+        : fallback;
+      return `<section class="result-section"><h2>${escapeHtml(title)}</h2>${merged}${factualBasis}</section>`;
+    }).join("");
+  }
+  const body = sections.map(([title, key, kind]) => renderProfileField(title, content[key], kind, profile, knowledgeId)).join("");
+  const evidence = [
+    content.factual_basis ? `<section class="result-section"><h2>视频事实依据</h2><p>${escapeHtml(content.factual_basis)}</p></section>` : "",
+    Array.isArray(content.ai_inferences) && content.ai_inferences.length ? `<section class="result-section"><h2>AI 推断</h2><ul>${content.ai_inferences.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section>` : "",
+  ].join("");
+  return `<section class="result-section profile-report-header"><h2>${escapeHtml(meta.label)}</h2><p>${escapeHtml(meta.description)}</p></section>${body}${evidence}`;
+}
+
+function renderProfileField(title, value, kind, profile, knowledgeId) {
+  const html = renderProfileValue(value, kind, profile, knowledgeId) || "<p>未明确说明</p>";
+  return `<section class="result-section"><h2>${escapeHtml(title)}</h2>${html}</section>`;
+}
+
+function renderProfileValue(value, kind, profile, knowledgeId) {
+  if (kind === "text") return value ? `<p>${escapeHtml(value)}</p>` : "";
+  if (kind === "list") return renderSimpleList(value);
+  if (kind === "checklist") return Array.isArray(value) && value.length ? `<ul>${value.map((item) => `<li>☐ ${escapeHtml(item)}</li>`).join("")}</ul>` : "";
+  if (kind === "chapters") return renderProfileChapters(value);
+  if (kind === "tutorialChapters") return renderTutorialChapters(value, profile, knowledgeId);
+  if (kind === "steps") return renderTutorialSteps(value, profile, knowledgeId);
+  if (kind === "terms") return renderProfessionalTerms(value);
+  if (kind === "highlights") return renderSummaryHighlights(value);
+  if (kind === "thoughts") return renderSummaryThoughts(value);
+  return "";
+}
+
+function renderProfessionalTerms(value) {
+  if (!Array.isArray(value)) return "";
+  const seen = new Set();
+  const terms = value.filter((item) => {
+    const term = textFromValue(item?.term).trim();
+    const definition = textFromValue(item?.definition).trim();
+    const identity = term.toLocaleLowerCase().replace(/\s+/g, "");
+    if (!identity || !definition || seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  }).slice(0, 8);
+  if (terms.length < 3) return "";
+  return `<dl>${terms.map((item) => `<dt>${escapeHtml(item.term)}</dt><dd>${escapeHtml(item.definition)}</dd>`).join("")}</dl>`;
+}
+
+function renderSummaryHighlights(value) {
+  if (!Array.isArray(value) || !value.length) return "";
+  return `<ul class="highlight-list">${value.map((item) => {
+    const seconds = item?.timestamp ?? item?.start;
+    const time = seconds != null ? `<button class="time-button" data-seek="${Number(seconds) || 0}">${escapeHtml(formatTime(seconds))}</button>` : "";
+    const title = textFromValue(item?.title) || "亮点";
+    const detail = textFromValue(item?.explanation || item?.summary);
+    return `<li class="highlight-item"><span class="highlight-icon">◆</span><div class="highlight-copy"><strong>${time}${escapeHtml(title)}</strong>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div></li>`;
+  }).join("")}</ul>`;
+}
+
+function renderSummaryThoughts(value) {
+  if (!Array.isArray(value) || !value.length) return "";
+  return `<ul class="thought-list">${value.map((item) => {
+    const question = textFromValue(item?.question || item);
+    return `<li><button class="thought-button" data-question="${escapeAttr(question)}">${escapeHtml(question)}</button></li>`;
+  }).join("")}</ul>`;
+}
+
+function renderSimpleList(value) {
+  if (!Array.isArray(value) || !value.length) return "";
+  return `<ul>${value.map((item) => `<li>${escapeHtml(textFromValue(item))}</li>`).join("")}</ul>`;
+}
+
+function renderProfileChapters(value) {
+  if (!Array.isArray(value) || !value.length) return "";
+  return `<div class="chapter-list">${value.map((item, index) => {
+    const title = textFromValue(item?.title) || `章节 ${index + 1}`;
+    const time = item?.start != null ? `<span class="time-pill">${escapeHtml(formatTime(item.start))}</span>` : "";
+    const summary = textFromValue(item?.summary || item);
+    return `<article class="chapter"><h3>${time}${escapeHtml(title)}</h3>${summary ? `<p>${escapeHtml(summary)}</p>` : ""}</article>`;
+  }).join("")}</div>`;
+}
+
+function renderTutorialChapters(value, profile, knowledgeId) {
+  if (!Array.isArray(value) || !value.length) return "";
+  const steps = Array.isArray(state.activeSource?.analysis?.content?.steps) ? state.activeSource.analysis.content.steps : [];
+  return `<div class="chapter-list">${value.map((chapter, index) => {
+    const chapterId = chapter?.id || `ch${index + 1}`;
+    const childSteps = steps.filter((step) => step.chapter_id === chapterId || step.chapterId === chapterId);
+    const time = chapter?.start != null ? `<span class="time-pill">${escapeHtml(formatTime(chapter.start))}</span>` : "";
+    const summary = textFromValue(chapter?.summary || chapter);
+    return `<details class="chapter tutorial-stage" open><summary><h3>${time}${escapeHtml(chapter?.title || `阶段 ${index + 1}`)}</h3></summary>${summary ? `<p>${escapeHtml(summary)}</p>` : ""}${childSteps.length ? renderTutorialSteps(childSteps, profile, knowledgeId) : ""}</details>`;
+  }).join("")}</div>`;
+}
+
+function renderTutorialSteps(value, profile, knowledgeId) {
+  if (!Array.isArray(value) || !value.length) return "";
+  return `<div class="chapter-list">${value.map((item, index) => {
+    const imageUrl = profile === "tutorial" ? knowledgeAssetUrl(knowledgeId, item.image) : "";
+    const lines = [
+      ["目标", item.objective],
+      ["操作", item.action || item.description],
+      ["预期结果", item.expected_result],
+      ["参数", Array.isArray(item.parameters) ? item.parameters.join("；") : ""],
+      ["注意", Array.isArray(item.cautions) ? item.cautions.join("；") : ""],
+    ].filter(([, text]) => String(text || "").trim()).map(([label, text]) => `<li><strong>${label}：</strong>${escapeHtml(text)}</li>`).join("");
+    const time = item.timestamp != null ? `<button class="time-button" data-seek="${Number(item.timestamp) || 0}">${escapeHtml(formatTime(item.timestamp))}</button>` : "";
+    return `<article class="chapter tutorial-step"><h3>${time}${escapeHtml(item.title || `步骤 ${index + 1}`)}</h3>${imageUrl ? `<img class="chapter-frame" src="${imageUrl}" alt="${escapeAttr(item.title || "教程步骤截图")}" loading="lazy" data-preview-image="${imageUrl}">` : ""}<ul>${lines || "<li>未明确说明</li>"}</ul></article>`;
+  }).join("")}</div>`;
+}
+
+function textFromValue(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") return value.text || value.summary || value.description || value.explanation || value.title || "";
+  return String(value);
 }
 
 function renderInsightPanel(knowledge) {
@@ -937,27 +1233,43 @@ function renderInsightPanel(knowledge) {
   const timeline = Array.isArray(knowledge.timeline) ? knowledge.timeline : [];
   const source = highlights.length ? highlights : timeline;
   const usingHighlights = highlights.length > 0;
-  $("#insightMode").textContent = usingHighlights ? "AI 结果" : "字幕时间轴";
-  $("#insightCount").textContent = source.length;
-  if (!source.length) {
-    $("#insightContent").innerHTML = '<div class="module-empty">当前知识包没有高光或时间轴数据。</div>';
+  const comments = Array.isArray(knowledge.comments) ? knowledge.comments : [];
+  const commentInsight = knowledge.commentInsights || {};
+  const insightItems = ["hot_topics", "consensus", "controversies", "corrections", "frequent_questions"]
+    .flatMap((key) => Array.isArray(commentInsight[key]) ? commentInsight[key].slice(0, 3) : []);
+  const commentItems = insightItems.length ? insightItems : comments.slice(0, 8).map((item) => item.text || item.content || "");
+  const filteredComments = commentItems.filter(Boolean).slice(0, 8);
+  const activeTab = state.activeInsightTab === "highlights" ? "highlights" : "comments";
+  $$("[data-insight-tab]").forEach((button) => {
+    const active = button.dataset.insightTab === activeTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  if (activeTab === "comments") {
+    $("#insightContent").innerHTML = filteredComments.length
+      ? `<section class="insight-section" data-feature="comments">${filteredComments.map((item) => `<article class="insight-item comment-insight-item"><div class="insight-row"><span class="insight-marker comment"></span><strong>${escapeHtml(item)}</strong></div></article>`).join("")}</section>`
+      : '<div class="module-empty">当前知识包没有同步评论区数据。</div>';
     return;
   }
-  $("#insightContent").innerHTML = source.map((item, index) => {
-    const itemTime = usingHighlights ? (item.timestamp ?? item.start) : item.start;
-    const hasTime = itemTime != null && Number.isFinite(Number(itemTime));
-    const detail = usingHighlights ? (item.summary || item.explanation) : item.summary;
-    const tags = usingHighlights ? (item.tags || []) : (item.keywords || []);
-    return `<article class="insight-item" data-insight-index="${index}">
-      <div class="insight-row">
-        <span class="insight-marker ${usingHighlights ? "ai" : "timeline"}"></span>
-        <strong>${escapeHtml(item.title || (usingHighlights ? `高光 ${index + 1}` : `片段 ${index + 1}`))}</strong>
-        ${hasTime ? `<button class="timestamp-button" data-seek="${Number(itemTime)}">${formatTime(itemTime)}</button>` : ""}
-      </div>
-      ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
-      ${tags.length ? `<div class="tag-list">${tags.slice(0, 5).map((tag) => `<span class="static-tag">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
-    </article>`;
-  }).join("");
+  if (source.length) {
+    $("#insightContent").innerHTML = `<section class="insight-section" data-feature="highlights">${source.map((item, index) => {
+      const itemTime = usingHighlights ? (item.timestamp ?? item.start) : item.start;
+      const hasTime = itemTime != null && Number.isFinite(Number(itemTime));
+      const detail = usingHighlights ? (item.summary || item.explanation) : item.summary;
+      const tags = usingHighlights ? (item.tags || []) : (item.keywords || []);
+      return `<article class="insight-item" data-insight-index="${index}">
+        <div class="insight-row">
+          <span class="insight-marker ${usingHighlights ? "ai" : "timeline"}"></span>
+          <strong>${escapeHtml(item.title || (usingHighlights ? `高光 ${index + 1}` : `片段 ${index + 1}`))}</strong>
+          ${hasTime ? `<button class="timestamp-button" data-seek="${Number(itemTime)}">${formatTime(itemTime)}</button>` : ""}
+        </div>
+        ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
+        ${tags.length ? `<div class="tag-list">${tags.map((tag) => `<span class="static-tag">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
+      </article>`;
+    }).join("")}</section>`;
+    return;
+  }
+  $("#insightContent").innerHTML = '<div class="module-empty">当前知识包没有高光片段，已保留此功能位。</div>';
 }
 
 function renderChapter(chapter, index, knowledgeId) {
@@ -1017,6 +1329,12 @@ function setResultTab(tab, restoreScroll = true) {
   $("#readTranscript").textContent = next === "summary" ? "阅读全文" : "返回总结";
   if (next === "transcript") ensureTranscriptLoaded();
   if (restoreScroll) requestAnimationFrame(() => $("#resultScroll").scrollTop = state.scrollPositions[next] || 0);
+}
+
+function setInsightTab(tab) {
+  state.activeInsightTab = tab === "highlights" ? "highlights" : "comments";
+  localStorage.setItem(SETTINGS.activeInsightTab, state.activeInsightTab);
+  if (state.activeSource) renderInsightPanel(state.activeSource);
 }
 
 function handleResultClick(event) {
@@ -1230,11 +1548,26 @@ function openNewTask() {
   $("#taskProgress").classList.add("hidden");
   $("#newTaskForm").reset();
   $("#taskFrames").checked = true;
+  $("#taskComments").checked = false;
   setTaskSourceError(false);
   setTaskButtonLoading(false);
   setTaskSourceType("url");
+  updateAnalysisModeDescriptions();
   $("#newTaskDialog").showModal();
   loadJobHistory();
+}
+
+function updateAnalysisModeDescriptions() {
+  const mode = $("#taskMode")?.value || "summary";
+  const processing = $("#taskProcessingProfile")?.value || "complete";
+  const taskMeta = ANALYSIS_MODE_META[mode] || ANALYSIS_MODE_META.summary;
+  const taskDescription = mode === "tutorial" && processing === "complete"
+    ? `${taskMeta.description}。将提取完整教程步骤并生成对应操作截图。`
+    : taskMeta.description;
+  if ($("#taskModeDescription")) $("#taskModeDescription").textContent = taskDescription;
+  const settingsMode = $("#settingsMode")?.value || mode;
+  const settingsMeta = ANALYSIS_MODE_META[settingsMode] || ANALYSIS_MODE_META.summary;
+  if ($("#settingsModeDescription")) $("#settingsModeDescription").textContent = settingsMeta.description;
 }
 
 function setTaskSourceType(type) {
@@ -1266,6 +1599,7 @@ async function submitTask(event) {
     lang: $("#taskLanguage").value,
     export: $("#taskExport").value,
     noFrames: !$("#taskFrames").checked,
+    comments: $("#taskComments").checked,
     noSummary: $("#taskNoSummary").checked,
     sampleSeconds: $("#taskSampleSeconds").value,
   };
@@ -1309,7 +1643,7 @@ function pollTask(jobId) {
 }
 
 function renderTaskProgress(job) {
-  const stageOrder = ["resolve_source", "collect_metadata", "acquire_transcript", "normalize_transcript", "group_transcript", "build_timeline", "run_analysis", "extract_frames", "visual_analysis", "highlight_snapshot", "export_knowledge_package"];
+  const stageOrder = ["resolve_source", "collect_metadata", "acquire_transcript", "normalize_transcript", "group_transcript", "build_timeline", "run_analysis", "extract_frames", "visual_analysis", "highlight_snapshot", "comments_fetch", "comments_analysis", "export_knowledge_package"];
   const logs = job.logs || [];
   const latestStage = [...logs].reverse().find((line) => line.includes("阶段：")) || "";
   const stage = latestStage.split("阶段：").pop();
@@ -1897,7 +2231,7 @@ function statusLabel(status) {
 }
 
 function stageLabel(stage) {
-  return ({ queued: "等待处理", resolve_source: "识别来源", collect_metadata: "读取来源信息", acquire_transcript: "获取字幕或转写", normalize_transcript: "标准化字幕", group_transcript: "字幕分组", build_timeline: "构建时间轴", run_analysis: "结构化分析", extract_frames: "生成关键帧", visual_analysis: "分析关键帧", highlight_snapshot: "生成高光图片", export_knowledge_package: "导出知识包" })[stage] || stage || "处理中";
+  return ({ queued: "等待处理", resolve_source: "识别来源", collect_metadata: "读取来源信息", acquire_transcript: "获取字幕或转写", normalize_transcript: "标准化字幕", group_transcript: "字幕分组", build_timeline: "构建时间轴", run_analysis: "结构化分析", extract_frames: "生成关键帧", visual_analysis: "分析关键帧", highlight_snapshot: "生成教程截图", comments_fetch: "同步评论", comments_analysis: "评论区洞察", export_knowledge_package: "导出知识包" })[stage] || stage || "处理中";
 }
 
 function videoChatRouteLabel(route, status) {

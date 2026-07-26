@@ -4,7 +4,7 @@
 
 当前稳定版本为 `1.2.1`；`feat/v1.3.1-cupertino-ui` 的验收版本为 `1.3.1`，已完成 Agent/CLI 契约、Web 工作台外壳、知识记录删除、预览时间戳和本地视频比例控制的功能验收实现。范围仍不包含 Scale 或 SaaS。
 
-`feat/v1.4-processing-pipeline` 正在开发 v1.4。v1.4.0 已建立 `processing_profile: fast | complete` 契约；v1.4.1 已接入字幕/转写/文本分析缓存和 fast 文本优先路径；v1.4.2 已把可选视觉分析、高光 WebP 快照和 Gemini 视频对话路由接入产品流程。默认 `complete` 在文本结果落盘后继续视觉阶段；`fast` 在无字幕时只请求音频，并跳过视觉阶段。
+`feat/v1.4-processing-pipeline` 正在开发 v1.4。v1.4.0 已建立 `processing_profile: fast | complete` 契约；v1.4.1 已接入字幕/转写/文本分析缓存和 fast 文本优先路径；v1.4.2 已把可选视觉分析和 Gemini 视频对话路由接入产品流程；v1.4.3 已接入显式启用的公开评论同步、独立评论区洞察、本地 Web API 配置入口、四种分析模式的专属输出结构，以及自适应长视频分层分析。默认 `complete` 在文本结果落盘后继续视觉阶段；`fast` 在无字幕时只请求音频，并跳过视觉阶段。评论同步失败不会影响主摘要。
 
 ## 当前能力
 
@@ -16,8 +16,8 @@
 -> 优先获取平台字幕
 -> 无字幕时 FFmpeg + 本地 faster-whisper
 -> transcript.raw.jsonl / transcript.grouped.md / transcript.md
--> DeepSeek 结构化文本分析
--> complete 模式：本地视频关键帧、Gemini 可选视觉分析与高光快照
+-> DeepSeek 结构化文本分析（长视频可按语义窗口 Map/Reduce）
+-> complete 模式：本地视频关键帧、Gemini 可选视觉分析；tutorial 模式可生成教程步骤截图
 -> 标准知识包
 -> CLI / Web 查看
 ```
@@ -40,10 +40,13 @@ knowledge_id
 - 平台字幕优先，无字幕时进入本地 ASR。
 - 本地 `faster-whisper-small` 模型转写，不静默联网下载模型。
 - `summary`、`tutorial`、`viral`、`close-reading` 分析模式。
+- 自适应分段策略会根据时长、字幕密度、模式、处理模式和平台章节候选决定单轮或窗口化分层分析；长教程会区分一级教程阶段和二级操作步骤。
 - DeepSeek 结构化分析及 Pydantic 校验。
 - 标准知识包、时间轴、关键帧和兼容 Markdown 输出。
-- 完整模式下每个高光最多一张 `assets/highlights/*.webp` 图片；截图失败时保留文本高光。
+- `tutorial + complete` 下可为关键教程步骤生成 `assets/tutorial/*.webp` 相对路径截图；`summary`、`viral` 和 `close-reading` 不导出截图。
+- 显式启用评论同步时，公开评论写入 `comments.json` / `comments.md`，评论区洞察写入 `comment_insights.json` / `comment_insights.md`，且不会混入主摘要。
 - AppShell Web 工作台、本地媒体播放、YouTube 官方 IFrame 预览和 B站官方 iframe 预览。
+- Web 提供本地“API 配置”入口，可在当前运行会话中填写 DeepSeek/OpenAI-compatible 和 Gemini 配置，用于真实摘要、评论洞察、视觉分析和对话测试。
 - 基于当前知识包的真实 AI 对话、时间戳引用，以及包含路由、远程文件恢复信息和本地消息的 `chat.json`。
 - 按知识包原子保存的 `user_notes.md`，以及包含用户笔记的 `export_note.md`。
 - 可在服务重启后恢复的本地 Web 任务历史；未完成进程会标记为 `interrupted`。
@@ -51,9 +54,10 @@ knowledge_id
 尚未完成：
 
 - Gemini YouTube URL、Files API、关键帧与文本降级路由已通过 mock 测试，但尚未使用真实 Gemini 账号和固定公开视频完成线上验收。
+- 公开评论同步已通过 mock 和本地自动化测试；仍需使用固定 YouTube/B站公开视频验收真实平台评论可用性。
 - Obsidian 目前仅提供兼容 Markdown 文件，不具备 Vault 同步或双向管理。
 
-评论区分析已经停用，不属于当前产品功能。
+评论同步仅读取公开评论；关闭评论、平台限制或提取器不返回评论时，会跳过评论产物。
 
 ## 合规边界
 
@@ -146,6 +150,8 @@ FFPROBE_PATH=
 `.env` 已被 Git 忽略，`.env.example` 只保存空 Key 和非敏感默认值。不要把真实 Key 写入 `.env.example`、README、日志、知识包或提交记录。
 
 当前 CLI 结构化文本分析后端仅支持 `deepseek`。完整模式会在本地视频抽帧后尝试可选 Gemini 视觉分析；Web 选择 Gemini 对话时会依次尝试公开 YouTube URL、已有或新上传的本地视频、关键帧+文本和纯文本。视频上传仅在用户明确选择 Gemini 且知识包有本地视频时发生。
+
+Web 的“API 配置”入口用于本地真实交互测试。API Key 默认只保存在当前 Web 后端进程内存中，页面刷新后只要服务未重启即可继续使用；服务重启后需要重新填写。状态接口只返回是否已配置、配置来源、模型、Base URL 和 Key 尾号 4 位，不返回完整 Key。API Key 不写入 `localStorage`、`sessionStorage`、Web job store、知识包、Markdown、导出文件或仓库文件。
 
 ## CLI
 
@@ -250,7 +256,7 @@ Obsidian 兼容 Markdown 副本：
 - `--sample-seconds`：只处理媒体开头指定秒数。
 - `--no-frames`：跳过关键帧生成。
 - `--export obsidian`：生成 Obsidian 兼容 Markdown 副本。
-- `--comments`：仅为旧命令兼容保留；不会获取或分析评论。
+- `--comments`：同步公开评论并生成独立评论区洞察。该功能只读取公开评论；失败会记录为警告，不会让主摘要任务失败。
 - `--json`：输出带 Schema 版本的单个 JSON 结果。
 - `--jsonl`：长任务逐行输出生命周期事件。
 
@@ -311,6 +317,8 @@ Web 当前支持：
 - 查看服务重启后仍保留的最近任务；异常中断任务显示为 `interrupted`。
 - 调整三栏模块顺序和宽度。
 - 通过原创纵向导出面板预览、复制或下载 Markdown，并按本地配置安全写入 Obsidian Vault。
+- 显式同步公开评论，并在知识页与导出中独立展示评论区洞察。知识页视频下方的功能区使用“评论区 / 高光片段”同级 Tab；评论内容不会写入左侧“全文总结”。
+- 通过“API 配置”填写或测试 DeepSeek/OpenAI-compatible 和 Gemini。Web 会话配置优先于环境变量；未填写时继续兼容 `.env` / 环境变量；非敏感默认模型和 Base URL 来自项目默认值。
 
 笔记编辑区在停止输入 800 ms 后保存，切换知识包前也会尝试完成保存。保存笔记时会同步刷新 `export_note.md`。
 
@@ -322,11 +330,18 @@ B站预览使用官方 iframe。点击摘要、字幕或聊天引用中的时间
 
 ## 分析类型与知识笔记导出
 
-`summary` 使用公共摘要结构；`tutorial` 在可靠内容存在时增加前置条件、操作步骤、关键术语、可执行动作和注意事项。Profile 统一按“用户显式选择 → 知识包已有值 → 自动识别 → summary”解析，识别失败不会导致任务失败。
+`summary`、`tutorial`、`viral` 和 `close-reading` 使用相同的外壳字段与各自专属的 `content` 结构。共同外壳记录 `schema_version`、`analysis_profile`、`processing_profile`、来源、生成信息、分段策略和警告；`generation.comments_included` 固定为 `false`，评论区洞察不会写入主报告。Profile 统一按“用户显式选择 → 知识包已有值 → 自动识别 → summary”解析，识别失败不会导致任务失败。
+
+长视频分析会写入 `analysis.segmentation` 元数据，包括 `policy_version=adaptive-v2`、时长桶、窗口长度、重叠、建议章节/高光范围、实际数量、覆盖率和最大空档。30 分钟以上的密集字幕视频优先使用窗口分析；60 分钟以上密集视频默认使用分层语义 Map/Reduce；低密度内容允许低于建议数量范围，但不会机械插入假章节。
+
+- `summary`：固定展示“一句话、摘要、亮点、思考、章节总结、原文资料”六个核心部分。“一句话”严格为单行完整句子；“摘要”使用自然段整合背景、主要内容和结论。若同次分析识别到 3～8 个可靠且与核心内容直接相关的不同专业术语，则在“摘要”和“亮点”之间显示“专业术语”；少于 3 个时隐藏整个模块。
+- `tutorial`：教程目标、最终成果、前置条件、工具与材料、流程总览、完整教程步骤、关键参数与设置、常见错误与排查、完成验收清单、可复用命令或模板、教程局限。仅 `tutorial + complete` 允许生成并导出 `assets/tutorial/` 步骤截图。
+- `viral`：内容定位、目标受众、标题与封面承诺、前 30 秒钩子、内容结构、节奏与留存设计、情绪与叙事机制、视觉包装与剪辑、互动与传播设计、可复用内容公式、可借鉴点、风险与局限。
+- `close-reading`：核心命题、关键概念、论证地图、逐章精读、证据评估、隐含假设、可能的反方观点、论证局限、视觉证据、延伸联系、待核查事实。
 
 时间戳由统一模块格式化并生成平台链接：YouTube 和 B站链接保留既有查询参数并替换 `t`；Web 预览内点击时间戳统一进入 `seekPreview(seconds)`，本地媒体使用 `currentTime`，YouTube 使用 IFrame API，B站在原预览区域重载带 `t=<秒数>` 的 iframe。
 
-导出产物是普通 UTF-8 `.md` 文件；`.obsidian` 是 Vault 配置目录，程序不会写入其中。下载 Markdown 不要求安装 Obsidian。Vault 直接写入仅适用于本地部署，服务端只读取本地配置，前端不能提交任意路径。首版组合导出支持摘要、AI 对话和原始用户笔记；关键帧只读取既有产物，不重新调用模型。
+导出产物是普通 UTF-8 `.md` 文件；`.obsidian` 是 Vault 配置目录，程序不会写入其中。下载 Markdown 不要求安装 Obsidian。Vault 直接写入仅适用于本地部署，服务端只读取本地配置，前端不能提交任意路径。组合导出支持摘要、AI 对话、评论区洞察和原始用户笔记；关键帧只读取既有产物，不重新调用模型。
 
 CLI 示例：
 
@@ -368,6 +383,10 @@ highlight_notes.md
 export_note.md
 chat.json
 user_notes.md
+comments.json
+comments.md
+comment_insights.json
+comment_insights.md
 audio/audio_16k.wav
 frames/*.jpg
 ```
@@ -411,6 +430,10 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 
 在被 Git 忽略的项目根目录 `.env` 中设置 `DEEPSEEK_API_KEY`。不要把 Key 粘贴到命令、聊天记录或仓库文件中。
 
+如果 DeepSeek 返回 HTTP 400，优先检查 `.env` 中的 `DEEPSEEK_MODEL` 是否为当前账号支持的模型名。程序会在错误信息中保留经过脱敏的上游原因，例如模型名不受支持，但不会输出 API Key。
+
+Web 端也可以打开“API 配置”检查 DeepSeek/OpenAI-compatible 的 API Key、Base URL 和 Model。测试连接只发送最小请求，不启动完整视频分析。
+
 ### 在线视频无法预览
 
 视频可能禁止嵌入、需要登录、受地区限制或平台 iframe 不提供控制能力。知识包、字幕和分析仍可正常查看；必要时使用“在原网站打开”。B站 iframe 的播放、倍速和时间跳转由播放器自身控制。
@@ -439,5 +462,6 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 
 - B站官方 iframe 通过重载 `t=<秒数>` 实现预览区时间戳跳转；实际播放行为仍受官方播放器嵌入能力限制。
 - Gemini 视频和视觉路径已经形成可操作流程并完成 mock 验证；当前环境未配置 Gemini，因此仍需真实 API、额度、长视频和 URL 拒绝场景验收。
+- 评论同步依赖公开平台和 `yt-dlp` 当前能力；关闭评论、平台限制或提取器不返回评论时会跳过评论产物，主知识包仍可用。
 - Obsidian 仅为兼容 Markdown 导出，不是 Vault 数据层。
 - 通用网页正文采集尚未实现；当前 URL 输入面向 `yt-dlp` 支持的视频平台。

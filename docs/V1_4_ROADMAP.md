@@ -1,10 +1,10 @@
 # v1.4 Roadmap
 
-Status: v1.4.0-v1.4.2 implemented; v1.4.3-v1.4.6 planned
+Status: v1.4.0-v1.4.3 implemented; v1.4.3 final local QA plus API-configuration and analysis-profile contract increments complete; v1.4.4-v1.4.6 planned
 
 Branch: `feat/v1.4-processing-pipeline`
 
-Last updated: 2026-07-24
+Last updated: 2026-07-25
 
 ## Scope
 
@@ -73,7 +73,7 @@ Acceptance:
 
 ### v1.4.1: Subtitle Priority, Cache, And Fast Path
 
-Status: implemented on `feat/v1.4-processing-pipeline`; pending commit/review.
+Status: implemented on `feat/v1.4-processing-pipeline`; pending final review/commit.
 
 Goal: reduce time to first readable result.
 
@@ -87,7 +87,7 @@ Output:
 
 - Cache keys for metadata, subtitles, audio, transcript, frames, text analysis, visual analysis, and comments.
 - Cache dimensions include source platform, source ID, Bilibili `p`, YouTube video ID, language, sample range, ASR config, analysis profile, processing profile, Provider, model, and prompt version.
-- Fast mode skips default frame extraction, visual analysis, highlight snapshots, and comments.
+- Fast mode skips default frame extraction, visual analysis, tutorial step screenshots, and comments.
 - First readable result timing is recorded independently from full task completion.
 
 Acceptance:
@@ -113,25 +113,28 @@ Input:
 Output:
 
 - Parallel text and visual route design.
-- `assets/highlights/highlight_001.webp` style output.
+- `assets/tutorial/tutorial_step_001.webp` style output for tutorial steps.
 - Highlight fields: `timestamp`, `title`, `summary`, `tags`, `image`, `image_source_timestamp`, `image_generation_status`.
 - Gemini video conversation strategy:
   1. public YouTube URL to Gemini native video understanding;
   2. downloaded/uploaded video through Gemini Files API;
-  3. transcript plus chapters plus highlight images.
+  3. transcript plus chapters plus available keyframe/tutorial context.
 - Chat state includes `chat_id`, `source_url`, provider, model, local messages, optional remote session ID, and recovery state.
 
 Acceptance:
 
 - Text summary and chapters can complete before visual stages.
-- Highlight text remains available when image capture fails.
-- Markdown and Obsidian exports use relative image references.
+- Tutorial step text remains available when image capture fails.
+- Markdown and Obsidian exports use relative tutorial image references.
 - Gemini native URL failure falls back with explicit status.
 - No UI claims are based on whether YouTube shows an Ask button.
 
-### v1.4.3: Comment Sync And Community Insights
+### v1.4.3: Comment Sync, API Configuration, And Profile Contracts
 
-Goal: add public comment synchronization and comment insights beside AI highlights.
+Status: implemented on `feat/v1.4-processing-pipeline`; final local QA plus API-configuration and analysis-profile contract increments complete, pending user review/commit.
+
+Goal: add public comment synchronization, comment insights beside AI highlights, local Web API configuration, and distinct output contracts for `summary`, `tutorial`, `viral`, and `close-reading`.
+Additional v1.4.3 finish: add adaptive long-video segmentation so long videos are not collapsed into a fixed small global chapter/highlight list.
 
 Input:
 
@@ -155,6 +158,17 @@ Acceptance:
 - Comment timestamps use existing `seekPreview(seconds)` behavior.
 - Fast mode fetches limited high-value comments only and can disable comments.
 - Complete mode supports bounded hot/latest/reply/incremental sync.
+- Web presents comments and AI highlights as peer video-side functions: `评论区` and `高光片段`.
+- Comment content is never merged into the main factual summary.
+- Web exposes a local API configuration entry for real DeepSeek/OpenAI-compatible and Gemini interaction testing.
+- API Keys are process-memory only and are not written to frontend storage, job records, packages, Markdown, exports, or repository files.
+- Provider resolution is unified for summary analysis, comment insight, Gemini visual/video routes, and right-side AI chat.
+- The four analysis modes use a shared envelope with mode-specific `content` fields; old knowledge packages still read through compatibility fields.
+- `generation.comments_included=false` is preserved in main analysis results.
+- Only `tutorial + complete` can generate/export relative `assets/tutorial/` step screenshots. `summary`, `viral`, `close-reading`, and `tutorial + fast` do not export screenshots.
+- Adaptive policy routes by duration, transcript density, analysis profile, processing profile, native chapters, subtitle-group count, and visual availability.
+- Dense 60-minute-plus videos default to hierarchical semantic Map/Reduce with overlap windows and reducer metadata.
+- Coverage guard reports and, where possible, repairs large gaps using real transcript groups rather than midpoint insertion.
 
 ### v1.4.4: ASR And Worker Performance
 
@@ -217,7 +231,7 @@ Acceptance:
 - Subtitle videos do not run Whisper.
 - Fast mode skips unnecessary visual stages.
 - Complete mode allows text, visual, and comment stages to finish independently.
-- Deleting a knowledge package removes associated highlight images and comment files when they live under the package root.
+- Deleting a knowledge package removes associated tutorial images, legacy highlight images, and comment files when they live under the package root.
 
 ## Dependencies
 

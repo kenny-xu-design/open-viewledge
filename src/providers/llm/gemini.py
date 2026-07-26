@@ -65,11 +65,14 @@ class GeminiProvider(LLMProvider):
         model_name: str | None = None,
         opener: Any | None = None,
         sleeper: Any | None = None,
+        prefer_env: bool = True,
     ) -> None:
         load_dotenv()
         self.api_key = api_key if api_key is not None else os.getenv("GEMINI_API_KEY", "")
-        self.base_url = (os.getenv("GEMINI_BASE_URL") or base_url or DEFAULT_GEMINI_BASE_URL).rstrip("/")
-        self.model_name = os.getenv("GEMINI_MODEL") or model_name or DEFAULT_GEMINI_MODEL
+        env_base_url = os.getenv("GEMINI_BASE_URL") if prefer_env else ""
+        env_model = os.getenv("GEMINI_MODEL") if prefer_env else ""
+        self.base_url = (env_base_url or base_url or DEFAULT_GEMINI_BASE_URL).rstrip("/")
+        self.model_name = env_model or model_name or DEFAULT_GEMINI_MODEL
         self._opener = opener or urlopen
         self._sleep = sleeper or time.sleep
 

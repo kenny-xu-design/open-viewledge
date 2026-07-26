@@ -10,7 +10,7 @@ from ..schema_compat import require_supported_schema
 SECTIONS = (
     "metadata", "summary", "highlights", "prerequisites", "steps", "glossary",
     "thoughts", "action_items", "warnings", "chapters", "keyframes", "chat",
-    "user_notes", "source_materials",
+    "comment_insights", "user_notes", "source_materials",
 )
 
 PRESETS = {

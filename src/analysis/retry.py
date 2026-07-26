@@ -14,6 +14,7 @@ from ..domain.models import (
     utc_now,
 )
 from ..exporters import export_knowledge_package
+from ..exporters.analysis_markdown import render_profile_analysis
 from ..pipeline.context import PipelineContext
 from ..providers.llm.deepseek import DeepSeekProvider
 from ..transcripts import group_segments, read_jsonl
@@ -169,8 +170,8 @@ def _persist_package(context: PipelineContext) -> None:
     analysis = context.analysis
     if not analysis:
         return
-    if analysis.summary:
-        write_text(context.output_dir / "summary.md", "# 摘要\n\n" + analysis.summary.strip() + "\n")
+    if analysis.content or analysis.summary:
+        write_text(context.output_dir / "summary.md", "# 分析报告\n\n" + "\n".join(render_profile_analysis(analysis, heading_level=2)).strip() + "\n")
     if analysis.highlights:
         write_text(
             context.output_dir / "highlight_notes.md",

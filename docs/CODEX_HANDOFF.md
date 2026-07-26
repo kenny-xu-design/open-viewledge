@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-07-24
+Last updated: 2026-07-26
 
 ## Repository State
 
@@ -8,7 +8,7 @@ Last updated: 2026-07-24
 - Branch: `feat/v1.4-processing-pipeline`
 - Baseline commit: `52c1bb7` (`feat: add v1.4.1 cache-aware fast processing`)
 - Upstream v1.3.1 branch marker: `origin/feat/v1.3.1-cupertino-ui`
-- Scope: v1.4.2 visual pipeline, highlight snapshots, and Gemini video-conversation routing.
+- Scope: v1.4.3 finishing work including comments, Web API configuration, four analysis-profile contracts, and adaptive long-video segmentation.
 
 ## Completed
 
@@ -38,30 +38,33 @@ Last updated: 2026-07-24
 - Added explicit URL, Files, keyframe+text, and text-only chat route statuses and degradation reasons.
 - Extended `chat.json` with source-bound recovery and remote-file state while excluding credentials.
 - Added Web and Markdown rendering for relative highlight images and visible chat route status.
+- Added explicit public comment sync and independent comment-insight artifacts, with Web `评论区` / `高光片段` peer tabs.
+- Added local Web API configuration for DeepSeek/OpenAI-compatible and Gemini using process-memory API Keys.
+- Split `summary`, `tutorial`, `viral`, and `close-reading` into mode-specific `content` contracts under a shared analysis envelope.
+- Added adaptive segmentation policy routing, windowed map/reduce text analysis, coverage-gap metadata, and transcript-backed gap repair for long videos.
+- Restricted screenshot export to `tutorial + complete` step images under `assets/tutorial/`.
 
 ## Current Architecture Notes
 
-- The processing path remains serial, but its text result completes before optional visual stages.
+- The processing path remains serial at the pipeline level, but dense long videos can run multiple text-analysis windows inside `AnalysisService` and then reduce them into one `AnalysisResult`.
 - The stage list is fixed in `src/pipeline/stages.py:STAGES`.
 - Web starts a CLI subprocess in `src/web.py:_run_job()` and consumes JSONL events through `_handle_cli_output_line()`.
 - Local Web job storage in `src/job_store.py:JobStore` is not a durable worker queue.
 - CLI task storage in `src/cli_tasks.py:CliTaskStore` is a resumable invocation record, not stage-level recovery.
 - Gemini supports text, inline images, public YouTube URL input, and resumable Files API video references.
 - `src/analysis/vision.py:KeyframeAnalysisService` is called only after complete-mode local keyframe extraction.
-- Comments remain disabled; `src/main.py` only emits a compatibility warning for `--comments`.
+- Comments are explicit opt-in and remain separate from the main analysis result.
+- `analysis.json` now supports `segmentation.policy_version=adaptive-v2`; old packages without segmentation remain readable.
 
 ## Next Work Unit
 
-Stop after v1.4.2 review/commit. Do not start comments, ASR worker, queue, or batch work without a separate instruction.
+Stop after v1.4.3 review/commit. Do not start v1.4.4 ASR worker performance, queue, batch, CUDA, or Provider expansion without a separate instruction.
 
 ## Verification
 
-- Focused v1.4.2/Gemini/chat/export/pipeline/Web suite passes locally.
-- Full unit suite passes: 226 tests.
-- Python compileall, CLI/Web help, JavaScript syntax, and diff checks pass.
-- Browser checks at 1440×900, 1024×768, and 390×844 have no horizontal overflow; mocked highlight and degraded-route rendering pass.
-- The production FFmpeg WebP command was exercised successfully against a generated two-second video.
+- Adaptive segmentation is mock/fixture verified, including a 71-minute tutorial path that produces more than five chapters and more than three highlights with tutorial step hierarchy.
 - Gemini request contracts are mock verified only; no real API request or cost/quota claim has been made.
+- Real long-video API acceptance remains pending user-provided Provider configuration.
 
 ## Open Decisions
 
@@ -75,4 +78,4 @@ Stop after v1.4.2 review/commit. Do not start comments, ASR worker, queue, or ba
 
 - `52c1bb7` is the committed and pushed v1.4.1 baseline.
 - This Codex task did not run commit, push, merge, rebase, tag, checkout, or branch creation commands.
-- Current uncommitted changes are the v1.4.2 implementation, tests, and documentation.
+- Current uncommitted changes are the cumulative v1.4.3 implementation, tests, and documentation.

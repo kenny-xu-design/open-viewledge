@@ -1,6 +1,6 @@
 # Current State
 
-Last verified: 2026-07-24
+Last verified: 2026-07-26
 
 This document describes the implementation that currently exists. Planned work belongs in `ROADMAP.md`.
 
@@ -10,7 +10,7 @@ This document describes the implementation that currently exists. Planned work b
 - Stable baseline: `main` (`v1.2.1`)
 - Release commit and tag: `0583a89` / `v1.2.1`
 - Current development branch: `feat/v1.4-processing-pipeline`
-- Current implementation unit: `v1.4.2 visual pipeline, highlight snapshots, and Gemini video chat`
+- Current implementation unit: `v1.4.3 comment sync, API configuration, and analysis-profile output contracts`
 
 ## v1.4.0 processing contract
 
@@ -37,12 +37,43 @@ This document describes the implementation that currently exists. Planned work b
 
 ## v1.4.2 visual and video conversation
 
-- Text analysis now runs and writes `analysis.json` before optional frame, visual-analysis, and high-light snapshot stages.
-- Complete local-video tasks can create at most one lightweight WebP image per highlight under `assets/highlights/`; fast mode and `--no-frames` skip visual stages.
+- Text analysis now runs and writes `analysis.json` before optional frame, visual-analysis, and tutorial step screenshot stages.
+- Only `tutorial + complete` local-video tasks can create lightweight WebP images under `assets/tutorial/`; fast mode and `--no-frames` skip visual stages.
 - Highlight data keeps legacy `start` / `explanation` fields synchronized with v1.4 `timestamp` / `summary`, and records image source time and generation status.
 - Visual analysis uses existing keyframes and remains optional; missing Gemini configuration or visual failures do not remove text output.
 - Gemini Web chat routes through public YouTube URL, Files API, keyframes plus grounded text, then text-only fallback.
 - `chat.json` stores a stable `chat_id`, source fingerprint, Provider/model, selected route/status, optional remote file ID/expiry, recovery state, and local messages without credentials.
+
+## v1.4.3 comments
+
+- `--comments` is now an explicit active option instead of a warning-only compatibility flag.
+- Comment sync is skipped by default and runs only when enabled from CLI/Web.
+- YouTube, Bilibili, and generic `yt-dlp` comment adapters normalize public comments into `NormalizedComment`.
+- Comment sync writes `comments.json` and `comments.md`; comment insight writes `comment_insights.json` and `comment_insights.md`.
+- Comment stages are `comments_fetch` and `comments_analysis`; both are non-blocking soft-fail stages.
+- Comment timestamps render through existing preview seek targets.
+- Fast mode uses a smaller high-value comment bound; complete mode uses a larger bounded sync.
+- Comment opinions remain separate from `analysis.json` and the main factual summary.
+- Web displays the video-side feature region as peer tabs: `评论区` first, `高光片段` second.
+- Comment insight text is not injected into the left `全文总结` / `原文细读` result tabs.
+- Web exposes a local API configuration entry for DeepSeek/OpenAI-compatible and Gemini. API Keys are stored only in current process memory; status responses expose only masked Key tails and non-sensitive metadata.
+
+## v1.4.3 final-fix notes
+
+- DeepSeek HTTP 400 errors preserve sanitized upstream error details so unsupported model names such as retired aliases can be diagnosed from the UI/API response.
+- Web job list/detail responses snapshot job state before formatting, avoiding nested lock acquisition while polling.
+- Web job persistence writes a deterministic temporary JSON file and atomically replaces the store file, avoiding the observed Windows `tempfile.mkstemp` hang.
+- A real Bilibili knowledge package was repaired after model configuration correction and generated successful text analysis plus comment insight artifacts.
+- Final local QA on 2026-07-25 passed focused 99-test comment/Web/export coverage, full 237-test unit coverage, `compileall`, CLI/Web help, `node --check`, `git diff --check`, and a browser spot-check of the peer video-side feature tabs.
+- The API configuration increment adds a unified `ProviderConfigResolver` priority chain: Web session configuration, environment variables, then project defaults. Web-launched CLI tasks receive transient Provider environment overrides; Web in-process chat and retry calls receive Provider objects from the same resolver.
+- API configuration local QA on 2026-07-25 passed focused 127-test Provider/comment/Web/export/analysis coverage and full 249-test unit coverage. `compileall` was run with `PYTHONPYCACHEPREFIX` under `%TEMP%` because the repository `.local` cache path was not writable in this Windows session.
+- Adaptive long-video segmentation adds `SegmentationPolicyRouter`, semantic windows, reducer metadata, coverage-gap checks, and transcript-backed gap repair. Dense 30-minute-plus videos prefer window analysis; dense 60-minute-plus videos default to hierarchical Map/Reduce unless subtitles are sparse.
+- `analysis.json` includes `segmentation.policy_version=adaptive-v2`, duration bucket, strategy, target ranges, actual counts, coverage ratio, largest uncovered gap, reanalysis count, and quality notes.
+- Mock-backed 71-minute tutorial coverage verifies more than five chapters, more than three highlights, tutorial step hierarchy, and no unsupported 20–30 minute coverage gaps in the fixture.
+- Standard summary now renders six core sections: `一句话`, `摘要`, `亮点`, `思考`, `章节总结`, and renderer-owned `原文资料`. The former fixed `内容概览` / `核心观点` / `关键结论` split is retained only through legacy-field compatibility and is not used for new output.
+- `professional_terms` is collected in the same summary analysis response and may merge across long-video windows. The final Web/Markdown module appears between `摘要` and `亮点` only when 3–8 distinct, relevant terms have reliable non-placeholder explanations.
+- Segmentation routing remains independent from summary section order and professional-term visibility.
+- Standard-summary correction QA on 2026-07-26 passes 85 focused tests and all 271 unit tests, plus compileall, CLI/Web help, JavaScript syntax, and diff checks.
 
 ## v1.3.1 acceptance branch
 
@@ -75,7 +106,10 @@ This document describes the implementation that currently exists. Planned work b
 
 ## v1.2.1 export increment
 
-- Summary and tutorial profiles share a common schema; tutorial adds optional prerequisites, steps, glossary, action items, and warnings.
+- `summary`, `tutorial`, `viral`, and `close-reading` share a common analysis envelope but use mode-specific `content` structures. Legacy fields such as `summary`, `highlights`, `chapters`, and `steps` remain as compatibility fields for old knowledge packages.
+- The common analysis envelope records `schema_version`, `analysis_profile`, `processing_profile`, `source`, `generation.visual_context_used`, `generation.comments_included=false`, segmentation metadata, and warnings.
+- `tutorial + complete` is the only path that can generate and export tutorial step screenshots under `assets/tutorial/`. `summary`, `viral`, and `close-reading` do not export screenshots.
+- Main reports distinguish video facts from AI inference and use “未明确说明” for missing information instead of inventing details.
 - Profile priority is explicit selection, existing package profile, heuristic recognition, then summary fallback.
 - Markdown export can combine analysis, safe chat fields, unchanged `user_notes.md`, and source links without model calls.
 - Local Vault export writes `.md` atomically, never targets `.obsidian`, and returns an encoded Obsidian URI.
@@ -204,6 +238,10 @@ highlight_notes.md
 export_note.md
 chat.json
 user_notes.md
+comments.json
+comments.md
+comment_insights.json
+comment_insights.md
 audio/audio_16k.wav
 frames/*.jpg
 ```
@@ -298,8 +336,7 @@ Implemented:
 
 ## Disabled Or Historical Paths
 
-- Comment retrieval and analysis are disabled.
-- `--comments` remains only for old command compatibility and never enters a comment pipeline.
+- Comment sync is explicit opt-in and limited to public comments returned by the platform extractor; it is not a default processing stage.
 - Ollama is not an active backend.
 - `bilibili-cli` is not an active dependency or runtime command.
 - The unreachable pre-orchestrator branch, legacy adapters, Ollama summarizer, and legacy LLM adapter have been removed from active source.
@@ -315,10 +352,13 @@ Implemented:
 - Gemini default: `gemini-3.1-flash-lite`.
 - Environment variables can explicitly override defaults; unknown model names are passed through and never silently substituted.
 - Web runtime diagnostics show the effective provider and model without exposing Keys.
+- Web API configuration status returns Provider, Base URL, model, source, configured state, Key tail, and last test result; it never returns full API Keys.
+- Web API Keys are not persisted to `localStorage`, `sessionStorage`, `.local/web_jobs.json`, knowledge packages, Markdown, exports, or repository files.
 
 ## Known Risks
 
 - A browser closed before its final keepalive request is accepted can leave the latest keystrokes unsaved; normal edits are persisted after 800 ms.
 - The local JSON job store is intentionally single-process and is not a Scale queue.
+- Web session API Keys disappear after service restart. Users must re-enter them for real DeepSeek/Gemini tests after restarting the local Web server.
 - Manual viewport/theme/zoom browser acceptance is still pending for the v1.3.1 UI branch.
 - Archived documents can describe retired routes and must not be treated as current specifications.

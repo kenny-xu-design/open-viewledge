@@ -37,4 +37,16 @@ def normalize_analysis_entities(result: AnalysisResult) -> AnalysisResult:
                     item[field] = normalize_entities_text(item[field])
             if isinstance(item.get("tags"), list):
                 item["tags"] = [normalize_entities_text(tag) for tag in item["tags"]]
+    if isinstance(payload.get("content"), dict):
+        payload["content"] = _normalize_nested(payload["content"])
     return AnalysisResult.model_validate(payload)
+
+
+def _normalize_nested(value):
+    if isinstance(value, str):
+        return normalize_entities_text(value)
+    if isinstance(value, list):
+        return [_normalize_nested(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_nested(item) for key, item in value.items()}
+    return value

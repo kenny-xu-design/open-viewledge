@@ -32,6 +32,12 @@ from .job_store import Job, JobStore
 from .knowledge_validation import inspect_knowledge_package
 from .note_store import NoteConflictError, NoteStore
 from .processing_profiles import normalize_processing_profile
+from .provider_config import (
+    ProviderConfigResolver,
+    WebProviderConfigStore,
+    sanitize_provider_error,
+    test_provider_connection,
+)
 from .providers.llm import GeminiProvider, ProviderRegistry
 from .runtime_tools import runtime_tool_statuses
 from .utils import UserFacingError
@@ -58,13 +64,19 @@ LIBRARY_FILES = {
     "user_notes.md",
     "visual_insights.json",
     "visual_insights.md",
+    "comments.json",
+    "comments.md",
+    "comment_insights.json",
+    "comment_insights.md",
 }
 MEDIA_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"}
 
 JOB_STORE = JobStore(LOCAL_STATE_ROOT / "web_jobs.json")
 JOBS: dict[str, Job] = {job.id: job for job in JOB_STORE.load_jobs()}
 JOBS_LOCK = threading.RLock()
+JOB_ENV_OVERRIDES: dict[str, dict[str, str]] = {}
 LOGGER = logging.getLogger(__name__)
+WEB_PROVIDER_CONFIG = WebProviderConfigStore()
 
 
 class KnowledgeDeletionError(RuntimeError):
@@ -114,6 +126,8 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
     )
     if payload.get("noFrames"):
         command.append("--no-frames")
+    if payload.get("comments"):
+        command.append("--comments")
     if export != "none":
         command.extend(["--export", export])
     if payload.get("noSummary"):
@@ -142,6 +156,7 @@ def _clean_source_value(value: str) -> str:
 
 def start_job(payload: dict[str, Any]) -> Job:
     command = build_cli_command(payload)
+    env_overrides = ProviderConfigResolver(WEB_PROVIDER_CONFIG).env_overrides()
     job = Job(
         id=uuid.uuid4().hex[:12],
         command=command,
@@ -155,6 +170,8 @@ def start_job(payload: dict[str, Any]) -> Job:
         except OSError:
             JOBS.pop(job.id, None)
             raise
+        if env_overrides:
+            JOB_ENV_OVERRIDES[job.id] = env_overrides
     thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
     thread.start()
     return job
@@ -164,6 +181,8 @@ def _run_job(job: Job) -> None:
     before = _snapshot_output_dirs()
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
+    with JOBS_LOCK:
+        env.update(JOB_ENV_OVERRIDES.pop(job.id, {}))
     job.status = "running"
     job.started_at = time.time()
     _persist_job(job)
@@ -266,7 +285,7 @@ def runtime_status_payload() -> dict[str, Any]:
         "inProjectVenv": _is_project_venv_python(),
         "warning": _runtime_python_warning(),
         "tools": tools,
-        "providers": ProviderRegistry().statuses(),
+        "providers": ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses(),
     }
 
 
@@ -320,6 +339,73 @@ def _find_new_output_dir(before: dict[Path, float]) -> str:
         return ""
     newest = max(candidates, key=lambda path: path.stat().st_mtime)
     return str(newest.relative_to(PROJECT_ROOT)).replace("\\", "/")
+
+
+def _snapshot_job(job: Job) -> Job:
+    return Job(
+        id=job.id,
+        command=list(job.command),
+        schema_version=job.schema_version,
+        analysis_profile=job.analysis_profile,
+        processing_profile=job.processing_profile,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        status=job.status,
+        returncode=job.returncode,
+        logs=list(job.logs),
+        cli_task_id=job.cli_task_id,
+        knowledge_id=job.knowledge_id,
+        output_dir=job.output_dir,
+        error=job.error,
+    )
+
+
+def provider_config_payload() -> dict[str, Any]:
+    return {
+        "providers": ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses(),
+        "message": "API Key 默认仅用于当前本地运行会话，服务重启后需要重新填写。",
+    }
+
+
+def apply_provider_config(payload: dict[str, Any]) -> dict[str, Any]:
+    WEB_PROVIDER_CONFIG.set_config(
+        str(payload.get("provider") or ""),
+        api_key=str(payload["apiKey"]) if "apiKey" in payload else None,
+        base_url=str(payload["baseUrl"]) if "baseUrl" in payload else None,
+        model=str(payload["model"]) if "model" in payload else None,
+    )
+    return provider_config_payload()
+
+
+def clear_provider_config(provider: str) -> dict[str, Any]:
+    WEB_PROVIDER_CONFIG.clear(provider)
+    return provider_config_payload()
+
+
+def test_provider_config(payload: dict[str, Any]) -> dict[str, Any]:
+    provider_name = str(payload.get("provider") or "")
+    temporary_store = WebProviderConfigStore()
+    temporary_store.set_config(
+        provider_name,
+        api_key=str(payload.get("apiKey") or ""),
+        base_url=str(payload.get("baseUrl") or ""),
+        model=str(payload.get("model") or ""),
+    )
+    provider = ProviderConfigResolver(temporary_store).provider(provider_name)
+    result = test_provider_connection(provider)
+    result["testedAt"] = time.time()
+    WEB_PROVIDER_CONFIG.set_last_test(provider_name, result)
+    return {"test": result, **provider_config_payload()}
+
+
+def _with_api_config_hint(message: str) -> str:
+    text = sanitize_provider_error(message)
+    triggers = ("未配置", "api_key", "鉴权", "HTTP 400", "HTTP 401", "HTTP 403", "HTTP 429", "Gemini", "DeepSeek")
+    if any(item.lower() in text.lower() for item in triggers) and "API 配置" not in text:
+        return f"{text} 请前往“API 配置”检查 Provider、模型和 Key。"
+    return text
 
 
 def job_to_dict(job: Job) -> dict[str, Any]:
@@ -423,6 +509,8 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
         ]
     timeline_payload = _load_json_file(directory / "timeline.json")
     visual_insights = _load_json_file(directory / "visual_insights.json")
+    comments_payload = _load_json_file(directory / "comments.json")
+    comment_insights = _load_json_file(directory / "comment_insights.json")
     timeline = timeline_payload.get("items", []) if isinstance(timeline_payload, dict) else []
     if not isinstance(timeline, list):
         timeline = []
@@ -468,6 +556,8 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
         "manifest": manifest_view,
         "analysis": analysis,
         "visualInsights": visual_insights,
+        "comments": comments_payload.get("items", []) if isinstance(comments_payload.get("items"), list) else [],
+        "commentInsights": comment_insights,
         "inspection": inspection.to_dict(),
         "timeline": timeline,
         "files": files,
@@ -575,7 +665,13 @@ def chat_with_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("history 必须是数组。")
     question = str(payload.get("question") or "")
     requested_provider = str(payload.get("provider") or "auto")
-    registry = ProviderRegistry()
+    resolver = ProviderConfigResolver(WEB_PROVIDER_CONFIG)
+    registry = ProviderRegistry(
+        {
+            "deepseek": resolver.provider("deepseek"),
+            "gemini": resolver.provider("gemini"),
+        }
+    )
     visual_terms = ("画面", "截图", "界面", "按钮", "图表", "图像", "视觉")
     visual_question = any(term in question for term in visual_terms)
     provider = registry.resolve(
@@ -952,21 +1048,29 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/runtime":
             self._send_json(runtime_status_payload())
         elif parsed.path == "/api/providers":
-            self._send_json({"providers": ProviderRegistry().statuses()})
+            self._send_json({"providers": ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses()})
+        elif parsed.path == "/api/provider-config":
+            self._send_json(provider_config_payload())
         elif parsed.path.startswith("/api/library/"):
             self._handle_library_get(parsed.path)
         elif parsed.path == "/api/jobs":
             with JOBS_LOCK:
-                jobs = [job_to_dict(job) for job in sorted(JOBS.values(), key=lambda item: item.created_at, reverse=True)]
+                job_snapshots = [
+                    _snapshot_job(job)
+                    for job in sorted(JOBS.values(), key=lambda item: item.created_at, reverse=True)
+                ]
+            jobs = [job_to_dict(job) for job in job_snapshots]
             self._send_json({"jobs": jobs})
         elif parsed.path.startswith("/api/jobs/") or parsed.path.startswith("/api/tasks/"):
             job_id = parsed.path.rsplit("/", 1)[-1]
             with JOBS_LOCK:
                 job = JOBS.get(job_id)
+                job_snapshot = _snapshot_job(job) if job else None
             if not job:
                 self._send_json({"error": "任务不存在。"}, HTTPStatus.NOT_FOUND)
                 return
-            self._send_json({"job": job_to_dict(job)})
+            assert job_snapshot is not None
+            self._send_json({"job": job_to_dict(job_snapshot)})
         elif parsed.path.startswith("/output/"):
             self._send_output_file(parsed.path)
         else:
@@ -1004,14 +1108,18 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             try:
                 directory = resolve_library_dir(knowledge_id)
                 config = load_config(PROJECT_ROOT / "config.example.json")
-                reanalyze_knowledge_package(directory, config)
+                reanalyze_knowledge_package(
+                    directory,
+                    config,
+                    provider=ProviderConfigResolver(WEB_PROVIDER_CONFIG).provider("deepseek"),
+                )
                 self._send_json({"knowledge": load_knowledge_package(knowledge_id)})
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except FileNotFoundError:
                 self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
             except UserFacingError as exc:
-                self._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+                self._send_json({"error": _with_api_config_hint(str(exc))}, HTTPStatus.BAD_GATEWAY)
             except OSError:
                 self._send_json({"error": "重新分析结果写入失败，请检查输出目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -1036,9 +1144,23 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
             except UserFacingError as exc:
-                self._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+                self._send_json({"error": _with_api_config_hint(str(exc))}, HTTPStatus.BAD_GATEWAY)
             except Exception:
                 self._send_json({"error": "上下文对话请求失败。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/provider-config":
+            try:
+                self._send_json(apply_provider_config(self._read_json_body()))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/api/provider-config/test":
+            try:
+                self._send_json(test_provider_config(self._read_json_body()))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._send_json({"error": sanitize_provider_error(str(exc))}, HTTPStatus.BAD_GATEWAY)
             return
         if parsed.path.endswith("/capture-frame") and parsed.path.startswith("/api/library/"):
             self._send_json({"error": "服务端关键帧保存接口尚未接入"}, HTTPStatus.NOT_IMPLEMENTED)
@@ -1054,7 +1176,7 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
         except Exception as exc:
-            self._send_json({"error": f"创建任务失败：{exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            self._send_json({"error": _with_api_config_hint(f"创建任务失败：{exc}")}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"job": job_to_dict(job)}, HTTPStatus.CREATED)
 
@@ -1098,6 +1220,13 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/provider-config/"):
+            provider = unquote(parsed.path.rsplit("/", 1)[-1])
+            try:
+                self._send_json(clear_provider_config(provider))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
         if parsed.path == "/api/library":
             try:
                 payload = self._read_json_body()
@@ -1497,6 +1626,7 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div class="checks">
           <label><input id="noFrames" type="checkbox"> 跳过关键帧</label>
+          <label><input id="comments" type="checkbox"> 同步公开评论</label>
           <label><input id="noSummary" type="checkbox"> 只生成 transcript，不调用 LLM</label>
         </div>
         <button class="primary" type="submit">启动任务</button>
@@ -1542,6 +1672,7 @@ INDEX_HTML = r"""<!doctype html>
         lang: $("lang").value,
         export: $("exportMode").value,
         noFrames: $("noFrames").checked,
+        comments: $("comments").checked,
         noSummary: $("noSummary").checked
       };
       const response = await fetch("/api/jobs", {
