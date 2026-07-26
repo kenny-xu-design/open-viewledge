@@ -1,65 +1,122 @@
 # Video Summary Skill
 
-`video-summary-skill` 是一个本地优先的视频与音频知识提取工具。它把用户提供的本地媒体或公开在线视频转换为带时间戳、可追溯的知识包，并提供 Web 浏览和基于当前知识包字幕的 AI 对话。
+AI 驱动的视频内容解析与知识沉淀工具，支持 YouTube、B站和本地媒体，可生成结构化摘要、教程步骤、传播分析、深度精读、评论洞察及 Obsidian Markdown 知识包。
 
-当前稳定版本为 `1.2.1`；`feat/v1.3.1-cupertino-ui` 的验收版本为 `1.3.1`，已完成 Agent/CLI 契约、Web 工作台外壳、知识记录删除、预览时间戳和本地视频比例控制的功能验收实现。范围仍不包含 Scale 或 SaaS。
+**当前稳定版本：v1.4.3**
 
-`feat/v1.4-processing-pipeline` 正在开发 v1.4。v1.4.0 已建立 `processing_profile: fast | complete` 契约；v1.4.1 已接入字幕/转写/文本分析缓存和 fast 文本优先路径；v1.4.2 已把可选视觉分析和 Gemini 视频对话路由接入产品流程；v1.4.3 已接入显式启用的公开评论同步、独立评论区洞察、本地 Web API 配置入口、四种分析模式的专属输出结构，以及自适应长视频分层分析。默认 `complete` 在文本结果落盘后继续视觉阶段；`fast` 在无字幕时只请求音频，并跳过视觉阶段。评论同步失败不会影响主摘要。
+## 功能概览
 
-## 当前能力
+- 处理 YouTube、B站及其他 `yt-dlp` 支持的公开视频链接。
+- 处理本地视频和音频，并在没有平台字幕时使用本地语音转写。
+- 提供标准摘要、教程提取、爆款分析和深度精读四种分析模式。
+- 根据视频时长和内容密度生成章节、高光与时间戳。
+- 可选同步公开评论，并独立生成评论区洞察，不混入主报告。
+- 在 Web 中预览视频、跳转时间戳、进行 AI 对话和保存用户笔记。
+- 导出普通 Markdown、Obsidian 兼容知识包及结构化 JSON 数据。
 
-主处理链路：
+## 快速开始
+
+### Windows ZIP 用户
+
+准备条件：
+
+- Windows 10 或 Windows 11。
+- 已安装 Python 3.12，并勾选安装程序中的“Add Python to PATH”。
+- 首次启动时保持网络连接，以便安装 Python 依赖。
+
+启动步骤：
+
+1. 下载并完整解压 ZIP。
+2. 双击项目根目录中的 `start_web.bat`。
+3. 首次启动会自动创建项目专用的 `.venv` 运行环境并安装依赖。
+4. 浏览器打开后，进入“API 配置”填写自己的模型信息。
+5. 点击“新总结”，输入公开视频链接或选择本地媒体并开始处理。
+
+ZIP 用户不需要安装 Git 或 GitHub Desktop，不需要把项目放在固定目录。请将 ZIP 解压到任意普通、可写目录，不要直接在压缩包内部运行 `start_web.bat`。
+
+Web 默认地址：
 
 ```text
-本地视频/音频或公开 URL
--> LocalMediaSource / YtdlpSource
--> 优先获取平台字幕
--> 无字幕时 FFmpeg + 本地 faster-whisper
--> transcript.raw.jsonl / transcript.grouped.md / transcript.md
--> DeepSeek 结构化文本分析（长视频可按语义窗口 Map/Reduce）
--> complete 模式：本地视频关键帧、Gemini 可选视觉分析；tutorial 模式可生成教程步骤截图
--> 标准知识包
--> CLI / Web 查看
+http://127.0.0.1:5188/
 ```
 
-Web 对话链路：
+关闭启动脚本的命令窗口会停止本地 Web 服务。
 
-```text
-knowledge_id
--> 当前知识包的分组字幕
--> 本地 BM25 风格检索
--> DeepSeek 文本回答，或 Gemini 的 YouTube URL / Files API / 关键帧+文本 / 纯文本路由
--> 带时间戳引用的回答
--> chat.json
-```
+## API 配置
 
-已实现：
+项目当前支持：
 
-- 本地视频和音频输入。
-- YouTube、B站及其他 `yt-dlp` 支持的公开视频 URL。
-- 平台字幕优先，无字幕时进入本地 ASR。
-- 本地 `faster-whisper-small` 模型转写，不静默联网下载模型。
-- `summary`、`tutorial`、`viral`、`close-reading` 分析模式。
-- 自适应分段策略会根据时长、字幕密度、模式、处理模式和平台章节候选决定单轮或窗口化分层分析；长教程会区分一级教程阶段和二级操作步骤。
-- DeepSeek 结构化分析及 Pydantic 校验。
-- 标准知识包、时间轴、关键帧和兼容 Markdown 输出。
-- `tutorial + complete` 下可为关键教程步骤生成 `assets/tutorial/*.webp` 相对路径截图；`summary`、`viral` 和 `close-reading` 不导出截图。
-- 显式启用评论同步时，公开评论写入 `comments.json` / `comments.md`，评论区洞察写入 `comment_insights.json` / `comment_insights.md`，且不会混入主摘要。
-- AppShell Web 工作台、本地媒体播放、YouTube 官方 IFrame 预览和 B站官方 iframe 预览。
-- Web 提供本地“API 配置”入口，可在当前运行会话中填写 DeepSeek/OpenAI-compatible 和 Gemini 配置，用于真实摘要、评论洞察、视觉分析和对话测试。
-- 基于当前知识包的真实 AI 对话、时间戳引用，以及包含路由、远程文件恢复信息和本地消息的 `chat.json`。
-- 按知识包原子保存的 `user_notes.md`，以及包含用户笔记的 `export_note.md`。
-- 可在服务重启后恢复的本地 Web 任务历史；未完成进程会标记为 `interrupted`。
+- **DeepSeek / OpenAI Compatible**：用于文字摘要、评论洞察和 AI 对话。
+- **Gemini**：用于视频视觉理解和视频对话。
 
-尚未完成：
+启动 Web 后打开“API 配置”，填写对应的 API Key、模型名和服务地址，并先使用“测试连接”确认配置可用。
 
-- Gemini YouTube URL、Files API、关键帧与文本降级路由已通过 mock 测试，但尚未使用真实 Gemini 账号和固定公开视频完成线上验收。
-- 公开评论同步已通过 mock 和本地自动化测试；仍需使用固定 YouTube/B站公开视频验收真实平台评论可用性。
-- Obsidian 目前仅提供兼容 Markdown 文件，不具备 Vault 同步或双向管理。
+API Key 默认只用于当前本地运行会话。页面刷新后，只要后端服务仍在运行即可继续使用；服务重启后需要重新填写。完整密钥不会返回给页面，也不应写入 Git、知识包、Markdown、导出文件或问题反馈。
 
-评论同步仅读取公开评论；关闭评论、平台限制或提取器不返回评论时，会跳过评论产物。
+命令行和开发环境仍可使用项目根目录中被 Git 忽略的 `.env`；普通 Web 用户无需手动编辑 `.env`。
 
-## 合规边界
+## 创建视频任务
+
+1. 在 Web 左上角点击“新总结”。
+2. 输入 YouTube、B站或其他支持的公开视频链接，或选择本地媒体。
+3. 选择分析模式与处理模式。
+4. 按需开启公开评论同步。
+5. 点击“开始处理”，等待字幕、分析和知识包生成完成。
+
+平台没有字幕时，项目会尝试本地语音转写。处理本地媒体或无字幕视频通常需要 FFmpeg；评论关闭、平台限制或无法读取评论时，评论同步会跳过，但不影响主摘要。
+
+## 分析模式
+
+- **标准摘要**：适合资讯、访谈、介绍和一般知识视频。
+- **教程提取**：适合软件、编程、设计和制作教程。
+- **爆款分析**：适合热门视频、广告、短视频和自媒体内容。
+- **深度精读**：适合课程、演讲、长访谈和复杂观点内容。
+
+仅“教程提取 + 完整处理”会为关键教程步骤生成截图。标准摘要、爆款分析和深度精读不会导出分析截图。
+
+## 快速处理与完整处理
+
+- **快速处理**：优先生成字幕与文字分析，适合快速阅读；无字幕时只请求音频，不执行视觉分析或教程截图。
+- **完整处理**：在文字结果基础上继续执行可用的视觉分析；教程提取模式可生成关键步骤截图。
+
+长视频会根据时长和内容密度自动采用窗口化或分层分析，不需要用户手动设置分段。
+
+## 查看与导出结果
+
+处理完成后可以：
+
+- 在知识记录中查看摘要、章节、时间轴、字幕、高光和评论区。
+- 点击时间戳在当前预览播放器中跳转。
+- 使用右侧 AI 对话查询当前视频内容。
+- 保存个人笔记。
+- 预览、复制或下载 Markdown。
+- 生成 Obsidian 兼容知识包。
+
+评论区与高光片段是视频下方的同级功能；评论洞察不会写入左侧全文总结。Obsidian 导出目前是兼容 Markdown，不提供 Vault 双向同步。
+
+## 常见问题
+
+### 双击 `start_web.bat` 后无法启动
+
+确认已经完整解压 ZIP，并安装 Python 3.12。脚本必须位于项目根目录，旁边应能看到 `requirements.txt` 和 `src` 文件夹。
+
+### 首次启动时间较长
+
+首次运行需要创建 `.venv` 并从网络安装依赖，后续启动会直接复用已有环境。
+
+### 本地视频或无字幕视频无法处理
+
+这类任务通常需要 FFmpeg 和 FFprobe。可将其加入系统 `PATH`，或放入项目支持的本地工具目录。
+
+### AI 分析或对话失败
+
+打开 Web 中的“API 配置”，检查 API Key、Base URL 和模型名，并先执行“测试连接”。程序不会在错误提示中回显完整密钥。
+
+### 在线视频无法预览
+
+视频可能禁止嵌入、需要登录、存在地区限制，或平台 iframe 不支持完整控制。知识包、字幕和分析仍可能正常生成，可使用“在原网站打开”。
+
+## 安全说明
 
 - 只处理用户主动提供的本地文件或公开媒体链接。
 - 不绕过付费、访问控制、DRM 或平台权限。
@@ -67,7 +124,11 @@ knowledge_id
 - 不提交 API Key、Cookie、账号凭据、模型文件、媒体文件和生成结果。
 - 在线视频统一通过项目自身的 `yt-dlp` 适配路径处理，不依赖或调用 `bilibili-cli`。
 
-## 环境要求
+## 开发者说明
+
+以下内容面向需要使用 CLI、调试依赖、检查数据契约或参与开发的用户。普通 ZIP 用户只需按照“快速开始”使用 `start_web.bat`。
+
+### 环境要求
 
 - Windows 或兼容 Python 3.12 的环境。
 - Python 3.12。
@@ -130,7 +191,7 @@ FFPROBE_PATH=C:\tools\ffmpeg\bin\ffprobe.exe
 
 仅查看 `--help` 不需要 FFmpeg。实际进行音频提取、媒体规范化或关键帧生成时才解析 FFmpeg。FFprobe 状态会独立显示，便于诊断后续媒体探测能力。
 
-## API 配置
+### 环境变量配置
 
 复制示例内容到项目根目录的 `.env`，只在本机填写真实 Key：
 
@@ -151,17 +212,17 @@ FFPROBE_PATH=
 
 当前 CLI 结构化文本分析后端仅支持 `deepseek`。完整模式会在本地视频抽帧后尝试可选 Gemini 视觉分析；Web 选择 Gemini 对话时会依次尝试公开 YouTube URL、已有或新上传的本地视频、关键帧+文本和纯文本。视频上传仅在用户明确选择 Gemini 且知识包有本地视频时发生。
 
-Web 的“API 配置”入口用于本地真实交互测试。API Key 默认只保存在当前 Web 后端进程内存中，页面刷新后只要服务未重启即可继续使用；服务重启后需要重新填写。状态接口只返回是否已配置、配置来源、模型、Base URL 和 Key 尾号 4 位，不返回完整 Key。API Key 不写入 `localStorage`、`sessionStorage`、Web job store、知识包、Markdown、导出文件或仓库文件。
+Web 的“API 配置”入口用于本地交互。API Key 默认只保存在当前 Web 后端进程内存中，页面刷新后只要服务未重启即可继续使用；服务重启后需要重新填写。状态接口只返回是否已配置、配置来源、模型、Base URL 和 Key 尾号 4 位，不返回完整 Key。API Key 不写入 `localStorage`、`sessionStorage`、Web job store、知识包、Markdown、导出文件或仓库文件。
 
-## CLI
+### CLI
 
-v1.3 公开命令统一为：
+公开命令统一为：
 
 ```text
 analyze / inspect / export / resume / doctor / config
 ```
 
-所有命令支持 `--json`；长任务 `analyze`、`resume` 额外支持 `--jsonl`。stdout 只输出结果或 JSON，诊断与人工日志写入 stderr。旧的根级 `--url` / `--file` 用法在 v1.3 保留兼容并明确提示废弃。
+所有命令支持 `--json`；长任务 `analyze`、`resume` 额外支持 `--jsonl`。stdout 只输出结果或 JSON，诊断与人工日志写入 stderr。旧的根级 `--url` / `--file` 用法仅为兼容保留，并会明确提示废弃。
 
 查看帮助：
 
@@ -244,7 +305,7 @@ Obsidian 兼容 Markdown 副本：
 
 这里的 `obsidian` 表示生成兼容 Markdown 副本 `export_note.md`，不表示自动写入 Vault。通过 Web 保存的 `user_notes.md` 会合并到该兼容副本中。
 
-### CLI 参数
+#### CLI 参数
 
 - `--url`：公开在线视频 URL。
 - `--file`：本地媒体路径。
@@ -273,21 +334,23 @@ Obsidian 兼容 Markdown 副本：
 .\.venv\Scripts\python.exe -m src.main resume "<task-id>" --jsonl
 ```
 
-## Web UI
+### Web UI 技术说明
 
-推荐使用项目启动脚本：
-
-```powershell
-.\start_web.ps1
-```
-
-或：
+Windows ZIP 用户和普通本地用户推荐直接运行：
 
 ```bat
 start_web.bat
 ```
 
-等价命令：
+该脚本会从自身所在的仓库根目录启动，首次运行时检查 Python 3.12、创建 `.venv` 并安装依赖，不依赖 Git、分支名称或固定磁盘路径。
+
+已准备好开发环境时，也可以使用：
+
+```powershell
+.\start_web.ps1
+```
+
+或直接执行：
 
 ```powershell
 .\.venv\Scripts\python.exe -m src.web --host 127.0.0.1 --port 5188
@@ -326,9 +389,9 @@ B站预览使用官方 iframe。点击摘要、字幕或聊天引用中的时间
 
 本地视频预览默认使用原始比例和 `object-fit: contain`。播放器工具栏可切换原始比例、16:9、4:3、1:1、9:16，以及适应/填充显示模式；切换不会主动重置播放时间或暂停状态。
 
-“重新生成摘要”仅在分析失败或知识包分析状态异常时显示。使用前需在项目 `.env` 中配置 `DEEPSEEK_API_KEY`；重试不会重新下载媒体、提取字幕或生成关键帧。
+“重新生成摘要”仅在分析失败或知识包分析状态异常时显示。使用前需通过 Web“API 配置”或项目环境变量提供可用的 DeepSeek 配置；重试不会重新下载媒体、提取字幕或生成关键帧。
 
-## 分析类型与知识笔记导出
+### 数据契约与分析输出
 
 `summary`、`tutorial`、`viral` 和 `close-reading` 使用相同的外壳字段与各自专属的 `content` 结构。共同外壳记录 `schema_version`、`analysis_profile`、`processing_profile`、来源、生成信息、分段策略和警告；`generation.comments_included` 固定为 `false`，评论区洞察不会写入主报告。Profile 统一按“用户显式选择 → 知识包已有值 → 自动识别 → summary”解析，识别失败不会导致任务失败。
 
@@ -352,7 +415,7 @@ python -m src.main export --knowledge-id "<id>" --format obsidian --preset full 
 
 知识记录删除是永久操作。Web UI 会先显示可勾选标记，再要求在确认弹窗中确认；正在处理中的记录不会被删除。
 
-## 知识包结构
+### 知识包结构
 
 每个稳定知识包位于：
 
@@ -395,9 +458,9 @@ frames/*.jpg
 
 新知识包还会在 manifest 中明确记录 `analysis_status` 和 `analysis_error`。空 `analysis.json`、无有效字幕、无时间轴或缺少必需文件不会被视为成功知识包。
 
-## 常见错误
+### 开发者故障排查
 
-### 未找到 yt-dlp
+#### 未找到 yt-dlp
 
 确认使用项目虚拟环境：
 
@@ -411,7 +474,7 @@ frames/*.jpg
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### 未找到 FFmpeg
+#### 未找到 FFmpeg
 
 错误会说明缺少 `ffmpeg` 还是 `ffprobe`。可设置配置项、环境变量、PATH，或使用项目本地工具目录。例如：
 
@@ -422,11 +485,11 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 
 项目不会静默下载程序或修改系统 PATH。
 
-### 未找到本地 Whisper 模型
+#### 未找到本地 Whisper 模型
 
 项目不会自动联网下载。按照“环境要求”中的命令显式下载到 `models/faster-whisper-small`。
 
-### DeepSeek 未配置
+#### DeepSeek 未配置
 
 在被 Git 忽略的项目根目录 `.env` 中设置 `DEEPSEEK_API_KEY`。不要把 Key 粘贴到命令、聊天记录或仓库文件中。
 
@@ -434,11 +497,11 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 
 Web 端也可以打开“API 配置”检查 DeepSeek/OpenAI-compatible 的 API Key、Base URL 和 Model。测试连接只发送最小请求，不启动完整视频分析。
 
-### 在线视频无法预览
+#### 在线视频无法预览
 
 视频可能禁止嵌入、需要登录、受地区限制或平台 iframe 不提供控制能力。知识包、字幕和分析仍可正常查看；必要时使用“在原网站打开”。B站 iframe 的播放、倍速和时间跳转由播放器自身控制。
 
-## 测试
+### 测试
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover
@@ -447,9 +510,16 @@ Web 端也可以打开“API 配置”检查 DeepSeek/OpenAI-compatible 的 API 
 .\.venv\Scripts\python.exe -m src.web --help
 ```
 
-当前 `v1.3.1` 验收分支的 Web UI/API 聚焦测试为 78 项，覆盖 AppShell、Sidebar、Inspector、Divider、预览时间戳、本地视频比例和知识记录删除等行为。v1.2.1 基线包含 147 项单元测试；发布前仍需重新运行全量 `unittest discover`、`compileall`、`node --check` 和人工浏览器矩阵。
+前端脚本和 Git 差异检查：
 
-## 项目文档
+```powershell
+node --check src/web_ui/app.js
+git diff --check
+```
+
+发布前应运行全量测试、语法检查和人工浏览器验收；README 不记录易失效的历史测试数量。
+
+## 版本与文档
 
 - [变更记录](CHANGELOG.md)
 - [当前状态](docs/CURRENT_STATE.md)
