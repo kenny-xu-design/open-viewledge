@@ -12,6 +12,7 @@ def extract_audio(
     sample_seconds: int | None = None,
     *,
     ffmpeg_path: str | Path | None = None,
+    timeout_seconds: float = 600,
 ) -> Path:
     if not video_path.exists():
         raise UserFacingError(f"视频文件不存在：{video_path}")
@@ -34,7 +35,7 @@ def extract_audio(
     if sample_seconds:
         args.extend(["-t", str(sample_seconds)])
     args.append(str(wav_path))
-    run_command(args)
+    run_command(args, timeout=timeout_seconds)
     if not wav_path.exists():
         raise UserFacingError("FFmpeg 未能生成音频文件。")
     return wav_path

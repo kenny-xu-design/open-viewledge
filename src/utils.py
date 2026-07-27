@@ -24,20 +24,8 @@ class UserFacingError(Exception):
     """Error with a clear message intended for CLI users."""
 
 
-def is_timeout_error(exc: BaseException | str) -> bool:
-    text = str(exc).lower()
-    return isinstance(exc, TimeoutError) or any(
-        marker in text
-        for marker in ("timeout", "timed out", "超时", "请求时间过长")
-    )
-
-
-def is_timeout_error(exc: BaseException | str) -> bool:
-    text = str(exc).lower()
-    return isinstance(exc, TimeoutError) or any(
-        marker in text
-        for marker in ("timeout", "timed out", "超时", "请求时间过长")
-    )
+class ConfigRequiredError(UserFacingError):
+    """A required local dependency or user configuration is missing."""
 
 
 def is_timeout_error(exc: BaseException | str) -> bool:
@@ -89,7 +77,12 @@ def format_seconds(seconds: float | int | None) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
-def run_command(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def run_command(
+    args: list[str],
+    cwd: Path | None = None,
+    *,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             args,
@@ -100,12 +93,17 @@ def run_command(args: list[str], cwd: Path | None = None) -> subprocess.Complete
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=True,
+            timeout=timeout,
         )
     except FileNotFoundError as exc:
         raise UserFacingError(f"命令不存在：{args[0]}。请确认已安装并加入 PATH。") from exc
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
         raise UserFacingError(f"外部命令执行失败：{' '.join(args)}\n{detail}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"外部命令执行超时（{timeout:.0f} 秒）：{args[0]}"
+        ) from exc
 
 
 def write_text(path: Path, text: str) -> None:

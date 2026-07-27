@@ -270,6 +270,7 @@ class PipelineOrchestrator:
                     context.output_dir / "audio" / "audio_16k.wav",
                     sample_seconds=self.sample_seconds,
                     ffmpeg_path=self.config.ffmpeg_path,
+                    timeout_seconds=self.config.ffmpeg_timeout_seconds,
                 )
                 if self.asr_route == "cloud":
                     context.log("云端 ASR：Groq")

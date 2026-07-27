@@ -34,6 +34,13 @@ class AppConfig(BaseModel):
     asr_low_confidence_ratio_threshold: float = Field(default=0.2, ge=0, le=1)
     asr_gap_retry_seconds: float = Field(default=30.0, ge=5)
     asr_max_local_retries: int = Field(default=8, ge=0, le=50)
+    asr_gpu_detect_timeout_seconds: float = Field(default=5, gt=0, le=60)
+    asr_gpu_model_load_timeout_seconds: float = Field(default=45, gt=0, le=300)
+    asr_gpu_first_batch_timeout_seconds: float = Field(default=45, gt=0, le=300)
+    asr_transcribe_stall_timeout_seconds: float = Field(default=120, gt=0, le=1800)
+    asr_resource_wait_timeout_seconds: float = Field(default=300, gt=0, le=3600)
+    asr_max_concurrency: int = Field(default=1, ge=1, le=1)
+    ffmpeg_timeout_seconds: float = Field(default=600, gt=0, le=7200)
     cloud_asr_provider: str = "groq"
     cloud_asr_model: str = "whisper-large-v3-turbo"
     cloud_asr_timeout_seconds: int = Field(default=300, ge=1, le=3600)
@@ -99,6 +106,13 @@ def load_config(config_path: Path) -> AppConfig:
         ),
         "asr_gap_retry_seconds": os.getenv("ASR_GAP_RETRY_SECONDS", ""),
         "asr_max_local_retries": os.getenv("ASR_MAX_LOCAL_RETRIES", ""),
+        "asr_gpu_detect_timeout_seconds": os.getenv("ASR_GPU_DETECT_TIMEOUT_SECONDS", ""),
+        "asr_gpu_model_load_timeout_seconds": os.getenv("ASR_GPU_MODEL_LOAD_TIMEOUT_SECONDS", ""),
+        "asr_gpu_first_batch_timeout_seconds": os.getenv("ASR_GPU_FIRST_BATCH_TIMEOUT_SECONDS", ""),
+        "asr_transcribe_stall_timeout_seconds": os.getenv("ASR_TRANSCRIBE_STALL_TIMEOUT_SECONDS", ""),
+        "asr_resource_wait_timeout_seconds": os.getenv("ASR_RESOURCE_WAIT_TIMEOUT_SECONDS", ""),
+        "asr_max_concurrency": os.getenv("ASR_MAX_CONCURRENCY", ""),
+        "ffmpeg_timeout_seconds": os.getenv("FFMPEG_TIMEOUT_SECONDS", ""),
         "cloud_asr_provider": os.getenv("CLOUD_ASR_PROVIDER", ""),
         "cloud_asr_model": os.getenv("CLOUD_ASR_MODEL", ""),
         "cloud_asr_timeout_seconds": os.getenv("CLOUD_ASR_TIMEOUT_SECONDS", ""),

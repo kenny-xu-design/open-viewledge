@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from .domain.models import TranscriptSegment
-from .utils import UserFacingError
+from .utils import ConfigRequiredError, UserFacingError
 
 
 ASRProfile = Literal["fast", "balanced", "quality"]
@@ -43,7 +43,12 @@ _CUDA_RUNTIME_MISSING_MARKERS = (
     "cudnn64_",
     ".dll is not found",
 )
-GPU_PREFLIGHT_TIMEOUT_SECONDS = 60.0
+DEFAULT_GPU_DETECT_TIMEOUT_SECONDS = 5.0
+DEFAULT_GPU_MODEL_LOAD_TIMEOUT_SECONDS = 45.0
+DEFAULT_GPU_FIRST_BATCH_TIMEOUT_SECONDS = 45.0
+DEFAULT_TRANSCRIBE_STALL_TIMEOUT_SECONDS = 120.0
+DEFAULT_RESOURCE_WAIT_TIMEOUT_SECONDS = 300.0
+REQUIRED_MODEL_FILES = ("config.json", "model.bin", "tokenizer.json")
 _WINDOWS_CUDA_DLL_HANDLES: list[Any] = []
 
 
@@ -95,6 +100,11 @@ class ASRSettings:
     gap_retry_seconds: float = 30.0
     max_local_retries: int = 8
     fallback_enabled: bool = True
+    gpu_detect_timeout_seconds: float = DEFAULT_GPU_DETECT_TIMEOUT_SECONDS
+    gpu_model_load_timeout_seconds: float = DEFAULT_GPU_MODEL_LOAD_TIMEOUT_SECONDS
+    gpu_first_batch_timeout_seconds: float = DEFAULT_GPU_FIRST_BATCH_TIMEOUT_SECONDS
+    transcribe_stall_timeout_seconds: float = DEFAULT_TRANSCRIBE_STALL_TIMEOUT_SECONDS
+    resource_wait_timeout_seconds: float = DEFAULT_RESOURCE_WAIT_TIMEOUT_SECONDS
 
     @classmethod
     def from_config(cls, config: object | None) -> "ASRSettings":
@@ -122,6 +132,21 @@ class ASRSettings:
             gap_retry_seconds=float(getattr(config, "asr_gap_retry_seconds", 30.0)),
             max_local_retries=int(getattr(config, "asr_max_local_retries", 8)),
             fallback_enabled=bool(getattr(config, "asr_fallback_enabled", True)),
+            gpu_detect_timeout_seconds=float(
+                getattr(config, "asr_gpu_detect_timeout_seconds", DEFAULT_GPU_DETECT_TIMEOUT_SECONDS)
+            ),
+            gpu_model_load_timeout_seconds=float(
+                getattr(config, "asr_gpu_model_load_timeout_seconds", DEFAULT_GPU_MODEL_LOAD_TIMEOUT_SECONDS)
+            ),
+            gpu_first_batch_timeout_seconds=float(
+                getattr(config, "asr_gpu_first_batch_timeout_seconds", DEFAULT_GPU_FIRST_BATCH_TIMEOUT_SECONDS)
+            ),
+            transcribe_stall_timeout_seconds=float(
+                getattr(config, "asr_transcribe_stall_timeout_seconds", DEFAULT_TRANSCRIBE_STALL_TIMEOUT_SECONDS)
+            ),
+            resource_wait_timeout_seconds=float(
+                getattr(config, "asr_resource_wait_timeout_seconds", DEFAULT_RESOURCE_WAIT_TIMEOUT_SECONDS)
+            ),
         )
 
 
@@ -248,6 +273,39 @@ def probe_cuda() -> CudaProbe:
         memory_source=memory[3],
         error=memory[4],
     )
+
+
+def _probe_cuda_worker(results: Any) -> None:
+    try:
+        results.put(("ok", probe_cuda()))
+    except BaseException as exc:
+        results.put(("error", _safe_error(exc)))
+
+
+def _probe_cuda_bounded(timeout_seconds: float) -> CudaProbe:
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue(maxsize=1)
+    process = context.Process(target=_probe_cuda_worker, args=(results,))
+    process.start()
+    process.join(timeout_seconds)
+    try:
+        if process.is_alive():
+            process.terminate()
+            process.join(2)
+            if process.is_alive():
+                process.kill()
+                process.join(2)
+            return CudaProbe(error=f"CUDA 检测超过 {timeout_seconds:.0f} 秒，已终止")
+        try:
+            status, value = results.get(timeout=1)
+        except queue.Empty:
+            return CudaProbe(error=f"CUDA 检测进程异常退出（code={process.exitcode}）")
+        if status == "ok" and isinstance(value, CudaProbe):
+            return value
+        return CudaProbe(error=str(value))
+    finally:
+        results.close()
+        results.join_thread()
 
 
 def build_asr_candidates(settings: ASRSettings, probe: CudaProbe) -> list[ASRCandidate]:
@@ -446,7 +504,11 @@ class LocalASREngine:
         if not audio_path.is_file():
             raise UserFacingError(f"音频文件不存在：{audio_path}")
         explicit_cpu = settings.device.strip().lower().split(":", 1)[0] == "cpu"
-        probe = cuda_probe or (CudaProbe() if explicit_cpu else probe_cuda())
+        probe = cuda_probe or (
+            CudaProbe()
+            if explicit_cpu
+            else _probe_cuda_bounded(settings.gpu_detect_timeout_seconds)
+        )
         candidates = build_asr_candidates(settings, probe)
         duration = _audio_duration(audio_path)
         _log(log_callback, f"ASR Profile：{settings.profile}")
@@ -469,7 +531,40 @@ class LocalASREngine:
 
         errors: list[str] = []
         cuda_disabled_reason = ""
-        with self._concurrency, _cross_process_asr_lock(self.project_root):
+        _log(log_callback, "等待本地转写资源")
+        if not self._concurrency.acquire(timeout=settings.resource_wait_timeout_seconds):
+            raise TimeoutError("等待本地转写资源超时。")
+        try:
+            with _cross_process_asr_lock(
+                self.project_root,
+                timeout_seconds=settings.resource_wait_timeout_seconds,
+            ):
+                return self._transcribe_locked(
+                    audio_path,
+                    candidates=candidates,
+                    settings=settings,
+                    language=language,
+                    source=source,
+                    duration=duration,
+                    log_callback=log_callback,
+                )
+        finally:
+            self._concurrency.release()
+
+    def _transcribe_locked(
+        self,
+        audio_path: Path,
+        *,
+        candidates: list[ASRCandidate],
+        settings: ASRSettings,
+        language: str | None,
+        source: str,
+        duration: float,
+        log_callback: LogCallback | None,
+    ) -> ASROutcome:
+        errors: list[str] = []
+        cuda_disabled_reason = ""
+        try:
             for index, candidate in enumerate(candidates):
                 if candidate.device == "cuda" and cuda_disabled_reason:
                     continue
@@ -504,7 +599,9 @@ class LocalASREngine:
                     )
                     if next_candidate is not None:
                         _log(log_callback, f"→ 已切换 {next_candidate.short_label}")
-
+        finally:
+            if errors:
+                self._release_model()
         raise UserFacingError("本地 faster-whisper 转写失败：" + "；".join(errors[-3:]))
 
     def _run_candidate(
@@ -525,6 +622,7 @@ class LocalASREngine:
                 candidate,
                 language=language,
                 task=settings.task,
+                timeout_seconds=settings.gpu_first_batch_timeout_seconds,
             )
             if initial_batch_size < candidate.batch_size:
                 _log(
@@ -634,6 +732,7 @@ class LocalASREngine:
         *,
         language: str | None,
         task: str,
+        timeout_seconds: float = DEFAULT_GPU_FIRST_BATCH_TIMEOUT_SECONDS,
     ) -> int:
         model_ref = _model_reference(candidate.model, self.project_root)
         key = (model_ref, candidate.device_index, candidate.compute_type)
@@ -653,6 +752,7 @@ class LocalASREngine:
                 language=language,
                 task=task,
                 batch_size=batch_size,
+                timeout_seconds=timeout_seconds,
             )
             if status == "ok":
                 self._gpu_preflight_results[key] = ("ok", batch_size)
@@ -672,6 +772,7 @@ class LocalASREngine:
         language: str | None,
         task: str,
         batch_size: int,
+        timeout_seconds: float,
     ) -> tuple[str, str]:
         context = multiprocessing.get_context("spawn")
         results = context.Queue(maxsize=1)
@@ -689,13 +790,16 @@ class LocalASREngine:
             ),
         )
         process.start()
-        process.join(GPU_PREFLIGHT_TIMEOUT_SECONDS)
+        process.join(timeout_seconds)
         if process.is_alive():
             process.terminate()
             process.join(5)
+            if process.is_alive():
+                process.kill()
+                process.join(2)
             status = "error"
             message = (
-                f"GPU 首批推理超过 {GPU_PREFLIGHT_TIMEOUT_SECONDS:.0f} 秒，"
+                f"GPU 首批推理超过 {timeout_seconds:.0f} 秒，"
                 "已终止预检进程"
             )
         else:
@@ -1097,19 +1201,28 @@ def _model_reference(model: str, project_root: Path) -> str:
     value = Path(model).expanduser()
     if value.is_absolute() or any(separator in model for separator in ("/", "\\")):
         resolved = value.resolve()
-        if not (resolved / "model.bin").is_file():
-            raise UserFacingError(f"本地 Whisper 模型不完整：{resolved}")
+        missing = _missing_model_files(resolved)
+        if missing:
+            raise ConfigRequiredError(
+                "未安装本地 ASR 模型（config_required）："
+                + "、".join(missing)
+            )
         return str(resolved)
     candidates = (
         project_root / "models" / f"faster-whisper-{model}",
         project_root / "models" / model,
     )
     for candidate in candidates:
-        if (candidate / "model.bin").is_file():
+        if not _missing_model_files(candidate):
             return str(candidate.resolve())
-    raise UserFacingError(
-        f"未找到本地 faster-whisper-{model} 模型；已禁止自动下载。"
+    raise ConfigRequiredError(
+        f"未安装本地 ASR 模型（config_required）：faster-whisper-{model}；"
+        "已禁止自动下载。"
     )
+
+
+def _missing_model_files(path: Path) -> list[str]:
+    return [name for name in REQUIRED_MODEL_FILES if not (path / name).is_file()]
 
 
 def _query_nvidia_smi_memory(
@@ -1142,7 +1255,11 @@ def _query_nvidia_smi_memory(
 
 
 @contextmanager
-def _cross_process_asr_lock(project_root: Path):
+def _cross_process_asr_lock(
+    project_root: Path,
+    *,
+    timeout_seconds: float = DEFAULT_RESOURCE_WAIT_TIMEOUT_SECONDS,
+):
     lock_path = project_root / ".local" / "asr.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as handle:
@@ -1154,11 +1271,14 @@ def _cross_process_asr_lock(project_root: Path):
         if os.name == "nt":
             import msvcrt
 
+            deadline = time.monotonic() + timeout_seconds
             while True:
                 try:
                     msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                     break
                 except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("等待本地 ASR 文件锁超时。")
                     time.sleep(0.1)
             try:
                 yield
@@ -1168,7 +1288,15 @@ def _cross_process_asr_lock(project_root: Path):
         else:
             import fcntl
 
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("等待本地 ASR 文件锁超时。")
+                    time.sleep(0.1)
             try:
                 yield
             finally:

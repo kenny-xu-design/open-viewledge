@@ -344,7 +344,10 @@ def _convert_audio(
     if duration is not None:
         args += ["-t", f"{duration:.3f}"]
     args += ["-c:a", "flac", str(target)]
-    run_command(args)
+    run_command(
+        args,
+        timeout=float(getattr(config, "ffmpeg_timeout_seconds", 600)),
+    )
     if not target.is_file():
         raise UserFacingError("FFmpeg 未能生成云端转写音频。")
 
