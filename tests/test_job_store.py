@@ -18,6 +18,10 @@ class JobStoreTests(unittest.TestCase):
                 command=["python", "-m", "src.main"],
                 analysis_profile="tutorial",
                 processing_profile="fast",
+                analysis_requested=False,
+                analysis_status="skipped",
+                analysis_skip_reason="user_requested_transcript_only",
+                transcript_only=True,
                 status="success",
                 knowledge_id="demo",
                 output_dir="output/demo",
@@ -33,6 +37,13 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(reloaded[0].logs, ["完成"])
         self.assertEqual(reloaded[0].analysis_profile, "tutorial")
         self.assertEqual(reloaded[0].processing_profile, "fast")
+        self.assertFalse(reloaded[0].analysis_requested)
+        self.assertEqual(reloaded[0].analysis_status, "skipped")
+        self.assertEqual(
+            reloaded[0].analysis_skip_reason,
+            "user_requested_transcript_only",
+        )
+        self.assertTrue(reloaded[0].transcript_only)
 
     def test_running_job_becomes_interrupted_after_restart(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -77,6 +88,22 @@ class JobStoreTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(UserFacingError, "任务记录损坏"):
                 JobStore(path).load_jobs()
+
+    def test_legacy_no_summary_command_restores_transcript_only_reason(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "web_jobs.json"
+            path.write_text(
+                '{"schema_version":"1.0","jobs":[{"id":"legacy","command":["python","--no-summary"],"status":"success"}]}',
+                encoding="utf-8",
+            )
+            restored = JobStore(path).load_jobs()[0]
+        self.assertFalse(restored.analysis_requested)
+        self.assertTrue(restored.transcript_only)
+        self.assertEqual(restored.analysis_status, "skipped")
+        self.assertEqual(
+            restored.analysis_skip_reason,
+            "user_requested_transcript_only",
+        )
 
 
 if __name__ == "__main__":

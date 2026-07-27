@@ -2,7 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased] - 1.3.1
+## [1.4.3] - 2026-07-28
+
+- Added local faster-whisper `fast`, `balanced`, and `quality` routing with
+  bounded CUDA preflight, adaptive batches, quality guards, and safe CPU fallback.
+- Added Windows project-venv CUDA 12 cuBLAS/cuDNN dependencies and startup DLL
+  discovery for Web and spawned GPU preflight processes.
+- Replaced the `doctor` writable-directory `mkstemp` probe with a deterministic,
+  cleaned probe file to avoid hangs on synchronized/shared Windows directories.
+- Current release-candidate QA passes 312 unit tests, compileall, CLI/Web help,
+  `pip check`, JavaScript syntax and diff checks. Fixed Chinese, English and
+  mixed ASR samples complete with both small and turbo CUDA FP16. Default
+  balanced routing selects local turbo on the audited RTX 5060 Ti.
+- Fixed transcript-only state propagation so AI analysis is skipped only after
+  an explicit user request. Analysis failures and timeouts now remain distinct,
+  transcript and analysis readiness are evaluated independently, and existing
+  transcripts can run analysis without media download or ASR.
+- Added a knowledge-detail “仅运行 AI 分析” action and corrected transcript-only
+  completion copy so it no longer reports “总结完成”.
+- Added unified platform/Groq/local transcription routing, Groq audio chunking,
+  bounded cloud-to-GPU-to-CPU fallback, and per-record processing-duration timers.
 
 ### Added
 
@@ -35,10 +54,12 @@ All notable changes to this project are documented in this file.
 - Bilibili timestamp clicks stay inside the preview area by reloading the embedded player URL instead of opening the original source link.
 - v1.4.3 comment insights are shown in the video-side feature area as a peer tab beside AI highlights, instead of being appended to the main factual summary.
 - Web summary tasks, comment insights, Gemini visual analysis, Gemini video chat, and right-side AI chat now resolve Provider settings through the same Web session/environment/default priority chain.
-- `summary`, `tutorial`, `viral`, and `close-reading` no longer share the generic summary template; each mode renders a stable Chinese heading order and keeps video facts separate from AI inference.
+- All four analysis profiles now use the restored flat summary base: summary, conditional professional terms, highlights, thoughts, video chapter summary, and source materials.
+- `tutorial`, `viral`, and `close-reading` retain their requested mode-specific details, but render only populated modules instead of fixed “未明确说明” placeholders.
+- Long-video reduction preserves specialized `tutorial`, `viral`, and `close-reading` details and merges 3–8 reliable professional terms for every profile.
 - Screenshot export is restricted to `tutorial + complete`; `summary`, `viral`, and `close-reading` can use textual visual observations but do not export images.
 - Dense long videos no longer rely on one global Top list; window candidates are merged and checked for coverage before final chapters, highlights, and tutorial steps are written.
-- The v1.4.3 standard-summary report now uses `一句话`、`摘要`、`亮点`、`思考`、`章节总结`、`原文资料`; `专业术语` is a conditional same-response module shown between summary and highlights only for 3–8 reliable, core-related terms. Adaptive long-video routing remains responsible only for windowing, density guidance, and hierarchical reduction.
+- Adaptive long-video routing remains responsible only for windowing, density guidance, and hierarchical reduction; it does not define standard-summary heading order.
 
 ### Fixed
 
@@ -55,7 +76,9 @@ All notable changes to this project are documented in this file.
 - v1.4.3 browser spot-check confirms `评论区` and `高光片段` render as peer video-side tabs, with comment insights kept out of the left factual summary.
 - v1.4.3 Web API configuration increment adds Provider config tests; full local unit coverage now reports 249 tests.
 - v1.4.3 standard-summary correction passes 85 focused analysis/segmentation/export/Web UI tests and all 271 unit tests, plus compileall, CLI/Web help, JavaScript syntax, and diff checks.
-- Full release verification and manual browser acceptance remain required before tagging or merging.
+- Final stable source-package verification on 2026-07-28 passes all 327 unit
+  tests, compileall, CLI/Web help, JavaScript syntax, diff checks, and tracked
+  source credential scanning.
 
 ## [1.2.1] - 2026-07-20
 

@@ -8,7 +8,7 @@ from typing import Any
 
 from ..domain.models import KnowledgePackage
 from ..timestamps import build_timestamp_target, format_timestamp
-from .analysis_markdown import render_profile_analysis
+from .analysis_markdown import render_profile_details
 from .models import ExportSelection
 
 
@@ -24,7 +24,7 @@ def render_knowledge_markdown(
     source, analysis = package.source, package.analysis
     profile = (analysis.analysis_profile if analysis else source.analysis_profile) or "summary"
     sections = set(selection.normalized_sections())
-    summary_embeds_core = profile == "summary" and "summary" in sections
+    summary_embeds_core = False
     lines = ["---"]
     frontmatter = {
         "title": source.title,
@@ -45,7 +45,20 @@ def render_knowledge_markdown(
         if section == "metadata":
             _metadata(lines, package, profile)
         elif section == "summary" and analysis and (analysis.content or analysis.summary.strip()):
-            lines.extend(render_profile_analysis(analysis, heading_level=2, image_prefix=highlight_image_prefix))
+            if analysis.summary.strip():
+                lines.extend(["## 摘要", "", analysis.summary.strip(), ""])
+            _summary_terms(lines, analysis)
+            if profile != "summary":
+                lines.extend(render_profile_details(
+                    analysis,
+                    heading_level=2,
+                    image_prefix=highlight_image_prefix,
+                    exclude_keys={
+                        key
+                        for key in ("prerequisites", "steps")
+                        if key in sections
+                    },
+                ))
         elif section == "highlights" and not summary_embeds_core and analysis and analysis.highlights:
             lines.extend(["## 亮点", ""])
             for item in analysis.highlights:
@@ -119,6 +132,30 @@ def _metadata(lines: list[str], package: KnowledgePackage, profile: str) -> None
     if source.canonical_url or source.source_url:
         lines.append(f"> - 原视频：[打开视频]({source.canonical_url or source.source_url})")
     lines.extend([f"> - 分析类型：{profile}", ""])
+
+
+def _summary_terms(lines: list[str], analysis: object) -> None:
+    terms = []
+    terminology = getattr(analysis, "terminology", [])
+    if isinstance(terminology, list):
+        terms = [item for item in terminology if isinstance(item, dict)]
+    if not terms:
+        glossary = getattr(analysis, "glossary", [])
+        terms = [item.model_dump(mode="json") for item in glossary if hasattr(item, "model_dump")]
+    rendered = []
+    seen = set()
+    for item in terms:
+        term = str(item.get("term") or item.get("name") or "").strip()
+        definition = str(item.get("definition") or item.get("description") or "").strip()
+        identity = "".join(term.lower().split())
+        if not identity or not definition or identity in seen:
+            continue
+        seen.add(identity)
+        rendered.append(f"- **{term}**：{definition}")
+        if len(rendered) == 8:
+            break
+    if len(rendered) >= 3:
+        lines.extend(["## 专业术语", "", *rendered, ""])
 
 
 def _timed_items(lines: list[str], heading: str, items: list[Any], package: KnowledgePackage, knowledge_id: str, checkbox: bool = False) -> None:

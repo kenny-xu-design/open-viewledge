@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from .asr_runtime import transcribe_with_local_asr
 from .cleaner import format_transcript_segment
 from .domain.models import TranscriptSegment
 from .utils import UserFacingError, write_text
@@ -25,7 +26,24 @@ def transcribe_audio(
     if not audio_path.exists():
         raise UserFacingError(f"音频文件不存在：{audio_path}")
 
-    segments = transcribe_segments(audio_path, language=language, source="asr")
+    config = type(
+        "LegacyASRConfig",
+        (),
+        {
+            "asr_profile": "balanced",
+            "asr_model": model_name,
+            "asr_device": "",
+            "asr_compute_type": "",
+            "asr_task": "transcribe",
+            "whisper_model": model_name,
+        },
+    )()
+    segments = transcribe_segments(
+        audio_path,
+        language=language,
+        source="asr",
+        config=config,
+    )
     lines = [
         format_transcript_segment(item.start, item.end, item.text, source_url=source_url)
         for item in segments
@@ -39,39 +57,15 @@ def transcribe_segments(
     language: str | None = "zh",
     source: str = "asr",
     log_callback: Callable[[str], None] | None = None,
+    config: object | None = None,
 ) -> list[TranscriptSegment]:
     if not audio_path.exists():
         raise UserFacingError(f"音频文件不存在：{audio_path}")
-
-    local_model_path = LOCAL_WHISPER_MODEL_DIR.resolve()
-    if not (local_model_path / "model.bin").exists():
-        raise UserFacingError(LOCAL_WHISPER_MODEL_HINT)
-
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError as exc:
-        raise UserFacingError("未安装 faster-whisper。请先运行 pip install -r requirements.txt。") from exc
-
-    try:
-        if log_callback:
-            log_callback(f"使用本地 faster-whisper 模型：{local_model_path}")
-        model = WhisperModel(str(local_model_path), device="cpu", compute_type="int8")
-        segments, _info = model.transcribe(str(audio_path), language=language or None, vad_filter=True)
-        items = [
-            TranscriptSegment(
-                index=index,
-                start=float(segment.start),
-                end=float(segment.end),
-                text=segment.text.strip(),
-                language=language or "",
-                source=source,
-            )
-            for index, segment in enumerate(segments)
-            if segment.text.strip()
-        ]
-    except Exception as exc:
-        raise UserFacingError(f"faster-whisper 转写失败：{exc}") from exc
-
-    if not items:
-        raise UserFacingError("转写完成，但没有得到有效文本。")
-    return items
+    outcome = transcribe_with_local_asr(
+        audio_path,
+        config=config,
+        language=language,
+        source=source,
+        log_callback=log_callback,
+    )
+    return outcome.segments

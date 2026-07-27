@@ -1,16 +1,16 @@
 # Current State
 
-Last verified: 2026-07-26
+Last verified: 2026-07-28
 
 This document describes the implementation that currently exists. Planned work belongs in `ROADMAP.md`.
 
 ## Repository
 
 - Formal repository: `E:\AGT\git\video-summary-skill`
-- Stable baseline: `main` (`v1.2.1`)
-- Release commit and tag: `0583a89` / `v1.2.1`
-- Current development branch: `feat/v1.4-processing-pipeline`
-- Current implementation unit: `v1.4.3 comment sync, API configuration, and analysis-profile output contracts`
+- Current branch: `main`
+- Current stable source version: `v1.4.3`
+- Release commit and tag: not created in this workspace
+- Current implementation unit: `v1.4.3 stable source package`
 
 ## v1.4.0 processing contract
 
@@ -70,10 +70,12 @@ This document describes the implementation that currently exists. Planned work b
 - Adaptive long-video segmentation adds `SegmentationPolicyRouter`, semantic windows, reducer metadata, coverage-gap checks, and transcript-backed gap repair. Dense 30-minute-plus videos prefer window analysis; dense 60-minute-plus videos default to hierarchical Map/Reduce unless subtitles are sparse.
 - `analysis.json` includes `segmentation.policy_version=adaptive-v2`, duration bucket, strategy, target ranges, actual counts, coverage ratio, largest uncovered gap, reanalysis count, and quality notes.
 - Mock-backed 71-minute tutorial coverage verifies more than five chapters, more than three highlights, tutorial step hierarchy, and no unsupported 20–30 minute coverage gaps in the fixture.
-- Standard summary now renders six core sections: `一句话`, `摘要`, `亮点`, `思考`, `章节总结`, and renderer-owned `原文资料`. The former fixed `内容概览` / `核心观点` / `关键结论` split is retained only through legacy-field compatibility and is not used for new output.
-- `professional_terms` is collected in the same summary analysis response and may merge across long-video windows. The final Web/Markdown module appears between `摘要` and `亮点` only when 3–8 distinct, relevant terms have reliable non-placeholder explanations.
+- All four profiles now use the restored flat base fields `summary`, `terminology`, `highlights`, `thoughts`, and `chapters`; Web and Markdown render `摘要`, optional `专业术语`, populated mode-specific details, `亮点`, `思考`, `视频章节总结`, and renderer-owned `原文资料`.
+- `tutorial`, `viral`, and `close-reading` keep their requested specialized fields in `content`. Empty fields are hidden rather than rendered as “未明确说明”; historical v1.4.3 packages remain readable.
+- `terminology` is collected in the same analysis response and merges across long-video windows for every profile. The module appears after `摘要` only when 3–8 distinct, relevant terms have reliable non-placeholder explanations.
+- Long-video reduction merges specialized content instead of rebuilding it from generic fields, preventing loss of viral retention details, close-reading assumptions, and other mode-specific results.
 - Segmentation routing remains independent from summary section order and professional-term visibility.
-- Standard-summary correction QA on 2026-07-26 passes 85 focused tests and all 271 unit tests, plus compileall, CLI/Web help, JavaScript syntax, and diff checks.
+- Profile-structure correction QA on 2026-07-27 passes all 286 unit tests, plus compileall, JavaScript syntax, diff checks, and browser spot-checks of historical tutorial and viral packages.
 
 ## v1.3.1 acceptance branch
 
@@ -109,7 +111,7 @@ This document describes the implementation that currently exists. Planned work b
 - `summary`, `tutorial`, `viral`, and `close-reading` share a common analysis envelope but use mode-specific `content` structures. Legacy fields such as `summary`, `highlights`, `chapters`, and `steps` remain as compatibility fields for old knowledge packages.
 - The common analysis envelope records `schema_version`, `analysis_profile`, `processing_profile`, `source`, `generation.visual_context_used`, `generation.comments_included=false`, segmentation metadata, and warnings.
 - `tutorial + complete` is the only path that can generate and export tutorial step screenshots under `assets/tutorial/`. `summary`, `viral`, and `close-reading` do not export screenshots.
-- Main reports distinguish video facts from AI inference and use “未明确说明” for missing information instead of inventing details.
+- Main reports distinguish video facts from AI inference. Unsupported optional sections stay empty and are omitted instead of rendering placeholder text.
 - Profile priority is explicit selection, existing package profile, heuristic recognition, then summary fallback.
 - Markdown export can combine analysis, safe chat fields, unchanged `user_notes.md`, and source links without model calls.
 - Local Vault export writes `.md` atomically, never targets `.obsidian`, and returns an encoded Obsidian URI.
@@ -183,11 +185,37 @@ Not implemented:
 
 - Platform subtitles are preferred.
 - When no subtitle is available, media is acquired for transcription and normalized through FFmpeg.
-- ASR uses the local `models/faster-whisper-small` directory.
-- The model loader passes the resolved local path to `WhisperModel`.
+- Local ASR defaults to `ASR_PROFILE=balanced` and routes by CTranslate2 CUDA
+  availability, supported compute types, free VRAM, local model presence, model
+  loading, and an isolated first-batch inference probe.
+- The balanced candidate order is local turbo CUDA FP16, small CUDA FP16, small
+  CUDA INT8_FLOAT16, then small CPU INT8; `translate` excludes turbo.
+- `fast` favors small/batch throughput, while explicitly selected `quality`
+  prefers an already-installed large-v3 and otherwise turbo.
+- GPU OOM lowers batch size before changing compute type. Missing/broken CUDA
+  runtime libraries safely fall back to CPU without reacquiring media.
+- Windows installs CUDA 12 cuBLAS and cuDNN 9 into the project `.venv`.
+  `start_web.bat` adds those directories to the Web process, while the ASR
+  runtime registers and preloads them for spawned GPU preflight children.
+- The process keeps one cached model instance and serializes local ASR work.
+- Balanced/quality record segment quality metrics, retry bounded low-quality
+  time ranges once with beam 5 and temperature fallback, and persist remaining
+  low-confidence flags.
 - Missing `model.bin` causes a Chinese configuration error.
-- The project does not silently download a Whisper model.
+- The project uses `local_files_only` and does not silently download Whisper models.
 - Existing `transcript.raw.jsonl` can be reused when language and sample settings match.
+- Fixed Chinese, English, and mixed samples complete with both small and turbo
+  CUDA FP16 on the audited RTX 5060 Ti. Default balanced routing selects
+  `turbo + cuda:0 + float16 + batch 8 + beam 3` without fallback. Warm GPU
+  inference is faster than CPU, but CUDA cold initialization can dominate very
+  short clips.
+- Current release-candidate verification passes 312 unit tests, compileall,
+  CLI/Web help, JavaScript syntax, dependency consistency, and diff checks.
+- Web smoke acceptance on an isolated port confirms the root, runtime, library,
+  and jobs endpoints return HTTP 200 while using the project `.venv`.
+- `doctor --json` completes without hanging and reports the shared
+  `E:\ViewledgeData\knowledge` output directory writable outside the test
+  sandbox.
 
 Runtime discovery:
 
@@ -195,7 +223,8 @@ Runtime discovery:
 - Priority: explicit config, environment variable, PATH, project-local candidates, clear error.
 - `FFMPEG_PATH` and `FFPROBE_PATH` are supported.
 - Web runtime diagnostics report each tool independently.
-- The audited machine still does not expose either tool through PATH, but explicit configuration is supported.
+- The audited machine currently exposes both tools through PATH; explicit
+  configuration remains supported for ZIP and portable installations.
 
 ## Analysis
 

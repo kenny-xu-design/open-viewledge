@@ -24,6 +24,30 @@ class UserFacingError(Exception):
     """Error with a clear message intended for CLI users."""
 
 
+def is_timeout_error(exc: BaseException | str) -> bool:
+    text = str(exc).lower()
+    return isinstance(exc, TimeoutError) or any(
+        marker in text
+        for marker in ("timeout", "timed out", "超时", "请求时间过长")
+    )
+
+
+def is_timeout_error(exc: BaseException | str) -> bool:
+    text = str(exc).lower()
+    return isinstance(exc, TimeoutError) or any(
+        marker in text
+        for marker in ("timeout", "timed out", "超时", "请求时间过长")
+    )
+
+
+def is_timeout_error(exc: BaseException | str) -> bool:
+    text = str(exc).lower()
+    return isinstance(exc, TimeoutError) or any(
+        marker in text
+        for marker in ("timeout", "timed out", "超时", "请求时间过长")
+    )
+
+
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path

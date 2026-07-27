@@ -25,6 +25,17 @@ class Job:
     schema_version: str = SCHEMA_VERSION
     analysis_profile: str = "summary"
     processing_profile: ProcessingProfile = "complete"
+    analysis_requested: bool = True
+    analysis_status: str = "pending"
+    analysis_skip_reason: str = ""
+    analysis_provider: str = ""
+    analysis_model: str = ""
+    transcript_only: bool = False
+    transcript_status: str = "pending"
+    transcript_provider: str = ""
+    transcript_model: str = ""
+    transcript_route_requested: str = "cloud"
+    transcript_fallback_used: bool = False
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -54,12 +65,41 @@ class Job:
             processing_profile = normalize_processing_profile(value.get("processing_profile"))
         except ValueError as exc:
             raise UserFacingError(f"Web 任务记录损坏：{exc}") from exc
+        command = [
+            str(item)
+            for item in value.get("command", [])
+            if isinstance(item, (str, int, float))
+        ]
+        legacy_transcript_only = "--no-summary" in command
+        analysis_requested = bool(
+            value.get("analysis_requested", not legacy_transcript_only)
+        )
+        transcript_only = bool(
+            value.get("transcript_only", legacy_transcript_only)
+        )
         return cls(
             id=str(value.get("id") or ""),
-            command=[str(item) for item in value.get("command", []) if isinstance(item, (str, int, float))],
+            command=command,
             schema_version=schema_version,
             analysis_profile=str(value.get("analysis_profile") or "summary"),
             processing_profile=processing_profile,
+            analysis_requested=analysis_requested,
+            analysis_status=str(
+                value.get("analysis_status")
+                or ("skipped" if transcript_only else "pending")
+            ),
+            analysis_skip_reason=str(
+                value.get("analysis_skip_reason")
+                or ("user_requested_transcript_only" if transcript_only else "")
+            ),
+            analysis_provider=str(value.get("analysis_provider") or ""),
+            analysis_model=str(value.get("analysis_model") or ""),
+            transcript_only=transcript_only,
+            transcript_status=str(value.get("transcript_status") or "pending"),
+            transcript_provider=str(value.get("transcript_provider") or ""),
+            transcript_model=str(value.get("transcript_model") or ""),
+            transcript_route_requested=str(value.get("transcript_route_requested") or "cloud"),
+            transcript_fallback_used=bool(value.get("transcript_fallback_used", False)),
             created_at=float(value.get("created_at") or time.time()),
             updated_at=float(value.get("updated_at") or value.get("created_at") or time.time()),
             started_at=_optional_float(value.get("started_at")),

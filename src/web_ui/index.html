@@ -121,7 +121,7 @@
             <button class="icon-button small" id="copyResult" aria-label="复制当前内容"><svg><use href="#i-copy"/></svg></button>
             <button class="icon-button small" id="downloadResult" aria-label="下载当前内容"><svg><use href="#i-download"/></svg></button>
             <button class="icon-button small" id="exportResult" aria-label="导出 Markdown"><svg><use href="#i-external"/></svg></button>
-            <button class="icon-button small hidden" id="retryAnalysis" title="重新生成摘要" aria-label="重新生成摘要"><svg><use href="#i-refresh"/></svg></button>
+            <button class="quiet-button small hidden" id="retryAnalysis" title="仅运行 AI 分析" aria-label="仅运行 AI 分析"><svg><use href="#i-refresh"/></svg><span>仅运行 AI 分析</span></button>
             <button class="icon-button small" disabled title="分享功能待开发" aria-label="分享功能待开发"><svg><use href="#i-globe"/></svg></button>
           </div>
         </div>
@@ -238,11 +238,12 @@
         <label class="field"><span>处理模式</span><select class="ui-select" id="taskProcessingProfile"><option value="complete">complete（完整兼容）</option><option value="fast">fast（优先文本）</option></select></label>
         <label class="field"><span>AI 分析</span><input value="DeepSeek" disabled><input id="taskBackend" type="hidden" value="deepseek"></label>
         <label class="field"><span>字幕语言</span><select id="taskLanguage"><option value="">默认 zh</option><option value="zh">zh</option><option value="zh-Hans">zh-Hans</option><option value="en">en</option></select></label>
+        <label class="field"><span>字幕转写方式</span><select id="taskAsrRoute"><option value="cloud">云端快速转写</option><option value="local_gpu">本地 GPU</option><option value="local_cpu">本地 CPU</option></select><small>仅在视频没有可用平台字幕时生效。云端模式会把提取后的音频发送至第三方转写服务。</small></label>
         <label class="field"><span>字幕分组</span><select disabled><option>60秒（当前配置）</option></select></label>
         <label class="field"><span>样本秒数</span><input id="taskSampleSeconds" type="number" min="1" placeholder="留空处理完整媒体"></label>
         <label class="field"><span>导出</span><select id="taskExport"><option value="none">知识包</option><option value="obsidian">兼容 Obsidian</option></select></label>
       </div>
-      <div class="toggle-list"><label class="ui-toggle"><input id="taskFrames" type="checkbox" checked><span class="ui-toggle__track" aria-hidden="true"></span><span>生成关键帧</span></label><label><input id="taskComments" type="checkbox"><span>同步公开评论</span></label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
+      <div class="toggle-list"><label class="ui-toggle"><input id="taskFrames" type="checkbox" checked><span class="ui-toggle__track" aria-hidden="true"></span><span>生成关键帧</span></label><label><input id="taskComments" type="checkbox"><span>同步公开评论</span></label><label><input id="taskAsrFallback" type="checkbox" checked><span>失败时自动回退</span></label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
       <div class="runtime-info" id="taskRuntime" aria-live="polite">正在读取 Python 运行环境…</div>
       <div class="task-progress hidden" id="taskProgress" role="status" aria-live="polite"><div><span id="taskStatusText">正在创建任务…</span><span id="taskPercent"></span></div><div class="progress-track ui-progress" id="taskProgressBar" role="progressbar" aria-label="任务处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="ui-progress__bar" id="progressBar"></span></div><pre id="taskLogs"></pre></div>
       <section class="task-history" aria-labelledby="taskHistoryTitle">
@@ -295,6 +296,13 @@
           <label>Model<input id="geminiModel" type="text" autocomplete="off"></label>
           <div class="api-config-actions"><button type="button" class="quiet-button" data-provider-test="gemini">测试连接</button><button type="button" class="primary-button" data-provider-apply="gemini">应用配置</button><button type="button" class="secondary-button" data-provider-clear="gemini">清除配置</button></div>
           <p class="api-test-result" id="geminiTestResult"></p>
+        </section>
+        <section class="api-provider-card" data-provider-card="groq">
+          <header><strong>Groq Speech-to-Text</strong><span class="module-status" id="groqConfigStatus">未配置</span></header>
+          <label>API Key<div class="secret-field"><input id="groqApiKey" type="password" autocomplete="off" placeholder="输入后应用，已保存时仅显示尾号"><button type="button" class="quiet-button" data-toggle-secret="groqApiKey">显示</button></div><small id="groqKeyHint"></small></label>
+          <label>Model<input id="groqModel" type="text" autocomplete="off"></label>
+          <div class="api-config-actions"><button type="button" class="quiet-button" data-provider-test="groq">测试连接</button><button type="button" class="primary-button" data-provider-apply="groq">应用配置</button><button type="button" class="secondary-button" data-provider-clear="groq">清除配置</button></div>
+          <p class="api-test-result" id="groqTestResult"></p>
         </section>
       </div>
       <footer><button class="primary-button" value="close">完成</button></footer>

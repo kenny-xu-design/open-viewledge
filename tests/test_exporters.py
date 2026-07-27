@@ -26,6 +26,11 @@ class ExporterTests(unittest.TestCase):
         source = SourceRecord(source_type="online_video", platform="youtube", source_url="https://youtube.com/watch?v=abc", source_id="abc", title="测试视频", author="作者")
         analysis = AnalysisResult(
             summary="这是摘要。",
+            terminology=[
+                {"term": "术语一", "definition": "解释一"},
+                {"term": "术语二", "definition": "解释二"},
+                {"term": "术语三", "definition": "解释三"},
+            ],
             highlights=[HighlightItem(title="亮点", explanation="说明", tags=["知识"], image="assets/highlights/highlight_001.webp")],
             thoughts=[ThoughtQuestion(question="值得思考什么？")],
             chapters=[ChapterSummary(title="第一章", start=0, end=20, summary="章节总结", frame_path="frames/frame_0001.jpg", source_link="https://youtube.com/watch?v=abc&t=0s")],
@@ -49,8 +54,9 @@ class ExporterTests(unittest.TestCase):
 
     def test_index_contains_core_sections(self) -> None:
         text = self._render()
-        for heading in ("## 一句话", "## 摘要", "## 亮点", "## 思考", "## 章节总结", "## 原文资料"):
+        for heading in ("## 摘要", "## 专业术语", "## 亮点", "## 思考", "## 视频章节总结", "## 原文资料"):
             self.assertIn(heading, text)
+        self.assertNotIn("## 一句话", text)
         self.assertNotIn("## 内容概览", text)
         self.assertNotIn("## 关键结论", text)
 

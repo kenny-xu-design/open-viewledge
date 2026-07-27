@@ -435,6 +435,7 @@ button:disabled { color: var(--faint); cursor: not-allowed; }
 .record-copy { min-width: 0; }
 .record-copy strong { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; font-size: 13px; font-weight: 560; }
 .record-copy small { display: block; margin-top: 4px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.record-copy .record-processing-time { margin-top: 2px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .record-state { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); margin-top: 6px; }
 .record-state.completed { background: var(--green); }
 .record-state.running, .record-state.processing { background: var(--accent); }

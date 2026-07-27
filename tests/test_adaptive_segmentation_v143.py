@@ -40,21 +40,38 @@ class _WindowProvider:
         index = len(self.calls)
         if "analysis_profile='summary'" in prompt:
             payload = {
-                "content": {
-                    "one_sentence": "当前窗口说明了一个真实主题。",
-                    "summary": f"窗口 {index} 的背景、主要内容和结论。",
-                    "professional_terms": [{"term": f"术语 {index}", "definition": f"窗口 {index} 中的可靠解释"}],
-                    "highlights": [{"title": f"高光 {index}", "explanation": "值得回看", "start": start + 120}],
-                    "thoughts": [{"question": f"窗口 {index} 带来什么思考？"}],
-                    "chapter_summaries": [{"title": f"章节 {index}", "start": start, "end": end, "summary": "窗口内真实主题"}],
-                },
+                "summary": f"窗口 {index} 的背景、主要内容和结论。",
+                "terminology": [{"term": f"术语 {index}", "definition": f"窗口 {index} 中的可靠解释"}],
+                "highlights": [{"title": f"高光 {index}", "explanation": "值得回看", "start": start + 120}],
+                "thoughts": [{"question": f"窗口 {index} 带来什么思考？"}],
+                "chapters": [{"title": f"章节 {index}", "start": start, "end": end, "summary": "窗口内真实主题"}],
+            }
+        elif "analysis_profile='viral'" in prompt:
+            payload = {
+                "summary": f"窗口 {index} 的传播分析。",
+                "terminology": [{"term": f"术语 {index}", "definition": f"窗口 {index} 中的可靠解释"}],
+                "highlights": [{"title": f"高光 {index}", "explanation": "传播节点", "start": start + 120}],
+                "thoughts": [{"question": f"窗口 {index} 的传播机制是什么？"}],
+                "chapters": [{"title": f"章节 {index}", "start": start, "end": end, "summary": "窗口结构"}],
+                "content": {"retention_design": [f"窗口 {index} 的留存方法"]},
+            }
+        elif "analysis_profile='close-reading'" in prompt:
+            payload = {
+                "summary": f"窗口 {index} 的精读摘要。",
+                "terminology": [{"term": f"术语 {index}", "definition": f"窗口 {index} 中的可靠解释"}],
+                "highlights": [{"title": f"证据 {index}", "explanation": "论证证据", "start": start + 120}],
+                "thoughts": [{"question": f"窗口 {index} 的隐含前提是什么？"}],
+                "chapters": [{"title": f"章节 {index}", "start": start, "end": end, "summary": "逐章精读"}],
+                "content": {"implicit_assumptions": [f"窗口 {index} 的隐含假设"]},
             }
         else:
             payload = {
+                "summary": f"窗口 {index} 的教程摘要。",
+                "terminology": [{"term": f"术语 {index}", "definition": f"窗口 {index} 中的可靠解释"}],
+                "chapters": [{"id": f"ch{index:03d}", "title": f"阶段 {index}", "start": start, "end": end, "summary": "窗口内真实主题"}],
                 "content": {
                     "tutorial_goal": "完成长教程",
                     "workflow_overview": "按窗口提取真实阶段和步骤。",
-                    "chapter_summaries": [{"id": f"ch{index:03d}", "title": f"阶段 {index}", "start": start, "end": end, "summary": "窗口内真实主题"}],
                     "steps": [{"chapter_id": f"ch{index:03d}", "timestamp": start + 60, "title": f"步骤 {index}", "action": "执行真实操作", "expected_result": "得到阶段结果"}],
                 },
                 "highlights": [{"title": f"高光 {index}", "summary": "值得回看", "timestamp": start + 120}],
@@ -127,11 +144,27 @@ class AdaptiveSegmentationV143Tests(unittest.TestCase):
         )
 
         self.assertGreater(len(provider.calls), 1)
-        self.assertGreaterEqual(len(result.content["professional_terms"]), 3)
+        self.assertGreaterEqual(len(result.terminology), 3)
         self.assertGreater(len(result.highlights), 5)
         self.assertGreater(len(result.thoughts), 5)
         self.assertGreater(len(result.chapters), 5)
         self.assertEqual(result.segmentation.strategy, "semantic_map_reduce")
+
+    def test_specialized_window_reduce_preserves_details_and_common_base(self) -> None:
+        groups = _groups(2_700, every=300, dense=True)
+        for profile, key in (("viral", "retention_design"), ("close-reading", "implicit_assumptions")):
+            with self.subTest(profile=profile):
+                provider = _WindowProvider()
+                result = AnalysisService(provider).analyze(
+                    groups,
+                    profile,
+                    SimpleNamespace(source=SimpleNamespace(duration=2_700, chapters=[]), processing_profile="complete"),
+                )
+                self.assertGreater(len(result.content[key]), 1)
+                self.assertGreaterEqual(len(result.terminology), 3)
+                self.assertGreater(len(result.highlights), 5)
+                self.assertGreater(len(result.thoughts), 5)
+                self.assertGreater(len(result.chapters), 5)
 
     def test_coverage_guard_repairs_with_real_transcript_group_not_midpoint(self) -> None:
         groups = _groups(2_700, every=300, dense=True)

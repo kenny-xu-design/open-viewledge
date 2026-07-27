@@ -41,6 +41,23 @@ class TranscriptSegment(BaseModel):
     language: str = ""
     source: str = ""
     confidence: float | None = None
+    avg_logprob: float | None = None
+    compression_ratio: float | None = None
+    no_speech_prob: float | None = None
+    language_probability: float | None = None
+    low_confidence: bool = False
+    quality_flags: list[str] = Field(default_factory=list)
+
+
+class TranscriptResult(BaseModel):
+    provider: Literal["platform", "groq", "faster-whisper"]
+    model: str = ""
+    device: Literal["cloud", "cuda", "cpu"]
+    language: str = ""
+    duration_seconds: float = Field(default=0, ge=0)
+    segments: list[TranscriptSegment] = Field(default_factory=list)
+    fallback_used: bool = False
+    warnings: list[str] = Field(default_factory=list)
 
 
 class TranscriptGroup(BaseModel):
@@ -173,7 +190,7 @@ class SegmentationMetadata(BaseModel):
 
 
 class AnalysisResult(BaseModel):
-    status: Literal["success", "failed", "skipped"] = "skipped"
+    status: Literal["success", "failed", "timeout", "skipped"] = "skipped"
     error: str = ""
     schema_version: str = "2"
     one_sentence_summary: str = ""
@@ -248,8 +265,9 @@ def normalize_analysis_content(content: dict[str, Any], profile: str) -> dict[st
             continue
         if profile == "summary" and key in legacy_summary_keys:
             continue
-        if value not in (None, "", []):
-            built[key] = value
+        cleaned = _without_placeholders(value)
+        if cleaned not in (None, "", [], {}):
+            built[key] = cleaned
     if profile == "summary":
         built["professional_terms"] = _professional_terms(built.get("professional_terms"))
     if profile != "tutorial":
@@ -282,15 +300,24 @@ def sync_legacy_fields_from_content(data: dict[str, Any], profile: str) -> None:
         )
     if not data.get("summary"):
         data["summary"] = _content_summary_text(content, profile)
-    if profile == "tutorial" and not data.get("steps"):
-        data["steps"] = _content_steps(content)
+    if profile == "tutorial":
+        if not data.get("steps"):
+            data["steps"] = _content_steps(content)
+        if not data.get("prerequisites"):
+            data["prerequisites"] = [
+                {"text": item, "timestamp": None}
+                for item in _texts(content.get("prerequisites"))
+            ]
     if profile == "summary":
         if not data.get("highlights") and isinstance(content.get("highlights"), list):
             data["highlights"] = _highlight_dicts(content["highlights"])
         if not data.get("thoughts") and isinstance(content.get("thoughts"), list):
             data["thoughts"] = _thought_dicts(content["thoughts"])
-    if not data.get("chapters") and isinstance(content.get("chapter_summaries"), list):
-        data["chapters"] = _legacy_chapters(content["chapter_summaries"])
+    chapter_source = content.get("chapter_summaries")
+    if profile == "close-reading" and not chapter_source:
+        chapter_source = content.get("chapter_close_reading")
+    if not data.get("chapters") and isinstance(chapter_source, list):
+        data["chapters"] = _legacy_chapters(chapter_source)
 
 
 def _summary_content(payload: dict[str, Any]) -> dict[str, Any]:
@@ -310,7 +337,7 @@ def _summary_content(payload: dict[str, Any]) -> dict[str, Any]:
         "highlights": _highlight_dicts(payload.get("highlights") or payload.get("core_points")),
         "thoughts": _thought_dicts(payload.get("thoughts") or payload.get("actions_or_reflections")),
         "chapter_summaries": _chapter_dicts(payload.get("chapter_summaries") or payload.get("chapters")),
-        "factual_basis": _text(payload.get("factual_basis")) or "基于字幕内容。",
+        "factual_basis": _text(payload.get("factual_basis")),
         "ai_inferences": _texts(payload.get("ai_inferences")),
     }
 
@@ -318,7 +345,7 @@ def _summary_content(payload: dict[str, Any]) -> dict[str, Any]:
 def _tutorial_content(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "tutorial_goal": _text(payload.get("tutorial_goal") or payload.get("one_sentence_summary") or payload.get("summary")),
-        "final_result": _text(payload.get("final_result")) or "未明确说明",
+        "final_result": _text(payload.get("final_result")),
         "prerequisites": _texts(payload.get("prerequisites")),
         "tools_and_materials": _texts(payload.get("tools_and_materials") or payload.get("glossary")),
         "workflow_overview": _text(payload.get("workflow_overview") or payload.get("summary")),
@@ -328,8 +355,8 @@ def _tutorial_content(payload: dict[str, Any]) -> dict[str, Any]:
         "troubleshooting": _texts(payload.get("troubleshooting") or payload.get("warnings")),
         "acceptance_checklist": _texts(payload.get("acceptance_checklist") or payload.get("action_items")),
         "reusable_commands_or_templates": _texts(payload.get("reusable_commands_or_templates") or payload.get("actions")),
-        "limitations": _texts(payload.get("limitations")) or ["未明确说明"],
-        "factual_basis": _text(payload.get("factual_basis")) or "基于字幕中的操作描述。",
+        "limitations": _texts(payload.get("limitations")),
+        "factual_basis": _text(payload.get("factual_basis")),
         "ai_inferences": _texts(payload.get("ai_inferences")),
     }
 
@@ -337,9 +364,9 @@ def _tutorial_content(payload: dict[str, Any]) -> dict[str, Any]:
 def _viral_content(payload: dict[str, Any]) -> dict[str, Any]:
     return _without_images({
         "content_positioning": _text(payload.get("content_positioning") or payload.get("one_sentence_summary") or payload.get("summary")),
-        "target_audience": _texts(payload.get("target_audience")) or ["未明确说明"],
-        "title_and_cover_promise": _text(payload.get("title_and_cover_promise")) or "未明确说明",
-        "first_30_seconds_hook": _text(payload.get("first_30_seconds_hook")) or "未明确说明",
+        "target_audience": _texts(payload.get("target_audience")),
+        "title_and_cover_promise": _text(payload.get("title_and_cover_promise")),
+        "first_30_seconds_hook": _text(payload.get("first_30_seconds_hook")),
         "content_structure": _texts(payload.get("content_structure") or payload.get("chapters")),
         "retention_design": _texts(payload.get("retention_design")),
         "emotion_and_narrative": _texts(payload.get("emotion_and_narrative") or payload.get("thoughts")),
@@ -347,8 +374,8 @@ def _viral_content(payload: dict[str, Any]) -> dict[str, Any]:
         "interaction_and_distribution": _texts(payload.get("interaction_and_distribution") or payload.get("action_items")),
         "reusable_content_formula": _texts(payload.get("reusable_content_formula") or payload.get("actions")),
         "takeaways": _texts(payload.get("takeaways") or payload.get("highlights")),
-        "risks_and_limitations": _texts(payload.get("risks_and_limitations") or payload.get("warnings")) or ["未明确说明"],
-        "factual_basis": _text(payload.get("factual_basis")) or "基于字幕与可见内容节奏。",
+        "risks_and_limitations": _texts(payload.get("risks_and_limitations") or payload.get("warnings")),
+        "factual_basis": _text(payload.get("factual_basis")),
         "ai_inferences": _texts(payload.get("ai_inferences")),
     })
 
@@ -362,11 +389,11 @@ def _close_reading_content(payload: dict[str, Any]) -> dict[str, Any]:
         "evidence_assessment": _texts(payload.get("evidence_assessment") or payload.get("highlights")),
         "implicit_assumptions": _texts(payload.get("implicit_assumptions")),
         "counterarguments": _texts(payload.get("counterarguments") or payload.get("thoughts")),
-        "argument_limits": _texts(payload.get("argument_limits") or payload.get("warnings")) or ["未明确说明"],
-        "visual_evidence": _texts(payload.get("visual_evidence")) or ["未明确说明"],
+        "argument_limits": _texts(payload.get("argument_limits") or payload.get("warnings")),
+        "visual_evidence": _texts(payload.get("visual_evidence")),
         "extended_connections": _texts(payload.get("extended_connections") or payload.get("action_items")),
-        "facts_to_verify": _texts(payload.get("facts_to_verify")) or ["未明确说明"],
-        "factual_basis": _text(payload.get("factual_basis")) or "基于字幕论述与可见证据。",
+        "facts_to_verify": _texts(payload.get("facts_to_verify")),
+        "factual_basis": _text(payload.get("factual_basis")),
         "ai_inferences": _texts(payload.get("ai_inferences")),
     })
 
@@ -377,15 +404,17 @@ def _content_steps(payload: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     result: list[dict[str, Any]] = []
     for item in steps:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump(mode="json")
         if not isinstance(item, dict):
             continue
         result.append({
             "timestamp": item.get("timestamp"),
             "title": _text(item.get("title")) or "未命名步骤",
-            "objective": _text(item.get("objective")) or "未明确说明",
+            "objective": _text(item.get("objective")),
             "action": _text(item.get("action") or item.get("description")),
             "parameters": _texts(item.get("parameters")),
-            "expected_result": _text(item.get("expected_result")) or "未明确说明",
+            "expected_result": _text(item.get("expected_result")),
             "cautions": _texts(item.get("cautions")),
             "image": _text(item.get("image")),
             "image_source_timestamp": item.get("image_source_timestamp"),
@@ -461,7 +490,6 @@ def _professional_terms(value: object) -> list[dict[str, str]]:
         "普通词",
         "无关缩写",
     }
-    placeholders = {"未明确说明", "暂无", "暂无术语", "无", "none", "n/a"}
     for item in value:
         if hasattr(item, "model_dump"):
             item = item.model_dump(mode="json")
@@ -476,7 +504,7 @@ def _professional_terms(value: object) -> list[dict[str, str]]:
         definition = _text(item.get("definition") or item.get("description"))
         if not term or not definition:
             continue
-        if term.lower() in placeholders or definition.lower() in placeholders:
+        if _is_placeholder(term) or _is_placeholder(definition):
             continue
         identity = "".join(term.lower().split())
         if not identity or identity in seen:
@@ -550,7 +578,8 @@ def _texts(value: object) -> list[str]:
     if value is None:
         return []
     if isinstance(value, str):
-        return [value.strip()] if value.strip() else []
+        text = _text(value)
+        return [text] if text else []
     if isinstance(value, list):
         result = []
         for item in value:
@@ -565,14 +594,46 @@ def _texts(value: object) -> list[str]:
 def _text(value: object) -> str:
     if value is None:
         return ""
+    if hasattr(value, "model_dump"):
+        return _text(value.model_dump(mode="json"))
     if isinstance(value, str):
-        return value.strip()
+        text = value.strip()
+        return "" if _is_placeholder(text) else text
     if isinstance(value, dict):
         for key in ("text", "summary", "description", "explanation", "title", "term", "question", "definition"):
             if key in value and str(value[key]).strip():
                 return str(value[key]).strip()
         return ""
     return str(value).strip()
+
+
+def _without_placeholders(value: object) -> object:
+    if isinstance(value, str):
+        return "" if _is_placeholder(value) else value
+    if isinstance(value, list):
+        return [
+            cleaned
+            for item in value
+            if (cleaned := _without_placeholders(item)) not in (None, "", [], {})
+        ]
+    if isinstance(value, dict):
+        return {
+            key: cleaned
+            for key, item in value.items()
+            if (cleaned := _without_placeholders(item)) not in (None, "", [], {})
+        }
+    return value
+
+
+def _is_placeholder(value: object) -> bool:
+    return str(value or "").strip().lower() in {
+        "未明确说明",
+        "暂无",
+        "暂无术语",
+        "无",
+        "none",
+        "n/a",
+    }
 
 
 class ProviderAttempt(BaseModel):
@@ -640,9 +701,29 @@ class ProcessingManifest(BaseModel):
     completed_at: str = ""
     asr_provider: str = ""
     asr_model: str = ""
+    asr_profile: str = ""
+    asr_device: str = ""
+    asr_compute_type: str = ""
+    asr_batch_size: int = Field(default=0, ge=0)
+    asr_beam_size: int = Field(default=0, ge=0)
+    asr_low_confidence_segments: int = Field(default=0, ge=0)
+    asr_local_retries: int = Field(default=0, ge=0)
+    asr_audio_duration_seconds: float = Field(default=0, ge=0)
+    asr_transcription_seconds: float = Field(default=0, ge=0)
+    asr_rtf: float = Field(default=0, ge=0)
+    transcript_status: Literal["pending", "completed", "failed"] = "pending"
+    transcript_provider: str = ""
+    transcript_model: str = ""
+    transcript_route_requested: Literal["cloud", "local_gpu", "local_cpu"] = "cloud"
+    transcript_fallback_used: bool = False
     llm_provider: str = ""
     llm_model: str = ""
-    analysis_status: Literal["pending", "completed", "failed", "skipped"] = "pending"
+    analysis_requested: bool = True
+    analysis_status: Literal["pending", "completed", "failed", "timeout", "skipped"] = "pending"
+    analysis_skip_reason: str = ""
+    analysis_provider: str = ""
+    analysis_model: str = ""
+    transcript_only: bool = False
     analysis_error: str = ""
     prompt_version: str = "1"
     analysis_profile: str = "summary"

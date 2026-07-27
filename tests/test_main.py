@@ -44,6 +44,22 @@ class MainPipelineTests(unittest.TestCase):
         self.assertTrue(orchestrator.call_args.kwargs["comments_enabled"])
         orchestrator.return_value.run.assert_called_once_with("https://example.com/video", is_url=True)
 
+    def test_pipeline_receives_resolved_output_root(self) -> None:
+        package = SimpleNamespace(
+            output_dir=Path("output/demo"),
+            manifest=ProcessingManifest(task_id="task", status="completed"),
+            analysis=AnalysisResult(status="skipped"),
+        )
+        with (
+            patch("src.main.load_config", return_value=AppConfig(output_dir="output")),
+            patch("src.main.PipelineOrchestrator") as orchestrator,
+        ):
+            orchestrator.return_value.run.return_value = package
+            run_pipeline(url="https://example.com/video", no_summary=True)
+
+        config = orchestrator.call_args.args[0]
+        self.assertEqual(Path(config.output_dir), (Path(__file__).resolve().parents[1] / "output").resolve())
+
     def test_unexpected_pipeline_error_has_clean_exit(self) -> None:
         stderr = StringIO()
         with (

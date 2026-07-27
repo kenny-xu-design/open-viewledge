@@ -21,7 +21,6 @@ TUTORIAL_SECTIONS = [
     ("前置条件", "prerequisites", "list"),
     ("工具与材料", "tools_and_materials", "list"),
     ("流程总览", "workflow_overview", "text"),
-    ("教程阶段与章节", "chapter_summaries", "chapters"),
     ("完整教程步骤", "steps", "steps"),
     ("关键参数与设置", "key_parameters", "list"),
     ("常见错误与排查", "troubleshooting", "list"),
@@ -49,7 +48,6 @@ CLOSE_READING_SECTIONS = [
     ("核心命题", "core_thesis", "text"),
     ("关键概念", "key_concepts", "list"),
     ("论证地图", "argument_map", "list"),
-    ("逐章精读", "chapter_close_reading", "chapters"),
     ("证据评估", "evidence_assessment", "list"),
     ("隐含假设", "implicit_assumptions", "list"),
     ("可能的反方观点", "counterarguments", "list"),
@@ -62,53 +60,71 @@ CLOSE_READING_SECTIONS = [
 
 def render_profile_analysis(analysis: AnalysisResult, *, heading_level: int = 2, image_prefix: str = "") -> list[str]:
     profile = analysis.analysis_profile or "summary"
-    content = analysis.content or {}
-    if profile == "summary":
-        return _render_summary_analysis(analysis, heading_level)
+    lines: list[str] = []
+    if analysis.summary.strip():
+        lines.extend([f"{'#' * heading_level} 摘要", "", analysis.summary.strip(), ""])
+    terms = _summary_terms(analysis)
+    if terms:
+        lines.extend([f"{'#' * heading_level} 专业术语", "", *terms, ""])
+    if profile != "summary":
+        lines.extend(render_profile_details(analysis, heading_level=heading_level, image_prefix=image_prefix))
+    if analysis.highlights:
+        lines.extend([f"{'#' * heading_level} 亮点", ""])
+        lines.extend(_highlights([item.model_dump(mode="json") for item in analysis.highlights]))
+        lines.append("")
+    if analysis.thoughts:
+        lines.extend([f"{'#' * heading_level} 思考", ""])
+        lines.extend(_thoughts([item.model_dump(mode="json") for item in analysis.thoughts]))
+        lines.append("")
+    if analysis.chapters:
+        lines.extend([f"{'#' * heading_level} 视频章节总结", ""])
+        lines.extend(_chapters([item.model_dump(mode="json") for item in analysis.chapters]))
+        lines.append("")
+    if not lines:
+        if analysis.status == "timeout":
+            message = f"AI 分析超时：{analysis.error or '请求超过时限。'}"
+        elif analysis.status == "failed":
+            message = f"AI 分析失败：{analysis.error or '未生成有效分析结果。'}"
+        elif analysis.status == "skipped":
+            message = "AI 分析未运行。"
+        else:
+            message = "AI 分析没有可显示的摘要。"
+        lines.extend([f"{'#' * heading_level} 摘要", "", message, ""])
+    return lines
+
+
+def render_profile_details(
+    analysis: AnalysisResult,
+    *,
+    heading_level: int = 2,
+    image_prefix: str = "",
+    exclude_keys: set[str] | None = None,
+) -> list[str]:
+    profile = analysis.analysis_profile or "summary"
     sections = {
         "tutorial": TUTORIAL_SECTIONS,
         "viral": VIRAL_SECTIONS,
         "close-reading": CLOSE_READING_SECTIONS,
-    }.get(profile, SUMMARY_SECTIONS)
+    }.get(profile, [])
+    content = analysis.content or {}
     lines: list[str] = []
     for title, key, kind in sections:
+        if key in (exclude_keys or set()):
+            continue
         value = content.get(key)
         rendered = _render_value(kind, value, allow_images=profile == "tutorial", image_prefix=image_prefix)
         if not rendered:
-            rendered = ["未明确说明"]
+            continue
         lines.extend([f"{'#' * heading_level} {title}", "", *rendered, ""])
     _evidence(lines, content, heading_level)
     return lines
 
 
-def _render_summary_analysis(analysis: AnalysisResult, heading_level: int) -> list[str]:
-    content = analysis.content or {}
-    lines: list[str] = []
-    for title, key, kind in SUMMARY_SECTIONS:
-        value: object = content.get(key)
-        if key == "highlights" and not value:
-            value = [item.model_dump(mode="json") for item in analysis.highlights]
-        elif key == "thoughts" and not value:
-            value = [item.model_dump(mode="json") for item in analysis.thoughts]
-        elif key == "chapter_summaries" and not value:
-            value = [item.model_dump(mode="json") for item in analysis.chapters]
-        if kind == "terms":
-            rendered = _professional_terms(value)
-            if not rendered:
-                continue
-        else:
-            rendered = _render_value(kind, value, allow_images=False)
-            if not rendered:
-                rendered = ["未明确说明"]
-        if key == "summary":
-            factual_basis = _text(content.get("factual_basis"))
-            if factual_basis:
-                rendered.extend(["", f"> 视频事实依据：{factual_basis}"])
-        if key == "thoughts":
-            for inference in _texts(content.get("ai_inferences")):
-                rendered.append(f"- **AI 推断**：{inference}")
-        lines.extend([f"{'#' * heading_level} {title}", "", *rendered, ""])
-    return lines
+def _summary_terms(analysis: AnalysisResult) -> list[str]:
+    terminology = [item for item in analysis.terminology if isinstance(item, dict)]
+    if terminology:
+        return _professional_terms(terminology)
+    return _professional_terms([item.model_dump(mode="json") for item in analysis.glossary])
 
 
 def _render_value(kind: str, value: object, *, allow_images: bool, image_prefix: str = "") -> list[str]:
@@ -190,10 +206,10 @@ def _chapters(value: object) -> list[str]:
                 lines.append(f"- {text}")
             continue
         title = _text(item.get("title")) or "章节"
-        summary = _text(item.get("summary")) or "未明确说明"
+        summary = _text(item.get("summary"))
         start = item.get("start")
         prefix = f"[{format_timestamp(start)}] " if start is not None else ""
-        lines.append(f"- **{prefix}{title}**：{summary}")
+        lines.append(f"- **{prefix}{title}**" + (f"：{summary}" if summary else ""))
         children = item.get("children")
         if isinstance(children, list):
             for child in children:
@@ -223,8 +239,9 @@ def _steps(value: object, *, allow_images: bool, image_prefix: str = "") -> list
             ("action", "操作"),
             ("expected_result", "预期结果"),
         ):
-            text = _text(item.get(field)) or "未明确说明"
-            lines.append(f"- {label_text}：{text}")
+            text = _text(item.get(field))
+            if text:
+                lines.append(f"- {label_text}：{text}")
         for field, label_text in (("parameters", "参数"), ("cautions", "注意")):
             values = _texts(item.get(field))
             if values:

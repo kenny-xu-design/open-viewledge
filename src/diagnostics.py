@@ -3,12 +3,11 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .config import AppConfig
+from .config import AppConfig, resolve_output_root
 from .providers.llm import ProviderRegistry
 from .runtime_tools import runtime_tool_statuses
 
@@ -49,7 +48,7 @@ def run_doctor(config: AppConfig, *, project_root: Path) -> dict[str, Any]:
             )
         )
 
-    output_root = _resolve_project_path(config.output_dir, project_root)
+    output_root = resolve_output_root(config, project_root)
     checks.append(_writable_check("output_dir", output_root, required=True))
     checks.append(_writable_check("web_data_store", project_root / ".local", required=True))
 
@@ -79,19 +78,23 @@ def _check(name: str, available: bool, detail: str, *, required: bool) -> dict[s
 
 def _writable_check(name: str, path: Path, *, required: bool) -> dict[str, Any]:
     target = path.expanduser().resolve()
+    temporary_path = target / f".viewledge-doctor-{os.getpid()}.tmp"
     try:
         target.mkdir(parents=True, exist_ok=True)
-        handle, temporary_name = tempfile.mkstemp(prefix="doctor-", dir=target)
+        handle = os.open(
+            temporary_path,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+        )
         os.close(handle)
-        os.unlink(temporary_name)
+        temporary_path.unlink()
         return _check(name, True, str(target), required=required)
     except OSError as exc:
         return _check(name, False, f"{target}: {exc}", required=required)
-
-
-def _resolve_project_path(value: str, project_root: Path) -> Path:
-    path = Path(value).expanduser()
-    return path if path.is_absolute() else project_root / path
+    finally:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _whisper_model_path(config: AppConfig, project_root: Path) -> Path:

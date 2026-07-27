@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 import webbrowser
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,25 +27,30 @@ from .cli_contract import sanitize_message
 from .analysis.retry import reanalyze_knowledge_package
 from .chat import answer_question, prepare_grounded_request
 from .chat_store import ChatStore
-from .config import load_config
+from .config import load_config, resolve_output_root
+from .domain.models import AnalysisResult
 from .exporters import export_directory_to_vault, refresh_compatible_export, render_directory_export, selection_for_request
 from .job_store import Job, JobStore
-from .knowledge_validation import inspect_knowledge_package
+from .knowledge_validation import inspect_knowledge_package, meaningful_analysis
+from .network import apply_network_proxy_env
 from .note_store import NoteConflictError, NoteStore
 from .processing_profiles import normalize_processing_profile
 from .provider_config import (
     ProviderConfigResolver,
     WebProviderConfigStore,
     sanitize_provider_error,
+    test_groq_connection,
     test_provider_connection,
 )
 from .providers.llm import GeminiProvider, ProviderRegistry
 from .runtime_tools import runtime_tool_statuses
-from .utils import UserFacingError
+from .utils import UserFacingError, is_timeout_error
 from .video_chat import GeminiVideoChatRouter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_ROOT = PROJECT_ROOT / "output"
+NETWORK_PROXY_STATUS = apply_network_proxy_env()
+WEB_CONFIG = load_config(PROJECT_ROOT / "config.example.json")
+OUTPUT_ROOT = resolve_output_root(WEB_CONFIG, PROJECT_ROOT)
 WEB_UI_ROOT = Path(__file__).resolve().parent / "web_ui"
 LOCAL_STATE_ROOT = PROJECT_ROOT / ".local"
 SUPPORTED_MODES = {"summary", "tutorial", "viral", "close-reading"}
@@ -124,13 +130,22 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
             processing_profile,
         ]
     )
+    asr_route = str(payload.get("asr_route") or payload.get("asrRoute") or "cloud")
+    if asr_route not in {"cloud", "local_gpu", "local_cpu"}:
+        raise ValueError("asr_route 只能是 cloud、local_gpu 或 local_cpu。")
+    if "asr_route" in payload or "asrRoute" in payload:
+        command.extend(["--asr-route", asr_route])
+    fallback_value = payload.get("asr_fallback_enabled", payload.get("asrFallbackEnabled", True))
+    if not _explicit_true(fallback_value):
+        command.append("--no-asr-fallback")
     if payload.get("noFrames"):
         command.append("--no-frames")
     if payload.get("comments"):
         command.append("--comments")
     if export != "none":
         command.extend(["--export", export])
-    if payload.get("noSummary"):
+    analysis_requested, _skip_reason = _analysis_request_from_payload(payload)
+    if not analysis_requested:
         command.append("--no-summary")
     sample_seconds = payload.get("sampleSeconds")
     if sample_seconds not in (None, ""):
@@ -145,6 +160,24 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
     return command
 
 
+def _analysis_request_from_payload(payload: dict[str, Any]) -> tuple[bool, str]:
+    transcript_only = any(
+        _explicit_true(payload.get(key))
+        for key in ("noSummary", "skip_analysis", "transcribe_only", "transcriptOnly")
+    )
+    if payload.get("analysis_enabled") is not None:
+        transcript_only = transcript_only or not _explicit_true(payload.get("analysis_enabled"))
+    if payload.get("analysis_requested") is not None:
+        transcript_only = transcript_only or not _explicit_true(payload.get("analysis_requested"))
+    return (not transcript_only, "user_requested_transcript_only" if transcript_only else "")
+
+
+def _explicit_true(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _clean_source_value(value: str) -> str:
     cleaned = value.strip()
     quote_pairs = {('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’")}
@@ -156,12 +189,20 @@ def _clean_source_value(value: str) -> str:
 
 def start_job(payload: dict[str, Any]) -> Job:
     command = build_cli_command(payload)
+    analysis_requested, analysis_skip_reason = _analysis_request_from_payload(payload)
     env_overrides = ProviderConfigResolver(WEB_PROVIDER_CONFIG).env_overrides()
     job = Job(
         id=uuid.uuid4().hex[:12],
         command=command,
         analysis_profile=str(payload.get("mode") or "summary"),
         processing_profile=normalize_processing_profile(str(payload.get("processingProfile") or "complete")),
+        analysis_requested=analysis_requested,
+        analysis_status="pending" if analysis_requested else "skipped",
+        analysis_skip_reason=analysis_skip_reason,
+        transcript_only=not analysis_requested,
+        transcript_route_requested=str(
+            payload.get("asr_route") or payload.get("asrRoute") or "cloud"
+        ),
     )
     with JOBS_LOCK:
         JOBS[job.id] = job
@@ -244,6 +285,20 @@ def _handle_cli_output_line(job: Job, line: str) -> None:
         job.processing_profile = normalize_processing_profile(
             str(result.get("processing_profile") or job.processing_profile)
         )
+        analysis = result.get("analysis") if isinstance(result.get("analysis"), dict) else {}
+        job.analysis_requested = bool(result.get("analysis_requested", job.analysis_requested))
+        job.analysis_status = str(result.get("analysis_status") or analysis.get("status") or job.analysis_status)
+        job.analysis_skip_reason = str(result.get("analysis_skip_reason") or "")
+        job.analysis_provider = str(result.get("analysis_provider") or analysis.get("provider") or "")
+        job.analysis_model = str(result.get("analysis_model") or analysis.get("model") or "")
+        job.transcript_only = bool(result.get("transcript_only", not job.analysis_requested))
+        job.transcript_status = str(result.get("transcript_status") or job.transcript_status)
+        job.transcript_provider = str(result.get("transcript_provider") or "")
+        job.transcript_model = str(result.get("transcript_model") or "")
+        job.transcript_route_requested = str(
+            result.get("transcript_route_requested") or job.transcript_route_requested
+        )
+        job.transcript_fallback_used = bool(result.get("transcript_fallback_used", False))
     elif event == "task_failed" and isinstance(payload.get("error"), dict):
         job.error = str(payload["error"].get("message") or "")
     stage = str(payload.get("stage") or "")
@@ -257,6 +312,12 @@ def _handle_cli_output_line(job: Job, line: str) -> None:
 def _append_runtime_logs(job: Job) -> None:
     _append_log(job, f"当前 Python 路径：{sys.executable}")
     _append_log(job, f"当前工作目录：{PROJECT_ROOT}")
+    _append_log(job, f"知识包目录：{OUTPUT_ROOT}")
+    if NETWORK_PROXY_STATUS.enabled:
+        _append_log(
+            job,
+            f"网络代理：{NETWORK_PROXY_STATUS.endpoint}（{NETWORK_PROXY_STATUS.source}）",
+        )
     warning = _runtime_python_warning()
     if warning:
         _append_log(job, warning)
@@ -282,6 +343,8 @@ def runtime_status_payload() -> dict[str, Any]:
         "version": __version__,
         "pythonExecutable": sys.executable,
         "projectRoot": str(PROJECT_ROOT),
+        "outputRoot": str(OUTPUT_ROOT),
+        "network": NETWORK_PROXY_STATUS.public_payload(),
         "inProjectVenv": _is_project_venv_python(),
         "warning": _runtime_python_warning(),
         "tools": tools,
@@ -338,7 +401,7 @@ def _find_new_output_dir(before: dict[Path, float]) -> str:
     if not candidates:
         return ""
     newest = max(candidates, key=lambda path: path.stat().st_mtime)
-    return str(newest.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    return _display_output_dir(newest)
 
 
 def _snapshot_job(job: Job) -> Job:
@@ -393,10 +456,15 @@ def test_provider_config(payload: dict[str, Any]) -> dict[str, Any]:
         base_url=str(payload.get("baseUrl") or ""),
         model=str(payload.get("model") or ""),
     )
-    provider = ProviderConfigResolver(temporary_store).provider(provider_name)
-    result = test_provider_connection(provider)
+    resolver = ProviderConfigResolver(temporary_store)
+    normalized_provider = resolver.resolve(provider_name).provider
+    if normalized_provider == "groq":
+        result = test_groq_connection(resolver.resolve("groq"))
+    else:
+        provider = resolver.provider(normalized_provider)
+        result = test_provider_connection(provider)
     result["testedAt"] = time.time()
-    WEB_PROVIDER_CONFIG.set_last_test(provider_name, result)
+    WEB_PROVIDER_CONFIG.set_last_test(normalized_provider, result)
     return {"test": result, **provider_config_payload()}
 
 
@@ -412,13 +480,13 @@ def job_to_dict(job: Job) -> dict[str, Any]:
     output_files: list[dict[str, str]] = []
     output_available = False
     if job.output_dir:
-        output_path = (PROJECT_ROOT / job.output_dir).resolve()
-        if output_path.exists():
+        output_path = _resolve_output_dir_reference(job.output_dir)
+        if output_path.exists() and _is_within_output_root(output_path):
             output_available = True
             output_files = [
                 {
                     "name": path.name,
-                    "url": "/" + str(path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+                    "url": _output_file_url(path),
                 }
                 for path in sorted(output_path.iterdir())
                 if path.is_file()
@@ -433,14 +501,96 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "status": job.status,
         "analysisProfile": job.analysis_profile,
         "processingProfile": job.processing_profile,
+        "analysisRequested": job.analysis_requested,
+        "analysisStatus": job.analysis_status,
+        "analysisSkipReason": job.analysis_skip_reason,
+        "analysisProvider": job.analysis_provider,
+        "analysisModel": job.analysis_model,
+        "transcriptOnly": job.transcript_only,
+        "transcriptStatus": job.transcript_status,
+        "transcriptProvider": job.transcript_provider,
+        "transcriptModel": job.transcript_model,
+        "transcriptRouteRequested": job.transcript_route_requested,
+        "transcriptFallbackUsed": job.transcript_fallback_used,
         "returncode": job.returncode,
         "cliTaskId": job.cli_task_id,
         "logs": job.logs,
         "knowledgeId": job.knowledge_id if output_available else "",
-        "outputDir": job.output_dir if output_available else "",
+        "outputDir": _display_output_dir(output_path) if output_available else "",
         "outputFiles": output_files,
         "error": job.error,
     }
+
+
+def _resolve_output_dir_reference(value: str) -> Path:
+    path = Path(value).expanduser()
+    return path.resolve() if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+
+
+def _display_output_dir(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    except ValueError:
+        return str(resolved)
+
+
+def _is_within_output_root(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(OUTPUT_ROOT.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _output_file_url(path: Path) -> str:
+    output_root = OUTPUT_ROOT.resolve()
+    relative = path.resolve().relative_to(output_root).as_posix()
+    return "/output/" + quote(relative, safe="/")
+
+
+def _processing_timing(manifest: dict[str, Any]) -> tuple[int | None, float | None, bool]:
+    stored_duration = manifest.get("full_completion_duration_ms")
+    if isinstance(stored_duration, (int, float)) and stored_duration >= 0:
+        return int(stored_duration), _timestamp_ms(manifest.get("created_at")), False
+
+    started_at = _parse_datetime(manifest.get("created_at"))
+    completed_at = _parse_datetime(manifest.get("completed_at"))
+    status = str(manifest.get("status") or "")
+    is_live = status in {"created", "running", "processing"}
+    if started_at and (completed_at or is_live):
+        end = datetime.now(timezone.utc) if is_live else completed_at
+        assert end is not None
+        return max(0, int((end - started_at).total_seconds() * 1000)), started_at.timestamp() * 1000, is_live
+
+    metrics = manifest.get("stage_metrics")
+    if isinstance(metrics, dict):
+        total = sum(
+            float(metric.get("duration_ms") or 0)
+            for metric in metrics.values()
+            if isinstance(metric, dict)
+        )
+        if total > 0:
+            return int(total), _timestamp_ms(manifest.get("created_at")), False
+    return None, _timestamp_ms(manifest.get("created_at")), False
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _timestamp_ms(value: Any) -> float | None:
+    parsed = _parse_datetime(value)
+    return parsed.timestamp() * 1000 if parsed else None
 
 
 def list_library_items() -> list[dict[str, Any]]:
@@ -455,9 +605,19 @@ def list_library_items() -> list[dict[str, Any]]:
         source = manifest.get("source") if isinstance(manifest.get("source"), dict) else metadata
         analysis = _load_json_file(directory / "analysis.json")
         inspection = inspect_knowledge_package(directory)
+        transcript_ready = inspection.transcript_segments > 0
+        analysis_ready = (
+            inspection.analysis_status == "success"
+            and meaningful_analysis(analysis)
+        )
         display_status = manifest.get("status") or ("completed" if (directory / "transcript.md").exists() else "unknown")
         if inspection.level == "invalid" and str(display_status).startswith("completed"):
             display_status = "invalid"
+        elif transcript_ready and not analysis_ready and str(manifest.get("analysis_status")) == "skipped":
+            display_status = "transcript_completed"
+        processing_duration_ms, processing_started_at, processing_timing_live = (
+            _processing_timing(manifest)
+        )
         items.append(
             {
                 "id": directory.name,
@@ -470,10 +630,16 @@ def list_library_items() -> list[dict[str, Any]]:
                 "currentStage": manifest.get("current_stage") or "",
                 "updatedAt": directory.stat().st_mtime,
                 "hasAnalysis": bool(analysis.get("summary") or analysis.get("highlights") or analysis.get("chapters")),
+                "transcriptReady": transcript_ready,
+                "analysisReady": analysis_ready,
                 "analysisStatus": inspection.analysis_status,
+                "analysisSkipReason": str(manifest.get("analysis_skip_reason") or ""),
                 "analysisProfile": manifest.get("analysis_profile") or "summary",
                 "processingProfile": manifest.get("processing_profile") or "complete",
                 "firstReadableResultDurationMs": manifest.get("first_readable_result_duration_ms"),
+                "processingDurationMs": processing_duration_ms,
+                "processingStartedAt": processing_started_at,
+                "processingTimingLive": processing_timing_live,
                 "integrity": inspection.level,
                 "integrityIssues": [issue.message for issue in inspection.issues[:5]],
                 "chapterCount": _timeline_count(directory),
@@ -489,7 +655,7 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
     source = manifest.get("source") if isinstance(manifest.get("source"), dict) else dict(metadata)
     source = dict(source)
     local_path = str(source.pop("local_path", "") or source.pop("source_path", "") or metadata.get("source_path") or "")
-    analysis = _load_json_file(directory / "analysis.json")
+    analysis = _normalize_analysis_view(_load_json_file(directory / "analysis.json"))
     analysis.pop("raw_response", None)
     inspection = inspect_knowledge_package(directory)
     if inspection.analysis_status == "invalid":
@@ -501,6 +667,37 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
     manifest_view.setdefault("analysis_profile", "summary")
     manifest_view.setdefault("processing_profile", "complete")
     manifest_view.setdefault("stage_metrics", {})
+    analysis_status = str(manifest_view.get("analysis_status") or analysis.get("status") or "pending")
+    with JOBS_LOCK:
+        legacy_job = next(
+            (
+                job
+                for job in JOBS.values()
+                if job.cli_task_id
+                and job.cli_task_id == str(manifest_view.get("task_id") or "")
+            ),
+            None,
+        )
+    manifest_view.setdefault(
+        "analysis_requested",
+        legacy_job.analysis_requested if legacy_job else analysis_status != "skipped",
+    )
+    manifest_view.setdefault(
+        "analysis_skip_reason",
+        (
+            legacy_job.analysis_skip_reason
+            if legacy_job
+            else "legacy_transcript_only" if analysis_status == "skipped" else ""
+        ),
+    )
+    manifest_view.setdefault("analysis_provider", manifest_view.get("llm_provider") or analysis.get("provider") or "")
+    manifest_view.setdefault("analysis_model", manifest_view.get("llm_model") or analysis.get("model") or "")
+    manifest_view.setdefault(
+        "transcript_only",
+        legacy_job.transcript_only
+        if legacy_job
+        else not bool(manifest_view["analysis_requested"]),
+    )
     if inspection.level == "invalid" and str(manifest_view.get("status") or "").startswith("completed"):
         manifest_view["status"] = "invalid"
         manifest_view["errors"] = [
@@ -514,6 +711,11 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
     timeline = timeline_payload.get("items", []) if isinstance(timeline_payload, dict) else []
     if not isinstance(timeline, list):
         timeline = []
+    transcript_ready = inspection.transcript_segments > 0
+    analysis_ready = (
+        inspection.analysis_status == "success"
+        and meaningful_analysis(analysis)
+    )
     encoded_id = quote(knowledge_id, safe="")
     files = {
         name: f"/api/library/{encoded_id}/file/{quote(name, safe='')}"
@@ -555,6 +757,11 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
         "source": source,
         "manifest": manifest_view,
         "analysis": analysis,
+        "transcriptReady": transcript_ready,
+        "analysisReady": analysis_ready,
+        "analysisRequested": bool(manifest_view.get("analysis_requested")),
+        "analysisStatus": str(manifest_view.get("analysis_status") or analysis.get("status") or "pending"),
+        "analysisSkipReason": str(manifest_view.get("analysis_skip_reason") or ""),
         "visualInsights": visual_insights,
         "comments": comments_payload.get("items", []) if isinstance(comments_payload.get("items"), list) else [],
         "commentInsights": comment_insights,
@@ -571,6 +778,15 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
             "embed": embed,
         },
     }
+
+
+def _normalize_analysis_view(payload: dict[str, Any]) -> dict[str, Any]:
+    if not payload:
+        return {}
+    try:
+        return AnalysisResult.model_validate(payload).model_dump(mode="json")
+    except (TypeError, ValueError):
+        return dict(payload)
 
 
 def _external_player_descriptor(source_url: str) -> dict[str, str] | None:
@@ -1119,7 +1335,8 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
             except UserFacingError as exc:
-                self._send_json({"error": _with_api_config_hint(str(exc))}, HTTPStatus.BAD_GATEWAY)
+                status = HTTPStatus.GATEWAY_TIMEOUT if is_timeout_error(exc) else HTTPStatus.BAD_GATEWAY
+                self._send_json({"error": _with_api_config_hint(str(exc))}, status)
             except OSError:
                 self._send_json({"error": "重新分析结果写入失败，请检查输出目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -1396,8 +1613,11 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _send_output_file(self, request_path: str) -> None:
-        relative = unquote(request_path.lstrip("/"))
-        path = (PROJECT_ROOT / relative).resolve()
+        relative = unquote(request_path.lstrip("/")).replace("\\", "/")
+        if not relative.startswith("output/"):
+            self._send_json({"error": "文件不存在。"}, HTTPStatus.NOT_FOUND)
+            return
+        path = (OUTPUT_ROOT / relative[len("output/") :].strip("/")).resolve()
         output_root = OUTPUT_ROOT.resolve()
         try:
             path.relative_to(output_root)

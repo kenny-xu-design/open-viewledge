@@ -5,6 +5,8 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 try:
     from dotenv import load_dotenv
@@ -17,13 +19,16 @@ from .defaults import (
     DEFAULT_DEEPSEEK_MODEL,
     DEFAULT_GEMINI_BASE_URL,
     DEFAULT_GEMINI_MODEL,
+    DEFAULT_GROQ_ASR_MODEL,
+    DEFAULT_GROQ_BASE_URL,
 )
 from .providers.llm import DeepSeekProvider, GeminiProvider
 from .providers.llm.base import LLMProvider
 from .utils import UserFacingError
 
 
-SUPPORTED_WEB_PROVIDERS = {"deepseek", "gemini"}
+SUPPORTED_WEB_PROVIDERS = {"deepseek", "gemini", "groq"}
+WEB_PROVIDER_ORDER = ("deepseek", "gemini", "groq")
 
 
 @dataclass
@@ -160,21 +165,28 @@ class ProviderConfigResolver:
 
     def env_overrides(self) -> dict[str, str]:
         values: dict[str, str] = {}
-        for provider in ("deepseek", "gemini"):
+        for provider in WEB_PROVIDER_ORDER:
             session = self.store.get(provider) if self.store else None
             if not session:
                 continue
-            prefix = "DEEPSEEK" if provider == "deepseek" else "GEMINI"
+            prefix = {"deepseek": "DEEPSEEK", "gemini": "GEMINI", "groq": "GROQ"}[provider]
             if session.api_key:
                 values[f"{prefix}_API_KEY"] = session.api_key
             if session.base_url:
-                values[f"{prefix}_BASE_URL"] = session.base_url.rstrip("/")
+                if provider == "groq":
+                    values["GROQ_BASE_URL"] = session.base_url.rstrip("/")
+                else:
+                    values[f"{prefix}_BASE_URL"] = session.base_url.rstrip("/")
             if session.model:
-                values[f"{prefix}_MODEL"] = session.model
+                if provider == "groq":
+                    values["CLOUD_ASR_PROVIDER"] = "groq"
+                    values["CLOUD_ASR_MODEL"] = session.model
+                else:
+                    values[f"{prefix}_MODEL"] = session.model
         return values
 
     def statuses(self) -> list[dict[str, Any]]:
-        return [self.resolve(name).public_status() for name in ("deepseek", "gemini")]
+        return [self.resolve(name).public_status() for name in WEB_PROVIDER_ORDER]
 
 
 def test_provider_connection(
@@ -214,13 +226,50 @@ def test_provider_connection(
     }
 
 
+def test_groq_connection(
+    resolved: ResolvedProviderConfig,
+    *,
+    clock: Callable[[], float] = time.perf_counter,
+    opener: Callable[..., Any] = urlopen,
+) -> dict[str, Any]:
+    started = clock()
+    try:
+        if not resolved.configured:
+            raise UserFacingError("Groq 缺少 API Key。")
+        url = f"{resolved.base_url.rstrip('/')}/models"
+        request = Request(url, headers={"Authorization": f"Bearer {resolved.api_key}"})
+        with opener(request, timeout=20) as response:
+            payload = response.read().decode("utf-8", errors="replace")
+        if resolved.model and resolved.model not in payload:
+            raise UserFacingError(f"Groq 模型不可见或不受支持：{resolved.model}")
+    except Exception as exc:
+        return {
+            "ok": False,
+            "provider": "groq",
+            "model": resolved.model,
+            "durationMs": int(max(0, (clock() - started) * 1000)),
+            "error": sanitize_provider_error(_groq_error_text(exc)),
+            "errorType": classify_provider_error(_groq_error_text(exc)),
+        }
+    return {
+        "ok": True,
+        "provider": "groq",
+        "model": resolved.model,
+        "durationMs": int(max(0, (clock() - started) * 1000)),
+        "error": "",
+        "errorType": "",
+    }
+
+
 def normalize_provider_name(value: str) -> str:
     name = str(value or "").strip().lower()
     if name in {"openai-compatible", "openai_compatible", "deepseek"}:
         return "deepseek"
     if name == "gemini":
         return name
-    raise ValueError("provider 只能是 deepseek 或 gemini。")
+    if name == "groq":
+        return name
+    raise ValueError("provider 只能是 deepseek、gemini 或 groq。")
 
 
 def mask_key_tail(value: str) -> str:
@@ -263,6 +312,8 @@ def _defaults_for(provider: str) -> dict[str, str]:
         return {"api_key": "", "base_url": DEFAULT_DEEPSEEK_BASE_URL, "model": DEFAULT_DEEPSEEK_MODEL}
     if provider == "gemini":
         return {"api_key": "", "base_url": DEFAULT_GEMINI_BASE_URL, "model": DEFAULT_GEMINI_MODEL}
+    if provider == "groq":
+        return {"api_key": "", "base_url": DEFAULT_GROQ_BASE_URL, "model": DEFAULT_GROQ_ASR_MODEL}
     raise ValueError("Provider 不受支持。")
 
 
@@ -279,6 +330,12 @@ def _env_for(provider: str) -> dict[str, str]:
             "base_url": os.getenv("GEMINI_BASE_URL", ""),
             "model": os.getenv("GEMINI_MODEL", ""),
         }
+    if provider == "groq":
+        return {
+            "api_key": os.getenv("GROQ_API_KEY", ""),
+            "base_url": os.getenv("GROQ_BASE_URL", ""),
+            "model": os.getenv("CLOUD_ASR_MODEL", ""),
+        }
     raise ValueError("Provider 不受支持。")
 
 
@@ -292,4 +349,16 @@ def _public_last_test(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _provider_label(provider: str) -> str:
-    return "Gemini" if provider == "gemini" else "DeepSeek"
+    if provider == "gemini":
+        return "Gemini"
+    if provider == "groq":
+        return "Groq"
+    return "DeepSeek"
+
+
+def _groq_error_text(exc: Exception) -> str:
+    if isinstance(exc, HTTPError):
+        return f"HTTP {exc.code} {exc.reason}"
+    if isinstance(exc, URLError):
+        return f"网络请求失败：{exc.reason}"
+    return str(exc)

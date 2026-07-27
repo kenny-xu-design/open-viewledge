@@ -61,6 +61,11 @@ class UnavailableProvider:
         return False
 
 
+class TimeoutProvider(FakeProvider):
+    def complete(self, _messages, **_kwargs) -> LLMResponse:
+        raise UserFacingError("DeepSeek 请求超时，请稍后重试。")
+
+
 class AnalysisRetryTests(unittest.TestCase):
     def test_retry_reuses_transcript_and_updates_existing_package(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -104,6 +109,9 @@ class AnalysisRetryTests(unittest.TestCase):
             self.assertEqual(result.analysis.status, "success")
             self.assertEqual(result.analysis.summary, "重新生成的摘要。")
             self.assertEqual(result.manifest.analysis_status, "completed")
+            self.assertTrue(result.manifest.analysis_requested)
+            self.assertFalse(result.manifest.transcript_only)
+            self.assertEqual(result.manifest.analysis_skip_reason, "")
             self.assertEqual(result.manifest.stage_status["run_analysis"], "completed")
             self.assertEqual(result.manifest.errors, [])
             self.assertIn("重新生成的摘要。", (root / "index.md").read_text(encoding="utf-8"))
@@ -152,6 +160,48 @@ class AnalysisRetryTests(unittest.TestCase):
             self.assertEqual(saved_manifest["analysis_status"], "failed")
             self.assertIn("DEEPSEEK_API_KEY", saved_manifest["analysis_error"])
             self.assertEqual(saved_manifest["provider_attempts"][-1]["error_type"], "configuration")
+
+    def test_retry_timeout_is_persisted_as_timeout(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "demo"
+            root.mkdir()
+            source = SourceRecord(
+                source_type="online_video",
+                platform="youtube",
+                source_url="https://example.com/video",
+                source_id="video",
+                title="测试视频",
+            )
+            package = KnowledgePackage(
+                source=source,
+                analysis=AnalysisResult(status="skipped", analysis_profile="summary"),
+                manifest=ProcessingManifest(
+                    task_id="task",
+                    source=source,
+                    status="completed",
+                    analysis_requested=False,
+                    analysis_status="skipped",
+                    analysis_skip_reason="user_requested_transcript_only",
+                    transcript_only=True,
+                ),
+                output_dir=root,
+            )
+            export_knowledge_package(package)
+            write_jsonl(
+                root / "transcript.raw.jsonl",
+                [TranscriptSegment(index=0, start=0, end=5, text="已有字幕", language="zh")],
+            )
+
+            with self.assertRaisesRegex(UserFacingError, "超时"):
+                reanalyze_knowledge_package(root, AppConfig(), provider=TimeoutProvider())
+
+            analysis = json.loads((root / "analysis.json").read_text(encoding="utf-8"))
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(analysis["status"], "timeout")
+            self.assertEqual(manifest["analysis_status"], "timeout")
+            self.assertEqual(manifest["stage_status"]["run_analysis"], "timeout")
+            self.assertTrue(manifest["analysis_requested"])
+            self.assertFalse(manifest["transcript_only"])
 
 
 if __name__ == "__main__":

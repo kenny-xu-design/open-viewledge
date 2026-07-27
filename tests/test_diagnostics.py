@@ -7,11 +7,19 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.config import AppConfig
-from src.diagnostics import run_doctor
+from src.diagnostics import _writable_check, run_doctor
 from src.runtime_tools import ExecutableStatus
 
 
 class DoctorTests(unittest.TestCase):
+    def test_writable_check_uses_deterministic_probe_file_and_cleans_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = _writable_check("output", root, required=True)
+            leftovers = list(root.glob(".viewledge-doctor-*.tmp"))
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(leftovers, [])
+
     def test_doctor_reports_required_and_optional_failures_without_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

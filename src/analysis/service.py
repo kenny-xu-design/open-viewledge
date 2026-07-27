@@ -125,7 +125,7 @@ def _build_request(
     profile_rules = _profile_rules(profile)
     return (
         f"分析要求：{instruction}\n"
-        "只使用下方字幕内容和已明确给出的来源信息，不得补充不存在的信息；信息不足时写“未明确说明”。\n"
+        "只使用下方字幕内容和已明确给出的来源信息，不得补充不存在的信息；没有依据的可选字段返回空字符串或空数组。\n"
         "必须区分视频事实与 AI 推断；不得把评论区、弹幕、外部热评或观众意见写入主报告。\n"
         "不得输出 API Key、Cookie、Token、Authorization 或任何凭据。只返回一个 JSON 对象，不要使用 Markdown code fence。\n"
         f"共同外壳固定字段：schema_version='2'，analysis_profile='{profile}'，processing_profile='{processing_profile}'，"
@@ -147,43 +147,34 @@ def _schema_for_profile(profile: str) -> dict:
         "processing_profile": "fast 或 complete",
         "source": {"platform": "平台", "url": "来源链接", "title": "标题"},
         "generation": {"visual_context_used": False, "comments_included": False},
-        "warnings": [{"text": "视频明确说明的注意事项；没有则写未明确说明", "timestamp": 0}],
+        "warnings": [{"text": "视频明确说明的注意事项；没有则返回空数组", "timestamp": 0}],
+    }
+    legacy_base = {
+        **common,
+        "one_sentence_summary": "一句话结论",
+        "summary": "自然段摘要",
+        "terminology": [{"term": "专业术语", "definition": "视频语境中的简短解释"}],
+        "highlights": [{"title": "亮点", "explanation": "说明", "tags": ["标签"], "start": 0, "end": 0}],
+        "thoughts": [{"question": "思考问题", "related_topic": "主题", "start": 0}],
+        "chapters": [{"title": "章节", "start": 0, "end": 0, "summary": "总结", "source_link": ""}],
     }
     schemas = {
         "summary": {
-            **common,
-            "content": {
-                "one_sentence": "严格一个完整句子，单行且不使用列表，建议不超过 80 个汉字",
-                "summary": "用自然段整合背景、主要内容和结论，避免重复",
-                "professional_terms": [{
-                    "term": "与视频核心内容直接相关的专业术语",
-                    "definition": "可靠且简短的解释",
-                    "category": "professional_term",
-                    "core_related": True,
-                    "reliable": True,
-                }],
-                "highlights": [{
-                    "title": "亮点",
-                    "explanation": "字幕支持的亮点说明",
-                    "tags": ["标签"],
-                    "start": 0,
-                    "end": 0,
-                }],
-                "thoughts": [{"question": "由内容引出的思考", "related_topic": "主题", "start": 0}],
-                "chapter_summaries": [{"title": "章节", "start": 0, "end": 0, "summary": "章节总结"}],
-                "factual_basis": "视频事实依据",
-                "ai_inferences": ["AI 推断；没有则留空数组"],
-            },
+            **legacy_base,
+            "actions": [],
+            "glossary": [{"term": "术语", "definition": "视频语境中的简短解释"}],
+            "action_items": [{"text": "可执行动作", "timestamp": 0}],
+            "prerequisites": [{"text": "明确前置条件", "timestamp": 0}],
+            "steps": [{"title": "操作步骤", "description": "操作说明", "timestamp": 0, "expected_result": "预期结果"}],
         },
         "tutorial": {
-            **common,
+            **legacy_base,
             "content": {
                 "tutorial_goal": "教程目标",
                 "final_result": "最终成果",
                 "prerequisites": ["前置条件"],
                 "tools_and_materials": ["工具与材料"],
                 "workflow_overview": "流程总览",
-                "chapter_summaries": [{"id": "ch001", "title": "教程阶段", "start": 0, "end": 0, "summary": "阶段说明"}],
                 "steps": [{
                     "timestamp": 0,
                     "chapter_id": "ch001",
@@ -199,13 +190,13 @@ def _schema_for_profile(profile: str) -> dict:
                 "troubleshooting": ["常见错误与排查"],
                 "acceptance_checklist": ["完成验收清单"],
                 "reusable_commands_or_templates": ["可复用命令或模板"],
-                "limitations": ["教程局限；没有则写未明确说明"],
+                "limitations": ["教程局限"],
                 "factual_basis": "视频事实依据",
                 "ai_inferences": ["AI 推断；没有则留空数组"],
             },
         },
         "viral": {
-            **common,
+            **legacy_base,
             "content": {
                 "content_positioning": "内容定位",
                 "target_audience": ["目标受众"],
@@ -224,17 +215,16 @@ def _schema_for_profile(profile: str) -> dict:
             },
         },
         "close-reading": {
-            **common,
+            **legacy_base,
             "content": {
                 "core_thesis": "核心命题",
                 "key_concepts": ["关键概念"],
                 "argument_map": ["论证地图"],
-                "chapter_close_reading": [{"title": "章节", "start": 0, "end": 0, "summary": "逐章精读"}],
                 "evidence_assessment": ["证据评估"],
                 "implicit_assumptions": ["隐含假设"],
                 "counterarguments": ["可能的反方观点"],
                 "argument_limits": ["论证局限"],
-                "visual_evidence": ["视觉证据；没有则写未明确说明"],
+                "visual_evidence": ["视觉证据"],
                 "extended_connections": ["延伸联系"],
                 "facts_to_verify": ["待核查事实"],
                 "factual_basis": "视频事实依据",
@@ -246,18 +236,32 @@ def _schema_for_profile(profile: str) -> dict:
 
 
 def _profile_rules(profile: str) -> str:
-    if profile != "summary":
-        return ""
-    return (
-        "标准摘要固定职责：content 只使用 one_sentence、summary、professional_terms、highlights、thoughts、"
-        "chapter_summaries、factual_basis、ai_inferences。\n"
-        "one_sentence 必须严格只有一个完整句子，只占一行，不使用列表，不拆成多句，建议不超过 80 个汉字。\n"
-        "summary 必须使用自然段整合背景、主要内容和结论，不得拆成“内容概览/核心观点/关键结论”等固定栏目，也要避免重复。\n"
-        "professional_terms 必须在本次响应内完成识别，不得请求额外分析：只有识别到 3 至 8 个不同、"
-        "与核心内容直接相关且解释可靠简短的专业术语时才返回；不足 3 个时返回空数组。"
-        "普通词、品牌堆积和无关缩写不得计入，禁止用“未明确说明”或“暂无术语”占位。\n"
-        "highlights、thoughts 和 chapter_summaries 按真实内容密度输出，不得截断为前五项；summary 不生成或引用图片。"
+    shared = (
+        "所有分析模式都使用重大结构调整前的通用摘要骨架：summary、terminology、"
+        "highlights、thoughts、chapters 使用顶层扁平字段；content 只承载当前模式真正需要的专属补充。\n"
+        "summary 是主摘要正文；highlights、thoughts、chapters 按字幕中真实内容输出，"
+        "不得为了凑数量制造节点，不得与 content 中的专属栏目机械重复。\n"
+        "如果能从本次字幕中识别出 3 个及以上与核心内容直接相关、定义可靠的专业术语，"
+        "写入 terminology；不足 3 个时返回空数组，不要用占位术语凑数。\n"
+        "任何没有字幕依据的可选字段都返回空字符串或空数组，不要写“未明确说明”作为栏目占位。"
     )
+    specific = {
+        "summary": "标准摘要不使用 content 固定栏目。",
+        "tutorial": (
+            "教程模式重点补充教程目标、最终成果、前置条件、工具与材料、流程总览、完整步骤、"
+            "关键参数、排错、验收清单、可复用命令或模板和教程局限。chapters 表示教程阶段；"
+            "步骤只记录可复现操作，image 保持空字符串并由 tutorial + complete 的本地截图阶段填写。"
+        ),
+        "viral": (
+            "爆款模式重点补充内容定位、目标受众、标题与封面承诺、前 30 秒钩子、内容结构、"
+            "节奏与留存、情绪叙事、视觉剪辑、互动传播、可复用公式、可借鉴点和风险局限。"
+        ),
+        "close-reading": (
+            "深度精读重点补充核心命题、关键概念、论证地图、证据评估、隐含假设、反方观点、"
+            "论证局限、视觉证据、延伸联系和待核查事实；chapters 承载逐章精读。"
+        ),
+    }.get(profile, "")
+    return f"{shared}\n{specific}".strip()
 
 
 def _source_payload(source: object) -> dict:

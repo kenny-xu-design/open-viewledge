@@ -148,7 +148,11 @@ def reduce_window_results(results: list[AnalysisResult], policy: SegmentationPol
     professional_terms = _dedupe_professional_terms([
         item
         for result in results
-        for item in result.content.get("professional_terms", [])
+        for item in (
+            result.terminology
+            or result.content.get("professional_terms", [])
+            or [entry.model_dump(mode="json") for entry in result.glossary]
+        )
         if isinstance(item, dict)
     ])
     payload: dict[str, Any] = {
@@ -160,11 +164,11 @@ def reduce_window_results(results: list[AnalysisResult], policy: SegmentationPol
         "thoughts": [item.model_dump(mode="json") for item in thoughts],
         "chapters": [item.model_dump(mode="json") for item in chapters],
         "steps": [item.model_dump(mode="json") for item in steps],
+        "terminology": professional_terms if len(professional_terms) >= 3 else [],
         "warnings": [item.model_dump(mode="json") for item in warnings],
         "glossary": [item.model_dump(mode="json") for item in glossary],
         "action_items": [item.model_dump(mode="json") for item in action_items],
         "prerequisites": [item.model_dump(mode="json") for item in prerequisites],
-        "professional_terms": professional_terms,
         "analysis_profile": policy.analysis_profile,
         "processing_profile": policy.processing_profile,
         "provider": base.provider,
@@ -176,7 +180,9 @@ def reduce_window_results(results: list[AnalysisResult], policy: SegmentationPol
             "comments_included": False,
         },
     }
-    payload["content"] = build_analysis_content_from_legacy(payload, policy.analysis_profile)
+    payload["content"] = _merge_profile_content(results, policy.analysis_profile)
+    if not payload["content"]:
+        payload["content"] = build_analysis_content_from_legacy(payload, policy.analysis_profile)
     return attach_segmentation(AnalysisResult.model_validate(payload), policy, groups)
 
 
@@ -218,18 +224,62 @@ def attach_segmentation(result: AnalysisResult, policy: SegmentationPolicy, grou
         notes=notes,
     )
     content = dict(result.content)
+    terms = _dedupe_professional_terms([
+        item
+        for item in (
+            result.terminology
+            or content.get("professional_terms", [])
+            or [entry.model_dump(mode="json") for entry in result.glossary]
+        )
+        if isinstance(item, dict)
+    ])
+    terminology = terms if len(terms) >= 3 else []
     if policy.analysis_profile == "tutorial":
         content["steps"] = [item.model_dump(mode="json") for item in steps]
         content["chapter_summaries"] = [item.model_dump(mode="json") for item in chapters]
     elif policy.analysis_profile == "summary":
         content["chapter_summaries"] = [item.model_dump(mode="json") for item in chapters]
-        terms = _dedupe_professional_terms([
-            item for item in content.get("professional_terms", []) if isinstance(item, dict)
-        ])
-        content["professional_terms"] = terms if len(terms) >= 3 else []
+        content["professional_terms"] = terminology
     elif policy.analysis_profile == "close-reading":
         content["chapter_close_reading"] = [item.model_dump(mode="json") for item in chapters]
-    return result.model_copy(update={"chapters": chapters, "highlights": highlights, "steps": steps, "content": content, "segmentation": segmentation})
+    return result.model_copy(update={
+        "chapters": chapters,
+        "highlights": highlights,
+        "steps": steps,
+        "terminology": terminology,
+        "content": content,
+        "segmentation": segmentation,
+    })
+
+
+def _merge_profile_content(results: list[AnalysisResult], profile: str) -> dict[str, Any]:
+    if profile == "summary":
+        return {}
+    merged: dict[str, Any] = {}
+    structural_keys = {"chapter_summaries", "chapter_close_reading", "steps", "professional_terms"}
+    for result in results:
+        for key, value in result.content.items():
+            if key in structural_keys or value in (None, "", [], {}):
+                continue
+            if isinstance(value, str):
+                existing = merged.get(key)
+                values = _unique_texts([
+                    *([existing] if isinstance(existing, str) else []),
+                    value,
+                ])
+                merged[key] = "\n\n".join(values)
+                continue
+            if isinstance(value, list):
+                existing_items = merged.get(key)
+                items = list(existing_items) if isinstance(existing_items, list) else []
+                for item in value:
+                    identity = repr(item)
+                    if not any(repr(existing) == identity for existing in items):
+                        items.append(item)
+                merged[key] = items
+                continue
+            merged.setdefault(key, value)
+    return merged
 
 
 def _repair_coverage_gaps(chapters: list[ChapterSummary], steps: list[TutorialStep], policy: SegmentationPolicy, groups: list[TranscriptGroup]) -> int:

@@ -146,6 +146,23 @@ class DeepSeekProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(UserFacingError, "deepseek-v4-flash.*deepseek-chat"):
             provider.complete([{"role": "user", "content": "test"}])
 
+    def test_timeout_and_connection_failure_have_distinct_errors(self) -> None:
+        timeout_provider = DeepSeekProvider(
+            api_key="test-key",
+            client=_client([TimeoutError("timed out")] * 3),
+            sleep=lambda _: None,
+        )
+        with self.assertRaisesRegex(UserFacingError, "请求超时"):
+            timeout_provider.complete([{"role": "user", "content": "test"}])
+
+        network_provider = DeepSeekProvider(
+            api_key="test-key",
+            client=_client([ConnectionError("offline")] * 3),
+            sleep=lambda _: None,
+        )
+        with self.assertRaisesRegex(UserFacingError, "网络连接失败"):
+            network_provider.complete([{"role": "user", "content": "test"}])
+
     def test_missing_key_has_actionable_error(self) -> None:
         provider = DeepSeekProvider(api_key="", client=_client([]))
         with self.assertRaisesRegex(UserFacingError, "DEEPSEEK_API_KEY"):

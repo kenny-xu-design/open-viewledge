@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 
 from src.cli_contract import CLI_SCHEMA_VERSION, CliEmitter, ExitCode
 from src.cli_tasks import CliTaskRecord, CliTaskStore
-from src.config import AppConfig, load_config
+from src.config import AppConfig, VIEWLEDGE_OUTPUT_ROOT_ENV, load_config, resolve_output_root
 from src.domain.models import AnalysisResult, ProcessingManifest
 from src.exporters.models import ExportSelection
 from src.exporters.service import selection_for_request
@@ -113,6 +113,21 @@ class SchemaCompatibilityTests(unittest.TestCase):
             path.write_text('{"schema_version":"2.0"}', encoding="utf-8")
             with self.assertRaisesRegex(UserFacingError, "不支持"):
                 load_config(path)
+
+    def test_config_loader_allows_shared_output_root_from_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            shared = Path(temp) / "shared-output"
+            with patch.dict("os.environ", {VIEWLEDGE_OUTPUT_ROOT_ENV: str(shared)}):
+                config = load_config(Path(temp) / "missing-config.json")
+
+        self.assertEqual(config.output_dir, str(shared))
+
+    def test_output_root_resolves_relative_to_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project_root = Path(temp)
+            config = AppConfig(output_dir="output")
+
+            self.assertEqual(resolve_output_root(config, project_root), (project_root / "output").resolve())
 
 
 class CliTaskStoreTests(unittest.TestCase):

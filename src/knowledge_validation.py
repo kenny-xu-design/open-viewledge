@@ -250,9 +250,10 @@ def _validate_analysis(
                 f"分析内容成功，但 run_analysis 阶段状态为 {stage_status}。",
                 "manifest.json",
             )
-    elif result.status == "failed":
+    elif result.status in {"failed", "timeout"}:
         if not result.error.strip():
-            report.add("error", "analysis_error_missing", "失败分析必须记录 error。", "analysis.json")
+            report.add("error", "analysis_error_missing", "失败或超时分析必须记录 error。", "analysis.json")
+        expected_manifest_status = result.status
         if manifest_analysis_status == "pending":
             report.add(
                 "warning",
@@ -260,11 +261,11 @@ def _validate_analysis(
                 "manifest.json 未显式记录分析失败状态。",
                 "manifest.json",
             )
-        elif manifest_analysis_status != "failed":
+        elif manifest_analysis_status != expected_manifest_status:
             report.add(
                 "error",
                 "analysis_manifest_conflict",
-                f"analysis.json 为 failed，但 manifest analysis_status={manifest_analysis_status}。",
+                f"analysis.json 为 {result.status}，但 manifest analysis_status={manifest_analysis_status}。",
                 "manifest.json",
             )
         if overall_status == "completed":
@@ -274,7 +275,12 @@ def _validate_analysis(
                 "分析失败时任务不能标记为 completed；应为 completed_with_warnings 或 failed。",
                 "manifest.json",
             )
-        report.add("warning", "analysis_failed", f"AI 分析失败：{result.error}", "analysis.json")
+        report.add(
+            "warning",
+            "analysis_timeout" if result.status == "timeout" else "analysis_failed",
+            f"AI 分析{'超时' if result.status == 'timeout' else '失败'}：{result.error}",
+            "analysis.json",
+        )
     elif result.status == "skipped":
         if manifest_analysis_status == "pending":
             report.add(

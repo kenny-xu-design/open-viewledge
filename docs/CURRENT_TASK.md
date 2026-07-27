@@ -1,6 +1,6 @@
 # Current Task
 
-Last updated: 2026-07-26
+Last updated: 2026-07-27
 
 ## Active Work
 
@@ -29,23 +29,27 @@ In scope:
 - DeepSeek HTTP 400 diagnostics for unsupported model/configuration errors.
 - Web task-state fixes for job listing/detail lock re-entry and Windows job-store atomic writes.
 - Local Web API configuration entry for DeepSeek/OpenAI-compatible and Gemini real-interaction testing.
-- Dedicated output structures for `summary`, `tutorial`, `viral`, and `close-reading` using a shared envelope plus mode-specific `content`.
-- Corrected standard-summary contract with six core sections and a conditional same-call `professional_terms` module; adaptive long-video windows and reducer coverage remain enabled.
+- Restored flat base fields for `summary`, `tutorial`, `viral`, and `close-reading`, with optional mode-specific `content` details for the latter three.
+- Shared report order based on the restored standard summary: summary, conditional professional terms, populated mode-specific details, highlights, thoughts, video chapter summary, and source materials.
 - `tutorial + complete` step screenshots under `assets/tutorial/`; other analysis modes do not export screenshots.
 - Adaptive segmentation policy routing based on duration, transcript density, profile, processing mode, native chapters and visual availability.
 - Windowed map/reduce text analysis for dense 30-minute-plus videos and default layered analysis for dense 60-minute-plus videos.
 - Coverage guard for overlarge chapter/step gaps, with repair based only on real transcript groups and no midpoint-only fake insertion.
 - Tutorial hierarchy that separates top-level chapters from `tutorial_steps`.
+- Local faster-whisper `fast`, `balanced`, and `quality` routing with bounded
+  CUDA preflight, batch-size fallback, segment quality guards, and CPU fallback.
+- Windows ZIP startup discovery for CUDA 12 cuBLAS and cuDNN 9 installed in the
+  project `.venv`.
+- Project-wide HTTP proxy propagation for Python network clients.
 
 Out of scope:
 
 - Private API use, browser automation, login-gated comments, cookies, or platform bypass.
 - Writing comment opinions into `analysis.json` or the main factual summary.
-- Durable queue, batch processing, worker leases, or ASR worker changes.
+- Durable queue, batch processing, or worker leases.
 - Real platform claims without fixed YouTube/Bilibili manual acceptance.
 - Persisting API Keys to files, frontend storage, job records, knowledge packages, Markdown, exports, or repository files.
 - Merging comment insights into the main analysis report.
-- Starting v1.4.4 ASR/worker performance work.
 - Committing, pushing, merging, rebasing, tagging, or releasing.
 
 ## Current Findings
@@ -63,17 +67,19 @@ Out of scope:
 - Web now exposes API configuration status/apply/clear/test endpoints. API Keys are process-local only; status returns only provider, source, Base URL, model, configured state, Key tail, and sanitized last-test result.
 - Provider resolution priority is Web session configuration, then environment variables, then project defaults. Web-launched CLI tasks receive the same session configuration through transient subprocess environment overrides that are not stored in job records.
 - Summary analysis, comment insight, Gemini visual analysis, Gemini video chat, and right-side AI chat all use the same resolved Provider configuration.
-- Four analysis modes now render stable Chinese report structures. The shared envelope preserves source, profile, processing profile, generation metadata and warnings, while `content` differs per mode.
+- Four analysis modes now share the restored flat report base. The latter three preserve their requested specialized details in `content`, but empty optional modules are hidden.
 - `generation.comments_included` is fixed to `false`; public comments and comment insights remain separate artifacts and separate Web tabs.
 - Only `tutorial + complete` can attach step images; screenshot failures mark the step image status but do not remove text steps.
 - Fixed-count root cause: the main analysis path previously used one global LLM request and asked for one global result set, so long videos could collapse to a small number of broad chapters/highlights even without explicit `slice(0, 5)` in Web rendering.
 - New segmentation metadata is written to `analysis.json` under `segmentation` using `policy_version=adaptive-v2`.
 - Web and Markdown rendering no longer truncate the visible chapter/highlight/tutorial-step lists to the first five items.
 - Standard-summary Web and Markdown rendering no longer duplicates legacy highlight/thought/chapter blocks, and neither renderer truncates those lists to a fixed first-five subset.
+- Long-video reduction now preserves specialized `tutorial`, `viral`, and `close-reading` details instead of rebuilding and losing them, and it merges professional terms for every profile.
 
 ## Next Work Unit
 
-After v1.4.3 review/commit, stop. v1.4.4 ASR and worker performance must start only under a separate instruction.
+After v1.4.3 review/commit, stop. Durable worker/queue work remains a separate
+future instruction.
 
 ## Verification
 
@@ -84,3 +90,11 @@ After v1.4.3 review/commit, stop. v1.4.4 ASR and worker performance must start o
 - Real public YouTube comment acceptance remains pending. One real Bilibili package has been repaired and accepted locally; more fixed Bilibili samples remain useful but are not required to prove the code path.
 - Checkpoint A/B/C for adaptive long-video segmentation completed on 2026-07-26 with mock-backed coverage; real 71-minute tutorial API acceptance remains pending.
 - Standard-summary correction verification on 2026-07-26 passed 85 focused analysis/segmentation/export/Web UI tests and all 271 unit tests; compileall, CLI/Web help, `node --check`, and `git diff --check` also passed.
+- Local ASR Windows runtime verification on 2026-07-27 confirmed CUDA 12 cuBLAS
+  and cuDNN 9 loading from `.venv`, isolated CUDA preflight, and real
+  `small + CUDA + float16` transcription on fixed Chinese, English, and mixed
+  samples. After explicit local turbo installation, all three samples passed
+  turbo CUDA FP16 and default balanced routing selected turbo without fallback.
+- Current full unit verification on 2026-07-27 passes 312 tests. `doctor --json`
+  no longer hangs on synchronized/shared output directories; it returns a
+  normal error when the current process lacks write permission.

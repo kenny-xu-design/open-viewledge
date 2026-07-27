@@ -48,10 +48,16 @@ http://127.0.0.1:5188/
 
 - **DeepSeek / OpenAI Compatible**：用于文字摘要、评论洞察和 AI 对话。
 - **Gemini**：用于视频视觉理解和视频对话。
+- **Groq Speech-to-Text**：用于没有平台字幕时的云端快速转写。
 
-启动 Web 后打开“API 配置”，填写对应的 API Key、模型名和服务地址，并先使用“测试连接”确认配置可用。
+启动 Web 后打开“API 配置”，填写对应的 API Key、模型名和服务地址，并先使用“测试连接”确认配置可用。Groq 的测试连接只验证 Key、网络和模型可见性，不上传音频。
 
 API Key 默认只用于当前本地运行会话。页面刷新后，只要后端服务仍在运行即可继续使用；服务重启后需要重新填写。完整密钥不会返回给页面，也不应写入 Git、知识包、Markdown、导出文件或问题反馈。
+
+DeepSeek、Gemini 和 Groq 均为可选第三方服务，其免费额度、价格、可用区域和
+服务条款由对应服务商决定，项目不承诺永久免费。使用前请在服务商控制台确认
+当前价格和额度；不配置云端服务时仍可使用平台字幕、本地 faster-whisper、
+知识包浏览和导出等本地能力。
 
 命令行和开发环境仍可使用项目根目录中被 Git 忽略的 `.env`；普通 Web 用户无需手动编辑 `.env`。
 
@@ -63,7 +69,7 @@ API Key 默认只用于当前本地运行会话。页面刷新后，只要后端
 4. 按需开启公开评论同步。
 5. 点击“开始处理”，等待字幕、分析和知识包生成完成。
 
-平台没有字幕时，项目会尝试本地语音转写。处理本地媒体或无字幕视频通常需要 FFmpeg；评论关闭、平台限制或无法读取评论时，评论同步会跳过，但不影响主摘要。
+平台没有字幕时，默认使用 Groq 云端快速转写，也可为当前任务选择本地 GPU 或本地 CPU。处理本地媒体或无字幕视频通常需要 FFmpeg；评论关闭、平台限制或无法读取评论时，评论同步会跳过，但不影响主摘要。
 
 ## 分析模式
 
@@ -151,6 +157,39 @@ py -3.12 -m venv .venv
 models/faster-whisper-small/
 ```
 
+本地 ASR 默认使用 `ASR_PROFILE=balanced`，并按实际设备能力选择：
+
+```text
+RTX / CUDA 可用且显存充足
+-> turbo + CUDA FP16（仅在本地 turbo 模型已安装时）
+-> small + CUDA FP16
+-> small + CUDA INT8_FLOAT16
+-> small + CPU INT8
+```
+
+另外支持 `fast` 和 `quality`。`quality` 只有用户明确选择时才会尝试本地
+`large-v3`；所有模型均使用 `local_files_only`，缺失时不会自动下载。
+`task=translate` 不使用 turbo。
+
+可在 `.env` 中覆盖：
+
+```dotenv
+ASR_PROFILE=balanced
+ASR_MODEL=
+ASR_DEVICE=
+ASR_COMPUTE_TYPE=
+ASR_TASK=transcribe
+```
+
+GPU 路由同时检查 CTranslate2 CUDA 设备、支持的计算精度、可用显存、模型实际
+加载和隔离的首批推理。Windows CUDA 转写还需要 CTranslate2 兼容的 CUDA 12
+cuBLAS 与 cuDNN 运行库；缺失或 OOM 时会降低批大小/精度并安全回退 CPU，不会
+让整个任务失败。
+
+`balanced` 和 `quality` 会记录每个字幕段的 log probability、压缩率、
+无语音概率和语言置信度，对低质量区间最多进行有限次局部重试。整条视频低置信
+片段比例过高时只提示用户选择 `quality`，不会自动下载大型模型或重跑整条视频。
+
 至少需要：
 
 ```text
@@ -204,11 +243,46 @@ GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.1-flash-lite
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 
+GROQ_API_KEY=
+CLOUD_ASR_PROVIDER=groq
+CLOUD_ASR_MODEL=whisper-large-v3-turbo
+CLOUD_ASR_TIMEOUT_SECONDS=300
+CLOUD_ASR_MAX_RETRIES=2
+CLOUD_ASR_FILE_LIMIT_MB=25
+CLOUD_ASR_CHUNK_OVERLAP_SECONDS=2
+
 FFMPEG_PATH=
 FFPROBE_PATH=
+VIEWLEDGE_HTTP_PROXY=
 ```
 
+知识包默认写入项目根目录的 `output/`。如需让不同解压版本、不同启动端口或
+CLI/Web 共用同一批知识包，可在启动前设置共享输出目录：
+
+```powershell
+$env:VIEWLEDGE_OUTPUT_ROOT = "E:\ViewledgeData\knowledge"
+.\start_web.ps1
+```
+
+也可以把 `config.example.json` 中的 `output_dir` 改成绝对路径，并在所有版本中
+使用同一个值。环境变量 `VIEWLEDGE_OUTPUT_ROOT` 优先级高于配置文件；未设置时
+保持默认 `output/` 行为。
+
 `.env` 已被 Git 忽略，`.env.example` 只保存空 Key 和非敏感默认值。不要把真实 Key 写入 `.env.example`、README、日志、知识包或提交记录。
+
+如果浏览器可以访问视频平台或模型服务，但 Python、`yt-dlp` 报
+`WinError 10013`、连接超时或网络不可用，可为 Viewledge 单独指定本机 HTTP
+代理：
+
+```powershell
+$env:VIEWLEDGE_HTTP_PROXY = "http://127.0.0.1:7897"
+.\start_web.ps1
+```
+
+也可将 `VIEWLEDGE_HTTP_PROXY` 设置为用户级环境变量，使后续启动和新版本继续
+生效。程序会把它映射给 `yt-dlp`、DeepSeek、Gemini 等 Python 网络客户端；
+已有的 `HTTP_PROXY` / `HTTPS_PROXY` 优先，不会被覆盖。代理地址在运行状态中
+只显示协议、主机和端口，不显示用户名或密码。
 
 当前 CLI 结构化文本分析后端仅支持 `deepseek`。完整模式会在本地视频抽帧后尝试可选 Gemini 视觉分析；Web 选择 Gemini 对话时会依次尝试公开 YouTube URL、已有或新上传的本地视频、关键帧+文本和纯文本。视频上传仅在用户明确选择 Gemini 且知识包有本地视频时发生。
 
@@ -314,6 +388,8 @@ Obsidian 兼容 Markdown 副本：
 - `--mode`：`summary`、`tutorial`、`viral`、`close-reading`。
 - `--processing-profile`：`fast` 或 `complete`；默认 `complete`。`fast` 优先生成可读文本，无字幕时只请求音频，并跳过关键帧阶段。
 - `--no-summary`：跳过 LLM 分析。
+- `--asr-route`：无平台字幕时选择 `cloud`、`local_gpu` 或 `local_cpu`；旧请求默认 `cloud`。
+- `--no-asr-fallback`：关闭云端到本地 GPU/CPU，或本地 GPU 到 CPU 的安全回退。
 - `--sample-seconds`：只处理媒体开头指定秒数。
 - `--no-frames`：跳过关键帧生成。
 - `--export obsidian`：生成 Obsidian 兼容 Markdown 副本。
@@ -364,6 +440,10 @@ http://127.0.0.1:5188/
 
 Web 后台任务使用 Web 进程自身的 `sys.executable` 启动 `src.main`。通过上述脚本启动时，会固定使用项目 `.venv`。
 
+Web、CLI 和导出命令使用同一套知识包输出目录解析规则：优先读取
+`VIEWLEDGE_OUTPUT_ROOT`，否则使用配置中的 `output_dir`。启动端口只影响浏览器
+本地 UI 状态，不决定知识包读取位置。
+
 Web 当前支持：
 
 - 浏览已有知识包。
@@ -381,7 +461,7 @@ Web 当前支持：
 - 调整三栏模块顺序和宽度。
 - 通过原创纵向导出面板预览、复制或下载 Markdown，并按本地配置安全写入 Obsidian Vault。
 - 显式同步公开评论，并在知识页与导出中独立展示评论区洞察。知识页视频下方的功能区使用“评论区 / 高光片段”同级 Tab；评论内容不会写入左侧“全文总结”。
-- 通过“API 配置”填写或测试 DeepSeek/OpenAI-compatible 和 Gemini。Web 会话配置优先于环境变量；未填写时继续兼容 `.env` / 环境变量；非敏感默认模型和 Base URL 来自项目默认值。
+- 通过“API 配置”填写或测试 DeepSeek/OpenAI-compatible、Gemini 和 Groq。Web 会话配置优先于环境变量；未填写时继续兼容 `.env` / 环境变量；非敏感默认模型和 Base URL 来自项目默认值。
 
 笔记编辑区在停止输入 800 ms 后保存，切换知识包前也会尝试完成保存。保存笔记时会同步刷新 `export_note.md`。
 
@@ -393,14 +473,16 @@ B站预览使用官方 iframe。点击摘要、字幕或聊天引用中的时间
 
 ### 数据契约与分析输出
 
-`summary`、`tutorial`、`viral` 和 `close-reading` 使用相同的外壳字段与各自专属的 `content` 结构。共同外壳记录 `schema_version`、`analysis_profile`、`processing_profile`、来源、生成信息、分段策略和警告；`generation.comments_included` 固定为 `false`，评论区洞察不会写入主报告。Profile 统一按“用户显式选择 → 知识包已有值 → 自动识别 → summary”解析，识别失败不会导致任务失败。
+四种模式都使用重大结构调整前的扁平公共骨架：`summary`、`terminology`、`highlights`、`thoughts` 和 `chapters`。`tutorial`、`viral` 和 `close-reading` 仅在 `content` 中保存各自有实际内容的专属补充；缺失的可选栏目不会用“未明确说明”占位。共同外壳记录 `schema_version`、`analysis_profile`、`processing_profile`、来源、生成信息、分段策略和警告；`generation.comments_included` 固定为 `false`，评论区洞察不会写入主报告。Profile 统一按“用户显式选择 → 知识包已有值 → 自动识别 → summary”解析，识别失败不会导致任务失败。
 
 长视频分析会写入 `analysis.segmentation` 元数据，包括 `policy_version=adaptive-v2`、时长桶、窗口长度、重叠、建议章节/高光范围、实际数量、覆盖率和最大空档。30 分钟以上的密集字幕视频优先使用窗口分析；60 分钟以上密集视频默认使用分层语义 Map/Reduce；低密度内容允许低于建议数量范围，但不会机械插入假章节。
 
-- `summary`：固定展示“一句话、摘要、亮点、思考、章节总结、原文资料”六个核心部分。“一句话”严格为单行完整句子；“摘要”使用自然段整合背景、主要内容和结论。若同次分析识别到 3～8 个可靠且与核心内容直接相关的不同专业术语，则在“摘要”和“亮点”之间显示“专业术语”；少于 3 个时隐藏整个模块。
-- `tutorial`：教程目标、最终成果、前置条件、工具与材料、流程总览、完整教程步骤、关键参数与设置、常见错误与排查、完成验收清单、可复用命令或模板、教程局限。仅 `tutorial + complete` 允许生成并导出 `assets/tutorial/` 步骤截图。
-- `viral`：内容定位、目标受众、标题与封面承诺、前 30 秒钩子、内容结构、节奏与留存设计、情绪与叙事机制、视觉包装与剪辑、互动与传播设计、可复用内容公式、可借鉴点、风险与局限。
-- `close-reading`：核心命题、关键概念、论证地图、逐章精读、证据评估、隐含假设、可能的反方观点、论证局限、视觉证据、延伸联系、待核查事实。
+- `summary`：摘要、亮点、思考、视频章节总结、原文资料。
+- `tutorial`：在公共骨架中按需插入教程目标、最终成果、前置条件、工具与材料、流程总览、完整教程步骤、关键参数与设置、常见错误与排查、完成验收清单、可复用命令或模板、教程局限。仅 `tutorial + complete` 允许生成并导出 `assets/tutorial/` 步骤截图。
+- `viral`：在公共骨架中按需插入内容定位、目标受众、标题与封面承诺、前 30 秒钩子、内容结构、节奏与留存设计、情绪与叙事机制、视觉包装与剪辑、互动与传播设计、可复用内容公式、可借鉴点、风险与局限。
+- `close-reading`：在公共骨架中按需插入核心命题、关键概念、论证地图、证据评估、隐含假设、可能的反方观点、论证局限、视觉证据、延伸联系、待核查事实；公共 `chapters` 字段承载逐章精读。
+
+四种模式中的“专业术语”均采用同一规则：本次分析识别到 3～8 个不同、可靠且与核心内容直接相关的术语时，模块显示在“摘要”之后；少于 3 个时整个模块隐藏。历史 v1.4.3 `content` 知识包继续兼容读取，但新结果不会恢复固定空栏目或“一句话”展示模块。
 
 时间戳由统一模块格式化并生成平台链接：YouTube 和 B站链接保留既有查询参数并替换 `t`；Web 预览内点击时间戳统一进入 `seekPreview(seconds)`，本地媒体使用 `currentTime`，YouTube 使用 IFrame API，B站在原预览区域重载带 `t=<秒数>` 的 iframe。
 
@@ -420,7 +502,7 @@ python -m src.main export --knowledge-id "<id>" --format obsidian --preset full 
 每个稳定知识包位于：
 
 ```text
-output/<title>_<source-id>/
+<output_dir>/<title>_<source-id>/
 ```
 
 核心文件：

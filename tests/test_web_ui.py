@@ -133,16 +133,32 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("renderTutorialChapters", self.js)
         self.assertIn("renderTutorialSteps", self.js)
 
-    def test_summary_uses_six_core_sections_and_conditional_professional_terms(self) -> None:
-        summary_contract = re.search(r'summary:\s*\[(?P<body>.*?)\],\s*\n\s*tutorial:', self.js, re.S)
-        self.assertIsNotNone(summary_contract)
-        body = summary_contract.group("body")
-        for title in ("一句话", "摘要", "专业术语", "亮点", "思考", "章节总结"):
-            self.assertIn(f'"{title}"', body)
-        for removed in ("一句话结论", "内容概览", "核心观点", "关键结论", "待核查事项"):
-            self.assertNotIn(f'"{removed}"', body)
+    def test_summary_uses_legacy_field_rendering(self) -> None:
+        profile_contract = re.search(r'const PROFILE_RENDER_SECTIONS = \{(?P<body>.*?)\n\};', self.js, re.S)
+        self.assertIsNotNone(profile_contract)
+        self.assertNotIn("summary:", profile_contract.group("body"))
+        render_summary = re.search(r"function renderSummary\(knowledge\) \{(?P<body>.*?)\n\}", self.js, re.S)
+        self.assertIsNotNone(render_summary)
+        body = render_summary.group("body")
+        self.assertIn('profile !== "summary"', body)
+        self.assertIn("<h2>摘要</h2>", body)
+        self.assertIn("<h2>亮点</h2>", self.js)
+        self.assertIn("<h2>思考</h2>", self.js)
+        self.assertIn("<h2>视频章节总结</h2>", self.js)
+        self.assertIn("<h2>专业术语</h2>", self.js)
         self.assertIn("if (terms.length < 3) return", self.js)
-        self.assertIn("function renderProfessionalTerms(value)", self.js)
+        self.assertNotIn('"一句话"', profile_contract.group("body"))
+
+    def test_specialized_profiles_share_common_sections_and_hide_empty_details(self) -> None:
+        render_summary = re.search(r"function renderSummary\(knowledge\) \{(?P<body>.*?)\n\}", self.js, re.S)
+        self.assertIsNotNone(render_summary)
+        body = render_summary.group("body")
+        self.assertIn("if (hasProfileDetails) sections.push(renderProfileReport", body)
+        self.assertNotIn("!profileReportRendered", body)
+        render_field = re.search(r"function renderProfileField\(.*?\) \{(?P<body>.*?)\n\}", self.js, re.S)
+        self.assertIsNotNone(render_field)
+        self.assertIn('if (!html) return "";', render_field.group("body"))
+        self.assertNotIn("<p>未明确说明</p>", render_field.group("body"))
 
     def test_toolbar_has_visible_page_hierarchy(self) -> None:
         self.assertIn('class="workspace-heading"', self.html)
@@ -375,11 +391,14 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('id="apiSettings"', self.html)
         self.assertIn('id="apiConfigDialog"', self.html)
         self.assertIn("API Key 默认仅用于当前本地运行会话", self.html)
-        for element_id in ("deepseekApiKey", "geminiApiKey"):
+        for element_id in ("deepseekApiKey", "geminiApiKey", "groqApiKey"):
             self.assertRegex(self.html, rf'id="{element_id}" type="password"')
         self.assertIn('id="deepseekBaseUrl"', self.html)
         self.assertIn('id="deepseekModel"', self.html)
         self.assertIn('id="geminiModel"', self.html)
+        self.assertIn('id="groqModel"', self.html)
+        self.assertIn('data-provider-test="groq"', self.html)
+        self.assertIn('"deepseek", "gemini", "groq"', self.js)
         self.assertIn('/api/provider-config"', self.js)
         self.assertIn('/api/provider-config/test"', self.js)
         self.assertIn("toggleSecretField", self.js)
@@ -421,6 +440,12 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('api("/api/jobs")', self.js)
         self.assertIn("interrupted", self.js)
 
+    def test_library_records_show_processing_duration_timer(self) -> None:
+        self.assertIn("processingDurationMs", self.js)
+        self.assertIn("formatProcessingDuration", self.js)
+        self.assertIn("updateProcessingTimers", self.js)
+        self.assertIn("record-processing-time", self.css)
+
     def test_deepseek_is_the_only_task_backend(self) -> None:
         self.assertIn('id="taskBackend" type="hidden" value="deepseek"', self.html)
         self.assertNotIn('value="ollama"', self.html)
@@ -441,6 +466,14 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("function retryAnalysis()", self.js)
         self.assertIn("/analysis/retry`", self.js)
         self.assertIn("仅重新执行 AI 分析", self.js)
+        self.assertIn("仅运行 AI 分析", self.html)
+        self.assertIn("knowledge.transcriptReady", self.js)
+        self.assertIn("knowledge.analysisReady", self.js)
+        self.assertIn("转写完成，AI 分析未运行", self.js)
+        self.assertIn("AI 分析超时", self.js)
+        self.assertIn("analysis_requested: !transcriptOnly", self.js)
+        self.assertIn('$("#taskNoSummary").checked = false', self.js)
+        self.assertNotIn("taskNoSummary: ", self.js)
 
     def test_library_records_support_confirmed_multi_delete(self) -> None:
         self.assertIn("<span>资源库</span>", self.html)

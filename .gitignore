@@ -46,6 +46,7 @@ Thumbs.db
 desktop.ini
 
 backups/
+release/
 *.zip
 *.7z
 *.rar

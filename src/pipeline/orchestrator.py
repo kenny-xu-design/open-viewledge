@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..analysis import AnalysisService, KeyframeAnalysisService
 from ..analysis.profiles import resolve_analysis_profile
+from ..asr_runtime import asr_cache_dimensions
 from ..audio import extract_audio
 from ..cache import CacheStore, build_cache_key, source_cache_dimensions, transcript_content_hash
 from ..comments import CommentInsightService, CommentRepository, CommentSyncService
@@ -15,7 +16,8 @@ from ..config import AppConfig
 from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, NormalizedComment, ProcessingManifest, ProviderAttempt, SourceRecord, StageMetric, TranscriptSegment, utc_now
 from ..exporters import export_knowledge_package
 from ..exporters.analysis_markdown import render_profile_analysis
-from ..providers.asr import LocalWhisperProvider
+from ..transcription_router import PlatformSubtitleProvider, TranscriptionRouter, normalize_asr_route
+from ..providers.asr import LocalWhisperProvider  # compatibility for existing mocks
 from ..providers.llm import DeepSeekProvider, GeminiProvider
 from ..processing_profiles import ProcessingProfile
 from ..knowledge_validation import inspect_knowledge_package
@@ -23,11 +25,23 @@ from ..sources import LocalMediaSource, YtdlpSource
 from ..timeline import build_timeline, extract_frames
 from ..transcripts import group_segments, parse_subtitle_file, read_jsonl, write_grouped_markdown, write_jsonl, write_legacy_transcript
 from ..transcripts.normalizer import normalize_segments
-from ..utils import UserFacingError, ensure_dir, load_json, sanitize_filename, save_json, write_text
+from ..utils import UserFacingError, ensure_dir, is_timeout_error, load_json, sanitize_filename, save_json, write_text
 from ..visual import generate_tutorial_step_snapshots
 from ..cli_contract import sanitize_message
 from .context import PipelineContext
 from .stages import STAGES
+
+
+def _apply_transcript_result(context: PipelineContext, result) -> None:
+    assert context.manifest
+    context.manifest.transcript_status = "completed"
+    context.manifest.transcript_provider = result.provider
+    context.manifest.transcript_model = result.model
+    context.manifest.transcript_fallback_used = result.fallback_used
+    context.manifest.asr_provider = result.provider
+    context.manifest.asr_model = result.model
+    context.manifest.asr_device = result.device
+    context.manifest.asr_audio_duration_seconds = result.duration_seconds
 
 
 class PipelineOrchestrator:
@@ -40,6 +54,8 @@ class PipelineOrchestrator:
         processing_profile: ProcessingProfile = "complete",
         comments_enabled: bool = False,
         no_analysis: bool = False,
+        asr_route: str = "cloud",
+        asr_fallback_enabled: bool = True,
         generate_frames: bool | None = None,
         sample_seconds: int | None = None,
         export_legacy_note: bool = False,
@@ -54,6 +70,8 @@ class PipelineOrchestrator:
         self.processing_profile = processing_profile
         self.comments_enabled = comments_enabled
         self.no_analysis = no_analysis
+        self.asr_route = normalize_asr_route(asr_route)
+        self.asr_fallback_enabled = bool(asr_fallback_enabled)
         self.generate_frames = config.generate_frames if generate_frames is None else generate_frames
         self.sample_seconds = sample_seconds
         self.export_legacy_note = export_legacy_note
@@ -81,6 +99,13 @@ class PipelineOrchestrator:
                 privacy_mode=False,
                 sample_seconds=self.sample_seconds,
                 processing_profile=self.processing_profile,
+                analysis_requested=not self.no_analysis,
+                analysis_status="skipped" if self.no_analysis else "pending",
+                analysis_skip_reason=(
+                    "user_requested_transcript_only" if self.no_analysis else ""
+                ),
+                transcript_only=self.no_analysis,
+                transcript_route_requested=self.asr_route,
             ),
         )
         try:
@@ -142,13 +167,14 @@ class PipelineOrchestrator:
                 language=self.config.language,
                 sample_start=0,
                 sample_end=self.sample_seconds,
-                asr_provider=LocalWhisperProvider.name,
-                asr_model=LocalWhisperProvider.model_name,
-                asr_device="cpu",
-                asr_compute_type="int8",
+                asr_route=self.asr_route,
+                asr_fallback_enabled=self.asr_fallback_enabled,
+                cloud_asr_provider=self.config.cloud_asr_provider,
+                cloud_asr_model=self.config.cloud_asr_model,
                 vad_filter=True,
                 processing_profile=self.processing_profile,
                 normalizer_version="1",
+                **asr_cache_dimensions(self.config),
             )
             context.manifest.cache_keys.update(
                 {
@@ -164,6 +190,10 @@ class PipelineOrchestrator:
                 )
                 if cached_transcript and _cache_matches_language(cached_transcript, self.config.language):
                     context.segments = cached_transcript
+                    context.manifest.transcript_status = "completed"
+                    context.manifest.transcript_provider = str(
+                        context.previous_manifest.get("transcript_provider") or "cache"
+                    )
                     context.mark_cache_hit("acquire_transcript")
                     context.log("命中逐句字幕缓存，跳过字幕下载、媒体下载和 ASR。")
                     return
@@ -173,6 +203,8 @@ class PipelineOrchestrator:
                 )
                 if cached_subtitle and _cache_matches_language(cached_subtitle, self.config.language):
                     context.segments = cached_subtitle
+                    context.manifest.transcript_status = "completed"
+                    context.manifest.transcript_provider = "platform"
                     context.mark_cache_hit("acquire_transcript")
                     context.log("命中平台字幕缓存，跳过字幕下载、媒体下载和 ASR。")
                     return
@@ -190,6 +222,10 @@ class PipelineOrchestrator:
                         and (not previous_key or previous_key == transcript_key)
                     ):
                         context.segments = cached_segments
+                        context.manifest.transcript_status = "completed"
+                        context.manifest.transcript_provider = str(
+                            cached_manifest.get("transcript_provider") or "cache"
+                        )
                         context.mark_cache_hit("acquire_transcript")
                         context.log(f"复用已有逐句字幕：{cached_raw}")
                         return
@@ -198,7 +234,14 @@ class PipelineOrchestrator:
                 context.subtitle_path = source_adapter.acquire_subtitles(context.output_dir / "_temp", self.config.language)
                 if context.subtitle_path:
                     context.log("已获取平台字幕，跳过 ASR。")
-                    context.segments = parse_subtitle_file(context.subtitle_path, self.config.language)
+                    context.log("已使用平台字幕")
+                    result = PlatformSubtitleProvider().build_result(
+                        parse_subtitle_file(context.subtitle_path, self.config.language),
+                        self.config.language,
+                        context.source.duration or 0,
+                    )
+                    context.segments = result.segments
+                    _apply_transcript_result(context, result)
                     self._cache_put(
                         context,
                         "subtitle",
@@ -207,6 +250,16 @@ class PipelineOrchestrator:
                     )
                     return
                 context.log("未获取到平台字幕，进入 FFmpeg + 本地 faster-whisper。")
+                context.log("未检测到平台字幕")
+                context.log(
+                    "用户选择："
+                    + {
+                        "cloud": "云端快速转写",
+                        "local_gpu": "本地 GPU",
+                        "local_cpu": "本地 CPU",
+                    }[self.asr_route]
+                )
+                context.log("正在提取音频")
                 context.media_path = source_adapter.acquire_media(
                     context.output_dir / "_temp",
                     self.sample_seconds,
@@ -218,12 +271,17 @@ class PipelineOrchestrator:
                     sample_seconds=self.sample_seconds,
                     ffmpeg_path=self.config.ffmpeg_path,
                 )
-                provider = LocalWhisperProvider()
-                if not provider.is_available():
-                    raise UserFacingError("本地 faster-whisper 模型不可用。")
-                context.segments = provider.transcribe(wav_path, context)
-                context.manifest.asr_provider = provider.name
-                context.manifest.asr_model = provider.model_name
+                if self.asr_route == "cloud":
+                    context.log("云端 ASR：Groq")
+                    context.log(f"模型：{self.config.cloud_asr_model}")
+                result = TranscriptionRouter(
+                    self.config,
+                    route=self.asr_route,
+                    fallback_enabled=self.asr_fallback_enabled,
+                ).transcribe(wav_path, context)
+                context.segments = result.segments
+                _apply_transcript_result(context, result)
+                context.log("开始运行 AI 分析")
 
             self._stage(context, "acquire_transcript", acquire)
 
@@ -297,9 +355,17 @@ class PipelineOrchestrator:
             def analyze() -> None:
                 if self.no_analysis:
                     context.analysis = AnalysisResult(status="skipped", analysis_profile=context.analysis_profile)
+                    context.manifest.analysis_requested = False
                     context.manifest.analysis_status = "skipped"
+                    context.manifest.analysis_skip_reason = "user_requested_transcript_only"
+                    context.manifest.analysis_provider = ""
+                    context.manifest.analysis_model = ""
+                    context.manifest.transcript_only = True
                     context.manifest.analysis_error = ""
                     return
+                context.manifest.analysis_requested = True
+                context.manifest.analysis_skip_reason = ""
+                context.manifest.transcript_only = False
                 if self.backend != "deepseek":
                     raise UserFacingError(
                         f"后端 {self.backend} 已停用。当前仅支持 deepseek，请改用 --backend deepseek。"
@@ -311,6 +377,8 @@ class PipelineOrchestrator:
                 context.log(f"AI Provider：{provider.name} / {provider.model_name}")
                 context.manifest.llm_provider = provider.name
                 context.manifest.llm_model = provider.model_name
+                context.manifest.analysis_provider = provider.name
+                context.manifest.analysis_model = provider.model_name
                 analysis_key = build_cache_key(
                     "text_analysis",
                     source=source_dimensions,
@@ -332,6 +400,8 @@ class PipelineOrchestrator:
                     context.manifest.llm_provider = cached_analysis.provider or provider.name
                     context.manifest.llm_model = cached_analysis.model or provider.model_name
                     context.manifest.analysis_status = "completed"
+                    context.manifest.analysis_provider = context.manifest.llm_provider
+                    context.manifest.analysis_model = context.manifest.llm_model
                     context.manifest.analysis_error = ""
                     context.mark_cache_hit("run_analysis")
                     context.log("命中文本分析缓存，跳过 LLM 请求。")
@@ -361,6 +431,8 @@ class PipelineOrchestrator:
                     context.analysis = AnalysisService(provider).analyze(context.groups, context.analysis_profile, context)
                     context.manifest.llm_model = context.analysis.model or provider.model_name
                     context.manifest.analysis_status = "completed"
+                    context.manifest.analysis_provider = provider.name
+                    context.manifest.analysis_model = context.manifest.llm_model
                     context.manifest.analysis_error = ""
                     attempt.model = context.manifest.llm_model
                     attempt.success = True
@@ -371,9 +443,10 @@ class PipelineOrchestrator:
                         context.analysis.model_dump(mode="json"),
                     )
                 except Exception as exc:
+                    timed_out = is_timeout_error(exc)
                     if context.analysis is None:
                         context.analysis = AnalysisResult(
-                            status="failed",
+                            status="timeout" if timed_out else "failed",
                             error=str(exc),
                             analysis_profile=context.analysis_profile,
                             provider=provider.name,
@@ -381,7 +454,7 @@ class PipelineOrchestrator:
                         )
                     attempt.error_type = type(exc).__name__
                     attempt.error_message = str(exc)
-                    context.manifest.analysis_status = "failed"
+                    context.manifest.analysis_status = "timeout" if timed_out else "failed"
                     context.manifest.analysis_error = context.analysis.error or str(exc)
                     raise
                 finally:
@@ -690,6 +763,13 @@ class PipelineOrchestrator:
             metric.error_code = type(exc).__name__
             metric.error_message = message
             if name == "run_analysis":
+                context.manifest.stage_status[name] = (
+                    "timeout"
+                    if context.manifest.analysis_status == "timeout"
+                    else "failed"
+                )
+            elif name == "acquire_transcript":
+                context.manifest.transcript_status = "failed"
                 context.manifest.stage_status[name] = "failed"
             else:
                 context.manifest.stage_status[name] = "warning" if soft_fail else "failed"

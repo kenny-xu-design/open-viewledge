@@ -14,11 +14,12 @@ except ImportError:
 from . import __version__
 from .cli_contract import CliEmitter, ExitCode, classify_error, error_object, sanitize_message
 from .cli_tasks import CliTaskRecord, CliTaskStore
-from .config import load_config
+from .config import load_config, resolve_output_root
 from .diagnostics import run_doctor
 from .exporters import export_directory_to_vault, render_directory_export, selection_for_request
 from .exporters.obsidian_exporter import safe_export_filename
 from .knowledge_validation import inspect_knowledge_package
+from .network import apply_network_proxy_env
 from .pipeline import PipelineOrchestrator
 from .processing_profiles import DEFAULT_PROCESSING_PROFILE, normalize_processing_profile
 from .utils import UserFacingError
@@ -30,6 +31,7 @@ SUPPORTED_EXPORTS = ("none", "obsidian")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = Path("config.example.json")
 CLI_TASK_ROOT = PROJECT_ROOT / ".local" / "cli_tasks"
+NETWORK_PROXY_STATUS = apply_network_proxy_env()
 
 if typer:
     app = typer.Typer(add_completion=False, help="把视频链接或本地视频文件转换成结构化内容摘要。")
@@ -77,6 +79,8 @@ def run_pipeline(
     comments: bool = False,
     export: str = "none",
     no_summary: bool = False,
+    asr_route: str = "cloud",
+    asr_fallback_enabled: bool = True,
     config: Path = Path("config.example.json"),
     generate_frames: bool = True,
     sample_seconds: int | None = None,
@@ -98,6 +102,7 @@ def run_pipeline(
         cfg = load_config(config)
     except UserFacingError as exc:
         raise ExitWithCode(ExitCode.USAGE_OR_CONFIG, str(exc)) from exc
+    cfg = cfg.model_copy(update={"output_dir": str(resolve_output_root(cfg, PROJECT_ROOT))})
     language = lang or cfg.language
     if language != cfg.language:
         cfg = cfg.model_copy(update={"language": language})
@@ -117,6 +122,8 @@ def run_pipeline(
             processing_profile=resolved_processing_profile,
             comments_enabled=comments,
             no_analysis=no_summary,
+            asr_route=asr_route,
+            asr_fallback_enabled=asr_fallback_enabled,
             generate_frames=generate_frames,
             sample_seconds=sample_seconds,
             export_legacy_note=export_mode == "obsidian",
@@ -138,6 +145,17 @@ def run_pipeline(
         "status": package.manifest.status,
         "analysis_profile": package.manifest.analysis_profile,
         "processing_profile": package.manifest.processing_profile,
+        "analysis_requested": package.manifest.analysis_requested,
+        "analysis_status": package.manifest.analysis_status,
+        "analysis_skip_reason": package.manifest.analysis_skip_reason,
+        "analysis_provider": package.manifest.analysis_provider,
+        "analysis_model": package.manifest.analysis_model,
+        "transcript_only": package.manifest.transcript_only,
+        "transcript_status": package.manifest.transcript_status,
+        "transcript_provider": package.manifest.transcript_provider,
+        "transcript_model": package.manifest.transcript_model,
+        "transcript_route_requested": package.manifest.transcript_route_requested,
+        "transcript_fallback_used": package.manifest.transcript_fallback_used,
         "first_readable_result_duration_ms": package.manifest.first_readable_result_duration_ms,
         "full_completion_duration_ms": package.manifest.full_completion_duration_ms,
         "analysis": {
@@ -165,6 +183,8 @@ def execute_analyze(
     comments: bool = False,
     export: str = "none",
     no_summary: bool = False,
+    asr_route: str = "cloud",
+    asr_fallback_enabled: bool = True,
     config: Path = DEFAULT_CONFIG,
     generate_frames: bool = True,
     sample_seconds: int | None = None,
@@ -197,6 +217,8 @@ def execute_analyze(
         "comments": comments,
         "export": export,
         "no_summary": no_summary,
+        "asr_route": asr_route,
+        "asr_fallback_enabled": asr_fallback_enabled,
         "config": str(config),
         "generate_frames": generate_frames,
         "sample_seconds": sample_seconds,
@@ -241,6 +263,8 @@ def execute_analyze(
             comments=comments,
             export=export,
             no_summary=no_summary,
+            asr_route=asr_route,
+            asr_fallback_enabled=asr_fallback_enabled,
             config=config,
             generate_frames=generate_frames,
             sample_seconds=sample_seconds,
@@ -305,6 +329,8 @@ def execute_resume(
         comments=bool(options.get("comments", False)),
         export=str(options.get("export") or "none"),
         no_summary=bool(options.get("no_summary", False)),
+        asr_route=str(options.get("asr_route") or "cloud"),
+        asr_fallback_enabled=bool(options.get("asr_fallback_enabled", True)),
         config=Path(str(options.get("config") or DEFAULT_CONFIG)),
         generate_frames=bool(options.get("generate_frames", True)),
         sample_seconds=_optional_int(options.get("sample_seconds")),
@@ -341,7 +367,7 @@ def export_existing_knowledge(
     config: Path = Path("config.example.json"),
 ) -> dict[str, object]:
     cfg = load_config(config)
-    root = (Path(cfg.output_dir) if Path(cfg.output_dir).is_absolute() else Path.cwd() / cfg.output_dir).resolve()
+    root = resolve_output_root(cfg, PROJECT_ROOT)
     directory = (root / knowledge_id).resolve()
     if directory.parent != root or not (directory / "metadata.json").is_file():
         raise UserFacingError("知识包不存在。")
@@ -433,6 +459,8 @@ def _run_argparse() -> None:
     parser.add_argument("--comments", action="store_true", help="同步公开评论并生成独立评论区洞察。")
     parser.add_argument("--export", choices=SUPPORTED_EXPORTS, default="none", help="导出方式：none / obsidian。")
     parser.add_argument("--no-summary", action="store_true", help="只生成 transcript.md，不调用 LLM。")
+    parser.add_argument("--asr-route", choices=("cloud", "local_gpu", "local_cpu"), default="cloud")
+    parser.add_argument("--no-asr-fallback", action="store_true")
     parser.add_argument("--no-frames", action="store_true", help="跳过关键帧生成。")
     parser.add_argument("--sample-seconds", type=int, help="仅处理开头指定秒数，用于快速链路验证。")
     parser.add_argument("--config", type=Path, default=Path("config.example.json"), help="配置文件路径。")
@@ -448,6 +476,8 @@ def _run_argparse() -> None:
             comments=args.comments,
             export=args.export,
             no_summary=args.no_summary,
+            asr_route=args.asr_route,
+            asr_fallback_enabled=not args.no_asr_fallback,
             config=args.config,
             generate_frames=not args.no_frames,
             sample_seconds=args.sample_seconds,
@@ -472,6 +502,12 @@ if typer:
         comments: bool = typer.Option(False, "--comments", help="同步公开评论并生成独立评论区洞察。"),
         export: str = typer.Option("none", "--export"),
         no_summary: bool = typer.Option(False, "--no-summary"),
+        asr_route: str = typer.Option(
+            "cloud", "--asr-route", help="无平台字幕时：cloud / local_gpu / local_cpu。"
+        ),
+        no_asr_fallback: bool = typer.Option(
+            False, "--no-asr-fallback", help="关闭转写失败后的安全回退。"
+        ),
         config: Path = typer.Option(DEFAULT_CONFIG, "--config"),
         no_frames: bool = typer.Option(False, "--no-frames"),
         sample_seconds: Optional[int] = typer.Option(None, "--sample-seconds"),
@@ -488,6 +524,8 @@ if typer:
             comments=comments,
             export=export,
             no_summary=no_summary,
+            asr_route=asr_route,
+            asr_fallback_enabled=not no_asr_fallback,
             config=config,
             generate_frames=not no_frames,
             sample_seconds=sample_seconds,

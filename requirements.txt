@@ -1,5 +1,7 @@
 yt-dlp>=2025.1.15
 faster-whisper>=1.1.0
+nvidia-cublas-cu12>=12.9.2.10; sys_platform == "win32"
+nvidia-cudnn-cu12>=9.24.0.43; sys_platform == "win32"
 openai>=1.40.0
 python-dotenv>=1.0.1
 pydantic>=2.7.0

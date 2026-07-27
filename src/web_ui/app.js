@@ -14,10 +14,9 @@ const ANALYSIS_MODE_META = {
   "close-reading": { label: "深度精读", description: "适合课程、演讲、长访谈和观点内容" },
 };
 const PROFILE_RENDER_SECTIONS = {
-  summary: [["一句话", "one_sentence", "text"], ["摘要", "summary", "text"], ["专业术语", "professional_terms", "terms"], ["亮点", "highlights", "highlights"], ["思考", "thoughts", "thoughts"], ["章节总结", "chapter_summaries", "chapters"]],
-  tutorial: [["教程目标", "tutorial_goal", "text"], ["最终成果", "final_result", "text"], ["前置条件", "prerequisites", "list"], ["工具与材料", "tools_and_materials", "list"], ["流程总览", "workflow_overview", "text"], ["教程阶段与章节", "chapter_summaries", "tutorialChapters"], ["完整教程步骤", "steps", "steps"], ["关键参数与设置", "key_parameters", "list"], ["常见错误与排查", "troubleshooting", "list"], ["完成验收清单", "acceptance_checklist", "checklist"], ["可复用命令或模板", "reusable_commands_or_templates", "list"], ["教程局限", "limitations", "list"]],
+  tutorial: [["教程目标", "tutorial_goal", "text"], ["最终成果", "final_result", "text"], ["前置条件", "prerequisites", "list"], ["工具与材料", "tools_and_materials", "list"], ["流程总览", "workflow_overview", "text"], ["完整教程步骤", "steps", "steps"], ["关键参数与设置", "key_parameters", "list"], ["常见错误与排查", "troubleshooting", "list"], ["完成验收清单", "acceptance_checklist", "checklist"], ["可复用命令或模板", "reusable_commands_or_templates", "list"], ["教程局限", "limitations", "list"]],
   viral: [["内容定位", "content_positioning", "text"], ["目标受众", "target_audience", "list"], ["标题与封面承诺", "title_and_cover_promise", "text"], ["前 30 秒钩子", "first_30_seconds_hook", "text"], ["内容结构", "content_structure", "list"], ["节奏与留存设计", "retention_design", "list"], ["情绪与叙事机制", "emotion_and_narrative", "list"], ["视觉包装与剪辑", "visual_packaging_and_editing", "list"], ["互动与传播设计", "interaction_and_distribution", "list"], ["可复用内容公式", "reusable_content_formula", "list"], ["可借鉴点", "takeaways", "list"], ["风险与局限", "risks_and_limitations", "list"]],
-  "close-reading": [["核心命题", "core_thesis", "text"], ["关键概念", "key_concepts", "list"], ["论证地图", "argument_map", "list"], ["逐章精读", "chapter_close_reading", "chapters"], ["证据评估", "evidence_assessment", "list"], ["隐含假设", "implicit_assumptions", "list"], ["可能的反方观点", "counterarguments", "list"], ["论证局限", "argument_limits", "list"], ["视觉证据", "visual_evidence", "list"], ["延伸联系", "extended_connections", "list"], ["待核查事实", "facts_to_verify", "list"]],
+  "close-reading": [["核心命题", "core_thesis", "text"], ["关键概念", "key_concepts", "list"], ["论证地图", "argument_map", "list"], ["证据评估", "evidence_assessment", "list"], ["隐含假设", "implicit_assumptions", "list"], ["可能的反方观点", "counterarguments", "list"], ["论证局限", "argument_limits", "list"], ["视觉证据", "visual_evidence", "list"], ["延伸联系", "extended_connections", "list"], ["待核查事实", "facts_to_verify", "list"]],
 };
 const SETTINGS = {
   moduleOrder: "vs.moduleOrder",
@@ -486,12 +485,11 @@ function openApiConfig() {
 }
 
 function renderApiConfig() {
-  renderOneApiProvider("deepseek");
-  renderOneApiProvider("gemini");
+  ["deepseek", "gemini", "groq"].forEach(renderOneApiProvider);
 }
 
 function renderApiConfigError(message) {
-  ["deepseek", "gemini"].forEach((provider) => {
+  ["deepseek", "gemini", "groq"].forEach((provider) => {
     const result = $(`#${provider}TestResult`);
     if (result) {
       result.className = "api-test-result failed";
@@ -514,6 +512,9 @@ function renderOneApiProvider(provider) {
     $("#deepseekBaseUrl").value = config.baseUrl || "https://api.deepseek.com";
     $("#deepseekModel").value = config.model || "deepseek-v4-flash";
     $("#deepseekApiKey").value = "";
+  } else if (provider === "groq") {
+    $("#groqModel").value = config.model || "whisper-large-v3-turbo";
+    $("#groqApiKey").value = "";
   } else {
     $("#geminiModel").value = config.model || "gemini-3.1-flash-lite";
     $("#geminiApiKey").value = "";
@@ -537,6 +538,10 @@ function collectProviderConfig(provider, includeEmptyKey = false) {
     if (key || includeEmptyKey) payload.apiKey = key;
     payload.baseUrl = $("#deepseekBaseUrl").value.trim();
     payload.model = $("#deepseekModel").value.trim();
+  } else if (provider === "groq") {
+    const key = $("#groqApiKey").value;
+    if (key || includeEmptyKey) payload.apiKey = key;
+    payload.model = $("#groqModel").value.trim();
   } else {
     const key = $("#geminiApiKey").value;
     if (key || includeEmptyKey) payload.apiKey = key;
@@ -665,10 +670,15 @@ function renderLibrary() {
     return `
     <button class="library-item ${!state.deleteMode && item.id === state.selectedKnowledgeId ? "active" : ""} ${deleteSelected ? "delete-selected" : ""}" data-knowledge-id="${escapeAttr(item.id)}" aria-current="${!state.deleteMode && item.id === state.selectedKnowledgeId ? "true" : "false"}" ${state.deleteMode ? `aria-pressed="${deleteSelected ? "true" : "false"}"` : ""}>
       ${leading}
-      <span class="record-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(platformLabel(item.platform))} · ${formatRelativeDate(item.updatedAt)}</small></span>
+      <span class="record-copy">
+        <strong>${escapeHtml(item.title)}</strong>
+        <small>${escapeHtml(platformLabel(item.platform))} · ${formatRelativeDate(item.updatedAt)}</small>
+        ${item.processingDurationMs != null ? `<small class="record-processing-time" data-processing-duration="${Number(item.processingDurationMs) || 0}" data-processing-started-at="${Number(item.processingStartedAt) || 0}" data-processing-live="${item.processingTimingLive ? "true" : "false"}">${item.processingTimingLive ? "处理中" : "耗时"} ${formatProcessingDuration(item.processingDurationMs)}</small>` : ""}
+      </span>
       <span class="record-state ${escapeAttr(item.status)}" aria-label="${escapeAttr(statusLabel(item.status))}"></span>
     </button>`;
   }).join("");
+  updateProcessingTimers();
   updateDeleteAction();
 }
 
@@ -724,7 +734,7 @@ async function loadKnowledge(id, force = false) {
 function renderKnowledge(knowledge) {
   renderMedia(knowledge);
   renderSourceInfo(knowledge);
-  renderStatus(knowledge.manifest || {});
+  renderStatus(knowledge);
   renderSummary(knowledge);
   renderInsightPanel(knowledge);
   renderQuestionChips(knowledge.analysis?.thoughts || []);
@@ -879,9 +889,9 @@ async function saveKnowledgeExportToVault() {
 
 function renderAnalysisRetry(knowledge) {
   const button = $("#retryAnalysis");
-  const failed = knowledge.analysis?.status === "failed" || knowledge.inspection?.analysis_status === "invalid";
-  button.classList.toggle("hidden", !failed);
-  button.disabled = !failed;
+  const canAnalyze = Boolean(knowledge.transcriptReady) && !Boolean(knowledge.analysisReady);
+  button.classList.toggle("hidden", !canAnalyze);
+  button.disabled = !canAnalyze;
   button.removeAttribute("aria-busy");
 }
 
@@ -891,8 +901,8 @@ async function retryAnalysis() {
   const button = $("#retryAnalysis");
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
-  button.title = "正在重新生成摘要";
-  showToast("正在重新生成摘要，仅重新执行 AI 分析…");
+  button.title = "正在运行 AI 分析";
+  showToast("正在复用已有字幕，仅重新执行 AI 分析…");
   try {
     const data = await api(`/api/library/${encodeURIComponent(knowledgeId)}/analysis/retry`, {
       method: "POST",
@@ -901,13 +911,13 @@ async function retryAnalysis() {
     knowledgeCache.set(knowledgeId, data.knowledge);
     state.activeSource = data.knowledge;
     renderKnowledge(data.knowledge);
-    showToast("摘要已重新生成");
+    showToast("AI 分析已完成");
   } catch (error) {
     knowledgeCache.delete(knowledgeId);
-    showToast(`重新生成摘要失败：${error.message}`);
+    showToast(`AI 分析失败：${error.message}`);
     await loadKnowledge(knowledgeId, true);
   } finally {
-    button.title = "重新生成摘要";
+    button.title = "仅运行 AI 分析";
     button.removeAttribute("aria-busy");
   }
 }
@@ -1047,14 +1057,22 @@ function renderSourceInfo(knowledge) {
     ${description ? `<details class="source-description"><summary>来源简介</summary><p>${escapeHtml(description)}</p></details>` : ""}`;
 }
 
-function renderStatus(manifest) {
+function renderStatus(knowledge) {
+  const manifest = knowledge.manifest || {};
   const element = $("#processingStatus");
   const status = manifest.status || "unknown";
+  const analysisStatus = knowledge.analysisStatus || manifest.analysis_status || knowledge.analysis?.status || "pending";
+  const transcriptWithoutAnalysis = Boolean(knowledge.transcriptReady) && !Boolean(knowledge.analysisReady);
   let className = "";
   if (status === "completed") className = "success";
   else if (status === "completed_with_warnings") className = "warning";
   else if (status === "failed" || status === "invalid") className = "error";
+  if (transcriptWithoutAnalysis) className = "warning";
   const errors = Array.isArray(manifest.errors) && manifest.errors.length ? ` · ${manifest.errors[0]}` : "";
+  let label = statusLabel(status);
+  if (transcriptWithoutAnalysis && analysisStatus === "skipped") label = "转写完成，AI 分析未运行";
+  else if (transcriptWithoutAnalysis && analysisStatus === "timeout") label = "转写完成，AI 分析超时";
+  else if (transcriptWithoutAnalysis && analysisStatus === "failed") label = "转写完成，AI 分析失败";
   const semanticClass = className === "success"
     ? "ui-inline-status--success"
     : className === "warning"
@@ -1063,32 +1081,43 @@ function renderStatus(manifest) {
         ? "ui-inline-status--danger"
         : "";
   element.className = `processing-status ui-inline-status ${semanticClass}`.trim();
-  element.innerHTML = `<svg><use href="#${className === "error" || className === "warning" ? "i-warning" : "i-check"}"/></svg><span>${escapeHtml(statusLabel(status))}${manifest.current_stage ? ` · ${escapeHtml(stageLabel(manifest.current_stage))}` : ""}${escapeHtml(errors)}</span>`;
+  element.innerHTML = `<svg><use href="#${className === "error" || className === "warning" || transcriptWithoutAnalysis ? "i-warning" : "i-check"}"/></svg><span>${escapeHtml(label)}${manifest.current_stage ? ` · ${escapeHtml(stageLabel(manifest.current_stage))}` : ""}${escapeHtml(errors)}</span>`;
 }
 
 function renderSummary(knowledge) {
   const analysis = knowledge.analysis || {};
   const timeline = Array.isArray(knowledge.timeline) ? knowledge.timeline : [];
   const sections = [];
-  const summaryCoreRendered = (analysis.analysis_profile || "summary") === "summary" && analysis.content && Object.keys(analysis.content).length;
-  if (analysis.content && Object.keys(analysis.content).length) sections.push(renderProfileReport(analysis, knowledge.id));
-  else if (analysis.summary) sections.push(`<section class="result-section"><h2>摘要</h2><p>${escapeHtml(analysis.summary)}</p></section>`);
+  const profile = analysis.analysis_profile || "summary";
+  const hasProfileDetails = profile !== "summary" && analysis.content && Object.keys(analysis.content).length;
+  if (analysis.summary) sections.push(`<section class="result-section"><h2>摘要</h2><p>${escapeHtml(analysis.summary)}</p></section>`);
+  else if (analysis.status === "timeout") sections.push(`<div class="analysis-empty">AI 分析超时：${escapeHtml(analysis.error || "请求超过时限，请稍后仅运行 AI 分析。")} 字幕和时间轴仍可正常查看。</div>`);
   else if (analysis.status === "failed") sections.push(`<div class="analysis-empty">AI 分析失败：${escapeHtml(analysis.error || "请检查 DeepSeek 配置后重试。")} 字幕和时间轴仍可正常查看。</div>`);
-  else sections.push('<div class="analysis-empty">AI 分析已跳过。字幕、时间轴和原文细读仍可正常查看。</div>');
+  else if (!hasProfileDetails) {
+    const reason = knowledge.analysisSkipReason || knowledge.manifest?.analysis_skip_reason || "";
+    const message = reason === "user_requested_transcript_only"
+      ? "用户选择了仅转写，AI 分析未运行。"
+      : "AI 分析未运行。";
+    sections.push(`<div class="analysis-empty">${escapeHtml(message)} 字幕、时间轴和原文细读仍可正常查看。</div>`);
+  }
 
-  if (!summaryCoreRendered && Array.isArray(analysis.highlights) && analysis.highlights.length) {
+  const terms = renderProfessionalTerms(analysis.terminology?.length ? analysis.terminology : analysis.glossary);
+  if (terms) sections.push(`<section class="result-section"><h2>专业术语</h2>${terms}</section>`);
+  if (hasProfileDetails) sections.push(renderProfileReport(analysis, knowledge.id));
+
+  if (Array.isArray(analysis.highlights) && analysis.highlights.length) {
     sections.push(`<section class="result-section"><h2>亮点</h2><ul class="highlight-list">${analysis.highlights.map((item) => {
       const imageUrl = knowledgeAssetUrl(knowledge.id, item.image);
       const detail = item.summary || item.explanation || "";
       return `<li class="highlight-item${imageUrl ? " has-image" : ""}">${imageUrl ? `<img class="highlight-image" src="${imageUrl}" alt="${escapeAttr(item.title || "亮点画面")}" loading="lazy" data-preview-image="${imageUrl}">` : `<span class="highlight-icon">${escapeHtml(item.icon || "◆")}</span>`}<div class="highlight-copy"><strong>${escapeHtml(item.title || "亮点")}</strong>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}<div class="tag-list">${(item.tags || []).map((tag) => `<button class="tag-button" data-tag="${escapeAttr(tag)}">#${escapeHtml(tag)}</button>`).join("")}</div></div></li>`;
     }).join("")}</ul></section>`);
   }
-  if (!summaryCoreRendered && Array.isArray(analysis.thoughts) && analysis.thoughts.length) {
+  if (Array.isArray(analysis.thoughts) && analysis.thoughts.length) {
     sections.push(`<section class="result-section"><h2>思考</h2><ol class="thought-list">${analysis.thoughts.map((item) => `<li><button class="thought-button" data-question="${escapeAttr(item.question || "")}">${escapeHtml(item.question || "")}</button></li>`).join("")}</ol></section>`);
   }
 
   const chapters = Array.isArray(analysis.chapters) && analysis.chapters.length ? analysis.chapters : timeline;
-  if (!summaryCoreRendered && chapters.length) {
+  if (chapters.length) {
     sections.push(`<section class="result-section" id="chapterSection"><h2>视频章节总结</h2><div class="chapter-list">${chapters.map((chapter, index) => renderChapter(chapter, index, knowledge.id)).join("")}</div></section>`);
   }
   sections.push(`<section class="result-section"><h2>原文资料</h2><div class="source-entry"><button class="quiet-button" data-open-transcript>查看分组字幕</button>${knowledge.files?.["transcript.raw.jsonl"] ? '<button class="icon-button small" data-open-raw aria-label="打开逐句原始数据"><svg><use href="#i-file"/></svg></button>' : ""}</div></section>`);
@@ -1097,37 +1126,19 @@ function renderSummary(knowledge) {
 
 function renderProfileReport(analysis, knowledgeId) {
   const profile = analysis.analysis_profile || "summary";
-  const meta = ANALYSIS_MODE_META[profile] || ANALYSIS_MODE_META.summary;
   const content = analysis.content || {};
-  const sections = PROFILE_RENDER_SECTIONS[profile] || PROFILE_RENDER_SECTIONS.summary;
-  if (profile === "summary") {
-    return sections.map(([title, key, kind]) => {
-      const value = content[key];
-      const html = renderProfileValue(value, kind, profile, knowledgeId);
-      if (kind === "terms" && !html) return "";
-      const fallback = html || "<p>未明确说明</p>";
-      const factualBasis = key === "summary" && content.factual_basis
-        ? `<blockquote>视频事实依据：${escapeHtml(content.factual_basis)}</blockquote>`
-        : "";
-      const inferences = key === "thoughts" && Array.isArray(content.ai_inferences)
-        ? content.ai_inferences.map((item) => `<li><strong>AI 推断：</strong>${escapeHtml(item)}</li>`).join("")
-        : "";
-      const merged = inferences
-        ? `${html ? html.replace(/<\/ul>$/, "") : "<ul>"}${inferences}</ul>`
-        : fallback;
-      return `<section class="result-section"><h2>${escapeHtml(title)}</h2>${merged}${factualBasis}</section>`;
-    }).join("");
-  }
+  const sections = PROFILE_RENDER_SECTIONS[profile] || [];
   const body = sections.map(([title, key, kind]) => renderProfileField(title, content[key], kind, profile, knowledgeId)).join("");
   const evidence = [
     content.factual_basis ? `<section class="result-section"><h2>视频事实依据</h2><p>${escapeHtml(content.factual_basis)}</p></section>` : "",
     Array.isArray(content.ai_inferences) && content.ai_inferences.length ? `<section class="result-section"><h2>AI 推断</h2><ul>${content.ai_inferences.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section>` : "",
   ].join("");
-  return `<section class="result-section profile-report-header"><h2>${escapeHtml(meta.label)}</h2><p>${escapeHtml(meta.description)}</p></section>${body}${evidence}`;
+  return `${body}${evidence}`;
 }
 
 function renderProfileField(title, value, kind, profile, knowledgeId) {
-  const html = renderProfileValue(value, kind, profile, knowledgeId) || "<p>未明确说明</p>";
+  const html = renderProfileValue(value, kind, profile, knowledgeId);
+  if (!html) return "";
   return `<section class="result-section"><h2>${escapeHtml(title)}</h2>${html}</section>`;
 }
 
@@ -1180,7 +1191,8 @@ function renderSummaryThoughts(value) {
 
 function renderSimpleList(value) {
   if (!Array.isArray(value) || !value.length) return "";
-  return `<ul>${value.map((item) => `<li>${escapeHtml(textFromValue(item))}</li>`).join("")}</ul>`;
+  const items = value.map((item) => textFromValue(item).trim()).filter(Boolean);
+  return items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "";
 }
 
 function renderProfileChapters(value) {
@@ -1217,7 +1229,7 @@ function renderTutorialSteps(value, profile, knowledgeId) {
       ["注意", Array.isArray(item.cautions) ? item.cautions.join("；") : ""],
     ].filter(([, text]) => String(text || "").trim()).map(([label, text]) => `<li><strong>${label}：</strong>${escapeHtml(text)}</li>`).join("");
     const time = item.timestamp != null ? `<button class="time-button" data-seek="${Number(item.timestamp) || 0}">${escapeHtml(formatTime(item.timestamp))}</button>` : "";
-    return `<article class="chapter tutorial-step"><h3>${time}${escapeHtml(item.title || `步骤 ${index + 1}`)}</h3>${imageUrl ? `<img class="chapter-frame" src="${imageUrl}" alt="${escapeAttr(item.title || "教程步骤截图")}" loading="lazy" data-preview-image="${imageUrl}">` : ""}<ul>${lines || "<li>未明确说明</li>"}</ul></article>`;
+    return `<article class="chapter tutorial-step"><h3>${time}${escapeHtml(item.title || `步骤 ${index + 1}`)}</h3>${imageUrl ? `<img class="chapter-frame" src="${imageUrl}" alt="${escapeAttr(item.title || "教程步骤截图")}" loading="lazy" data-preview-image="${imageUrl}">` : ""}${lines ? `<ul>${lines}</ul>` : ""}</article>`;
   }).join("")}</div>`;
 }
 
@@ -1549,6 +1561,9 @@ function openNewTask() {
   $("#newTaskForm").reset();
   $("#taskFrames").checked = true;
   $("#taskComments").checked = false;
+  $("#taskNoSummary").checked = false;
+  $("#taskAsrRoute").value = "cloud";
+  $("#taskAsrFallback").checked = true;
   setTaskSourceError(false);
   setTaskButtonLoading(false);
   setTaskSourceType("url");
@@ -1590,6 +1605,7 @@ function knowledgeAssetUrl(knowledgeId, relativePath) {
 
 async function submitTask(event) {
   event.preventDefault();
+  const transcriptOnly = $("#taskNoSummary").checked;
   const payload = {
     sourceType: activeSourceType,
     source: $("#taskSource").value,
@@ -1600,7 +1616,14 @@ async function submitTask(event) {
     export: $("#taskExport").value,
     noFrames: !$("#taskFrames").checked,
     comments: $("#taskComments").checked,
-    noSummary: $("#taskNoSummary").checked,
+    asr_route: $("#taskAsrRoute").value,
+    asr_fallback_enabled: $("#taskAsrFallback").checked,
+    noSummary: transcriptOnly,
+    skip_analysis: transcriptOnly,
+    transcribe_only: transcriptOnly,
+    transcriptOnly,
+    analysis_enabled: !transcriptOnly,
+    analysis_requested: !transcriptOnly,
     sampleSeconds: $("#taskSampleSeconds").value,
   };
   setTaskButtonLoading(true);
@@ -2227,7 +2250,7 @@ function timestampLink(url, seconds) {
 }
 
 function statusLabel(status) {
-  return ({ completed: "总结完成", completed_with_warnings: "部分完成", running: "处理中", processing: "处理中", created: "等待处理", failed: "处理失败", invalid: "知识包异常", unknown: "状态未知" })[status] || status || "状态未知";
+  return ({ completed: "总结完成", transcript_completed: "转写完成，AI 分析未运行", completed_with_warnings: "部分完成", running: "处理中", processing: "处理中", created: "等待处理", failed: "处理失败", invalid: "知识包异常", unknown: "状态未知" })[status] || status || "状态未知";
 }
 
 function stageLabel(stage) {
@@ -2266,6 +2289,27 @@ function formatPublished(value) {
   const text = String(value || "");
   return /^\d{8}$/.test(text) ? `${text.slice(0,4)}-${text.slice(4,6)}-${text.slice(6,8)}` : text;
 }
+
+function formatProcessingDuration(value) {
+  const totalSeconds = Math.max(0, Math.floor((Number(value) || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours) return `${hours}小时${minutes}分${seconds}秒`;
+  if (minutes) return `${minutes}分${seconds}秒`;
+  return `${seconds}秒`;
+}
+
+function updateProcessingTimers() {
+  $$(".record-processing-time[data-processing-live='true']").forEach((element) => {
+    const startedAt = Number(element.dataset.processingStartedAt) || 0;
+    const fallback = Number(element.dataset.processingDuration) || 0;
+    const elapsed = startedAt > 0 ? Math.max(fallback, Date.now() - startedAt) : fallback;
+    element.textContent = `处理中 ${formatProcessingDuration(elapsed)}`;
+  });
+}
+
+window.setInterval(updateProcessingTimers, 1000);
 
 function formatRelativeDate(timestamp) {
   const delta = Math.max(0, Date.now() - Number(timestamp) * 1000);

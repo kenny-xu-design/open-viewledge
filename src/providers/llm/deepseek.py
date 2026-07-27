@@ -120,12 +120,14 @@ def _status_code(exc: Exception) -> int | None:
 
 
 def _safe_error(exc: Exception, status: int | None) -> str:
+    if status == 408 or isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower():
+        return "DeepSeek 请求超时，请稍后重试。"
     if status == 429:
         return "DeepSeek 请求过于频繁或额度不足，请稍后重试。"
     if status is not None:
         detail = _response_error_message(exc)
         return f"DeepSeek 请求失败：HTTP {status}{f'：{detail}' if detail else ''}。"
-    return "DeepSeek 请求超时或网络不可用，请检查网络后重试。"
+    return "DeepSeek 网络连接失败，请检查网络后重试。"
 
 
 def _response_error_message(exc: Exception) -> str:

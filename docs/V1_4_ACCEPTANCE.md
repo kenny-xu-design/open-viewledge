@@ -53,16 +53,17 @@ Implementation status: code and mock-backed automated coverage complete; one rea
 - Web API configuration can apply, clear, and test DeepSeek/OpenAI-compatible and Gemini settings without returning full API Keys.
 - Web session Provider configuration is used by summary analysis, comment insight, Gemini visual/video routes, and right-side AI chat; CLI environment-variable behavior remains compatible.
 - API Keys are not written to frontend storage, job records, knowledge packages, Markdown, exports, or repository files.
-- `summary`, `tutorial`, `viral`, and `close-reading` use distinct `content` structures under a shared analysis envelope.
+- `summary`, `tutorial`, `viral`, and `close-reading` share flat summary/highlight/thought/chapter/terminology fields; the latter three retain distinct optional `content` details.
 - Main reports keep `generation.comments_included=false`; comment insights do not enter the four main reports.
 - `summary`, `viral`, and `close-reading` do not export screenshots. `tutorial + fast` does not generate screenshots. `tutorial + complete` may generate at most one `assets/tutorial/` image per key step and can export it with a relative path.
 - Adaptive segmentation writes `segmentation.policy_version=adaptive-v2` and records duration bucket, strategy, target ranges, actual counts, coverage ratio, largest uncovered gap, and reanalysis count.
 - Dense 30-minute-plus videos use semantic windows; dense 60-minute-plus videos default to hierarchical Map/Reduce unless subtitle content is sparse or native chapters are already adequate.
 - Mock-backed 71-minute tutorial fixtures produce more than five chapters, more than three highlights, and two-level tutorial chapters plus steps.
 - Coverage guard detects overlarge gaps and repairs only from real transcript groups; sparse long videos are allowed to remain below target ranges without fake insertion.
-- Standard summary renders `一句话`、`摘要`、`亮点`、`思考`、`章节总结`、`原文资料` in stable order; `一句话` is one complete single-line sentence, and the summary is a natural paragraph rather than three repeated fixed subheadings.
-- `professional_terms` uses the same analysis response, displays 3–8 distinct reliable core-related terms between `摘要` and `亮点`, and is hidden without placeholder text when fewer than 3 survive validation.
-- Long-video reduction preserves all merged highlights, thoughts, chapters, and professional-term candidates without a first-five display cap; routing does not decide report headings or optional-module visibility.
+- All profiles render `摘要`, optional `专业术语`, populated mode-specific details, `亮点`, `思考`, `视频章节总结`, and `原文资料` in stable order without an `一句话` display module.
+- `terminology` uses the same analysis response, displays 3–8 distinct reliable core-related terms after `摘要`, and is hidden without placeholder text when fewer than 3 survive validation.
+- Empty mode-specific fields do not create “未明确说明” report sections.
+- Long-video reduction preserves all merged highlights, thoughts, chapters, professional-term candidates, and populated specialized details without a first-five display cap.
 
 Final local QA on 2026-07-25:
 
@@ -72,12 +73,28 @@ Final local QA on 2026-07-25:
 - Browser spot-check confirmed the `评论区` / `高光片段` peer-tab structure and no comment insight leakage into the left summary.
 - Standard-summary correction verification: 85 focused analysis/segmentation/export/Web UI tests and all 271 unit tests pass; compileall, CLI/Web help, `node --check`, and `git diff --check` pass.
 
-### v1.4.4
+### Local ASR verification
 
-- Whisper model load time and ASR time are measured separately.
-- Worker mode avoids repeated model load across same-profile tasks.
-- CPU thread and batch size recommendations are based on measured runs, not constants.
-- Fast and complete ASR profiles are covered by benchmark records.
+- Whisper model load time and ASR time are measured separately: passed.
+- Same-process tasks reuse an unchanged model instance and local ASR concurrency
+  defaults to one: passed by automated tests.
+- Fixed Chinese, English, and mixed samples cover original CPU INT8, optimized
+  CPU INT8, and small CUDA FP16: passed on 2026-07-27.
+- CUDA DLL discovery from the Windows project `.venv` and spawned preflight
+  process is covered by automated tests.
+- Local turbo CUDA FP16 passes fixed Chinese, English, and mixed samples after
+  explicit local installation. Default balanced routing selects turbo on the
+  audited RTX 5060 Ti without fallback; automatic model download remains
+  prohibited.
+- Cold CUDA initialization can dominate very short clips; warm small CUDA FP16
+  inference is faster, so release notes must not promise a speedup for every
+  short first-run task.
+- Full release-candidate automation passes 312 unit tests, compileall,
+  CLI/Web help, `pip check`, JavaScript syntax, and diff checks.
+- Isolated-port Web smoke acceptance passes for `/`, `/api/runtime`,
+  `/api/library`, and `/api/jobs`; the runtime reports the project `.venv`.
+- `doctor --json` completes successfully with 11 checks passing and only
+  optional Gemini/Obsidian warnings on the audited machine.
 
 ### v1.4.5
 

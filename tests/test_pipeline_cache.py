@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 from src.cache import CacheStore
 from src.config import AppConfig
-from src.domain.models import AnalysisResult, SourceRecord, TranscriptSegment
+from src.domain.models import AnalysisResult, SourceRecord, TranscriptResult, TranscriptSegment
 from src.pipeline.orchestrator import PipelineOrchestrator
 
 
@@ -77,21 +77,42 @@ class FakeWhisperProvider:
     model_name = "faster-whisper-small"
     transcribe_calls = 0
 
+    def __init__(self, _config: object | None = None, **_kwargs) -> None:
+        self.telemetry = SimpleNamespace(
+            profile="balanced",
+            device="cpu",
+            compute_type="int8",
+            batch_size=1,
+            beam_size=1,
+            low_confidence_segments=0,
+            local_retries=0,
+            audio_duration_seconds=3.0,
+            transcription_seconds=0.1,
+            rtf=0.03,
+        )
+
     def is_available(self) -> bool:
         return True
 
-    def transcribe(self, _audio_path: Path, _context: object) -> list[TranscriptSegment]:
+    def transcribe(self, _audio_path: Path, _context: object) -> TranscriptResult:
         type(self).transcribe_calls += 1
-        return [
-            TranscriptSegment(
-                index=0,
-                start=0,
-                end=3,
-                text="ASR transcript",
-                language="zh",
-                source="asr",
-            )
-        ]
+        return TranscriptResult(
+            provider="faster-whisper",
+            model=self.model_name,
+            device="cpu",
+            language="zh",
+            duration_seconds=3,
+            segments=[
+                TranscriptSegment(
+                    index=0,
+                    start=0,
+                    end=3,
+                    text="ASR transcript",
+                    language="zh",
+                    source="asr",
+                )
+            ],
+        )
 
 
 class PipelineCacheTests(unittest.TestCase):
@@ -145,6 +166,84 @@ class PipelineCacheTests(unittest.TestCase):
                 whisper.assert_not_called()
                 self.assertIsNotNone(package.manifest.first_readable_result_duration_ms)
                 self.assertEqual(package.manifest.stage_status["extract_frames"], "skipped")
+                self.assertFalse(package.manifest.analysis_requested)
+                self.assertTrue(package.manifest.transcript_only)
+                self.assertEqual(package.manifest.analysis_status, "skipped")
+                self.assertEqual(
+                    package.manifest.analysis_skip_reason,
+                    "user_requested_transcript_only",
+                )
+
+    def test_transcript_only_result_runs_missing_analysis_without_retranscribing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first_source = FakeOnlineSource(root, has_subtitle=True)
+            second_source = FakeOnlineSource(root, has_subtitle=True)
+            config = AppConfig(output_dir=str(root / "output"), keep_temp_files=True)
+            cache = CacheStore(root / "cache")
+            provider = SimpleNamespace(
+                name="deepseek",
+                model_name="test-model",
+                is_available=lambda: True,
+            )
+            analysis_service = Mock()
+            analysis_service.analyze.return_value = AnalysisResult(
+                status="success",
+                summary="补跑完成",
+                analysis_profile="summary",
+                provider="deepseek",
+                model="test-model",
+            )
+            subtitle_segments = [
+                TranscriptSegment(
+                    index=0,
+                    start=0,
+                    end=3,
+                    text="可复用的字幕",
+                    language="zh",
+                    source="subtitle",
+                )
+            ]
+            with (
+                patch(
+                    "src.pipeline.orchestrator.YtdlpSource",
+                    side_effect=[first_source, second_source],
+                ),
+                patch(
+                    "src.pipeline.orchestrator.parse_subtitle_file",
+                    return_value=subtitle_segments,
+                ) as parse_subtitle,
+                patch("src.pipeline.orchestrator.LocalWhisperProvider") as whisper,
+                patch("src.pipeline.orchestrator.DeepSeekProvider", return_value=provider),
+                patch(
+                    "src.pipeline.orchestrator.AnalysisService",
+                    return_value=analysis_service,
+                ),
+                patch(
+                    "src.pipeline.orchestrator.inspect_knowledge_package",
+                    return_value=SimpleNamespace(valid=True, issues=[]),
+                ),
+            ):
+                first = PipelineOrchestrator(
+                    config,
+                    no_analysis=True,
+                    cache_store=cache,
+                ).run("https://www.youtube.com/watch?v=video-id", is_url=True)
+                second = PipelineOrchestrator(
+                    config,
+                    no_analysis=False,
+                    cache_store=cache,
+                ).run("https://www.youtube.com/watch?v=video-id", is_url=True)
+
+            self.assertEqual(first.manifest.analysis_status, "skipped")
+            self.assertEqual(second.manifest.analysis_status, "completed")
+            self.assertEqual(second.analysis.summary, "补跑完成")
+            self.assertTrue(second.manifest.stage_metrics["acquire_transcript"].cache_hit)
+            second_source.acquire_subtitles.assert_not_called()
+            second_source.acquire_media.assert_not_called()
+            whisper.assert_not_called()
+            parse_subtitle.assert_called_once()
+            analysis_service.analyze.assert_called_once()
 
     def test_repeated_fast_task_skips_subtitle_media_asr_and_text_analysis(self) -> None:
         FakeWhisperProvider.transcribe_calls = 0
@@ -179,7 +278,7 @@ class PipelineCacheTests(unittest.TestCase):
                     side_effect=[first_source, second_source],
                 ),
                 patch(
-                    "src.pipeline.orchestrator.LocalWhisperProvider",
+                    "src.transcription_router.LocalFasterWhisperProvider",
                     FakeWhisperProvider,
                 ),
                 patch(
@@ -203,11 +302,13 @@ class PipelineCacheTests(unittest.TestCase):
                 first = PipelineOrchestrator(
                     config,
                     processing_profile="fast",
+                    asr_route="local_cpu",
                     cache_store=cache,
                 ).run("https://www.youtube.com/watch?v=video-id", is_url=True)
                 second = PipelineOrchestrator(
                     config,
                     processing_profile="fast",
+                    asr_route="local_cpu",
                     cache_store=cache,
                 ).run("https://www.youtube.com/watch?v=video-id", is_url=True)
 

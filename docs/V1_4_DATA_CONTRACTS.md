@@ -43,6 +43,12 @@ Suggested fields:
   "source_fingerprint": "string",
   "analysis_profile": "summary",
   "processing_profile": "fast|complete",
+  "analysis_requested": true,
+  "analysis_status": "pending|completed|failed|timeout|skipped",
+  "analysis_skip_reason": "",
+  "analysis_provider": "deepseek",
+  "analysis_model": "string",
+  "transcript_only": false,
   "status": "queued|running|partial_success|completed|failed|cancelled|interrupted",
   "priority": 0,
   "created_at": "iso8601",
@@ -151,14 +157,14 @@ Compatibility:
 
 ## Analysis Result
 
-Current v1.4.3 analysis files use a common envelope plus mode-specific `content`.
+Current analysis files use a common envelope and restored flat base fields. `tutorial`, `viral`, and `close-reading` may additionally use mode-specific `content`.
 
 Envelope:
 
 ```json
 {
   "schema_version": "2",
-  "status": "success|failed|skipped",
+  "status": "success|failed|timeout|skipped",
   "analysis_profile": "summary|tutorial|viral|close-reading",
   "processing_profile": "fast|complete",
   "source": {"platform": "string", "url": "string", "title": "string", "source_id": "string"},
@@ -181,22 +187,28 @@ Envelope:
     "reanalysis_count": 1
   },
   "warnings": [],
+  "summary": "string",
+  "terminology": [{"term": "string", "definition": "string"}],
+  "highlights": [],
+  "thoughts": [],
+  "chapters": [],
   "content": {}
 }
 ```
 
 Rules:
 
-- `summary`, `tutorial`, `viral`, and `close-reading` must not force the same `content` fields.
-- Canonical `summary.content` uses `one_sentence`, `summary`, `professional_terms`, `highlights`, `thoughts`, `chapter_summaries`, `factual_basis`, and `ai_inferences`. Web and Markdown render the six core sections `一句话`、`摘要`、`亮点`、`思考`、`章节总结`、`原文资料`; source materials are renderer-owned links rather than model-authored facts.
-- `summary.content.one_sentence` must be one complete sentence on one line, without list syntax or a second sentence; 80 Chinese characters is the recommended upper bound.
-- `summary.content.professional_terms` is produced in the same Provider response. Renderers show 3–8 distinct terms only when each has a non-placeholder definition; fewer than 3 hides the module without placeholder text.
+- All four profiles write the restored flat base fields `summary`, `terminology`, `highlights`, `thoughts`, and `chapters`.
+- `summary` does not require a canonical `content` object. Historical summary `content` remains readable through compatibility normalization.
+- `tutorial`, `viral`, and `close-reading` retain distinct mode-specific `content` fields, but writers return empty strings/arrays for unsupported optional facts and renderers hide empty modules.
+- `terminology` is produced in the same Provider response for every profile. Renderers show 3–8 distinct terms only when each has a non-placeholder definition; fewer than 3 hides the module without placeholder text.
 - Legacy fields such as `summary`, `highlights`, `chapters`, `steps`, `glossary`, and `action_items` remain readable and are synchronized where possible.
 - Comment insights remain in `comment_insights.json` / `comment_insights.md`, not in `analysis.json`.
-- Missing or unsupported facts should be represented as `未明确说明`.
+- Missing or unsupported optional modules use empty strings/arrays. “未明确说明” may appear only when it is meaningful inside an existing item, not to force a report section.
 - API Keys, Cookie, Token, Authorization headers, and credentials are not valid analysis content.
-- Tutorial content may include top-level `chapter_summaries` and second-level `steps`; steps link back through `chapter_id`.
-- `SegmentationPolicyRouter` controls window use, window size/overlap, chapter/highlight density guidance, and hierarchical reduction only. Summary headings, professional-term visibility, empty-module handling, and Markdown order belong to the fixed Schema/Renderer contract.
+- Tutorial stages use top-level `chapters`; `content.steps` links back through `chapter_id`. Historical `content.chapter_summaries` remains readable.
+- Close-reading chapters use top-level `chapters`; historical `content.chapter_close_reading` remains readable.
+- `SegmentationPolicyRouter` controls window use, window size/overlap, chapter/highlight density guidance, and hierarchical reduction only. It must preserve populated mode-specific content while reducing windows and must not decide report headings or optional-module visibility.
 
 ## Tutorial Image
 
@@ -293,6 +305,12 @@ v1.4 compatible fields:
 ```json
 {
   "processing_profile": "fast|complete",
+  "analysis_requested": true,
+  "analysis_status": "pending|completed|failed|timeout|skipped",
+  "analysis_skip_reason": "",
+  "analysis_provider": "deepseek",
+  "analysis_model": "string",
+  "transcript_only": false,
   "stage_metrics": {
     "subtitle_fetch": {
       "duration_ms": 100,
@@ -311,6 +329,14 @@ v1.4 compatible fields:
 Migration:
 
 - Missing `processing_profile`: `complete`.
+- Missing analysis-request fields: infer transcript-only only from an explicit
+  historical `--no-summary` command or skipped manifest; new tasks default to
+  `analysis_requested=true`.
+- `skipped` is reserved for an explicit transcript-only request. Missing API
+  configuration and request errors are `failed`; request timeouts are `timeout`.
+- `transcript_ready` and `analysis_ready` are derived independently by readers.
+  `analysis_ready` requires a valid structured success result with meaningful
+  analysis content.
 - Missing `stage_metrics`: derive only coarse status from `stage_status`.
 - Missing comment/visual artifacts: treat as not generated, not failed.
 

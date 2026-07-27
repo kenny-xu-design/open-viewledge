@@ -9,12 +9,13 @@ from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from tempfile import TemporaryDirectory
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from src import __version__
 from src.job_store import Job
+from src.utils import UserFacingError
 from src.web import (
     KnowledgeDeletionError,
     PROJECT_ROOT,
@@ -33,6 +34,7 @@ from src.web import (
     _timestamp_seconds,
     _external_player_descriptor,
     _handle_cli_output_line,
+    _normalize_analysis_view,
 )
 
 
@@ -62,13 +64,31 @@ class WebCommandTests(unittest.TestCase):
                     "schema_version": "1.0",
                     "event": "task_completed",
                     "task_id": "task",
-                    "result": {"output_dir": "output/demo", "knowledge_id": "demo"},
+                    "result": {
+                        "output_dir": "output/demo",
+                        "knowledge_id": "demo",
+                        "analysis_requested": True,
+                        "analysis_status": "completed",
+                        "analysis_provider": "deepseek",
+                        "analysis_model": "test-model",
+                        "transcript_only": False,
+                        "analysis": {
+                            "status": "success",
+                            "provider": "deepseek",
+                            "model": "test-model",
+                        },
+                    },
                 }
             ),
         )
         self.assertEqual(job.output_dir, "output/demo")
         self.assertEqual(job.knowledge_id, "demo")
         self.assertEqual(job.cli_task_id, "task")
+        self.assertTrue(job.analysis_requested)
+        self.assertEqual(job.analysis_status, "completed")
+        self.assertEqual(job.analysis_provider, "deepseek")
+        self.assertEqual(job.analysis_model, "test-model")
+        self.assertFalse(job.transcript_only)
         self.assertTrue(any("first_readable_result" in line for line in job.logs))
 
     def test_official_external_player_descriptors(self) -> None:
@@ -174,6 +194,38 @@ class WebCommandTests(unittest.TestCase):
                 "--jsonl",
             ],
         )
+
+    def test_analysis_is_requested_by_default_and_false_strings_do_not_skip(self) -> None:
+        command = build_cli_command(
+            {
+                "sourceType": "url",
+                "source": "https://example.com/video",
+                "skip_analysis": "false",
+                "transcribe_only": False,
+                "analysis_enabled": True,
+                "analysis_requested": True,
+            },
+            python_executable="python",
+        )
+        self.assertNotIn("--no-summary", command)
+
+    def test_legacy_and_canonical_transcript_only_flags_are_honored(self) -> None:
+        for payload in (
+            {"skip_analysis": True},
+            {"transcribe_only": True},
+            {"analysis_enabled": False},
+            {"analysis_requested": False},
+        ):
+            with self.subTest(payload=payload):
+                command = build_cli_command(
+                    {
+                        "sourceType": "url",
+                        "source": "https://example.com/video",
+                        **payload,
+                    },
+                    python_executable="python",
+                )
+                self.assertIn("--no-summary", command)
 
     def test_build_file_command_strips_wrapping_quotes(self) -> None:
         command = build_cli_command(
@@ -337,6 +389,119 @@ class WebLibraryTests(unittest.TestCase):
         self.assertEqual(items[0]["status"], "partial")
         self.assertEqual(items[0]["processingProfile"], "complete")
 
+    def test_library_item_exposes_completed_processing_duration(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            (package / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "created_at": "2026-07-28T00:00:00+00:00",
+                        "completed_at": "2026-07-28T00:02:03.500000+00:00",
+                        "source": {"title": "真实记录", "platform": "local"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("src.web.OUTPUT_ROOT", root):
+                item = list_library_items()[0]
+
+        self.assertEqual(item["processingDurationMs"], 123500)
+        self.assertFalse(item["processingTimingLive"])
+
+    def test_library_item_prefers_recorded_full_completion_duration(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            (package / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "full_completion_duration_ms": 4567,
+                        "source": {"title": "真实记录", "platform": "local"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("src.web.OUTPUT_ROOT", root):
+                item = list_library_items()[0]
+
+        self.assertEqual(item["processingDurationMs"], 4567)
+        self.assertFalse(item["processingTimingLive"])
+
+    def test_analysis_view_hides_legacy_placeholder_modules(self) -> None:
+        analysis = _normalize_analysis_view({
+            "status": "success",
+            "analysis_profile": "tutorial",
+            "content": {
+                "tutorial_goal": "完成真实操作",
+                "prerequisites": ["未明确说明"],
+                "tools_and_materials": ["未明确说明"],
+                "limitations": ["未明确说明"],
+            },
+        })
+        self.assertEqual(analysis["content"]["tutorial_goal"], "完成真实操作")
+        self.assertEqual(analysis["content"]["prerequisites"], [])
+        self.assertEqual(analysis["content"]["tools_and_materials"], [])
+        self.assertEqual(analysis["content"]["limitations"], [])
+
+    def test_detail_reports_transcript_and_analysis_readiness_independently(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            (package / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "task",
+                        "status": "completed",
+                        "analysis_requested": False,
+                        "analysis_status": "skipped",
+                        "analysis_skip_reason": "user_requested_transcript_only",
+                        "transcript_only": True,
+                        "source": {
+                            "source_type": "online_video",
+                            "platform": "youtube",
+                            "source_url": "https://example.com/video",
+                            "source_id": "id",
+                            "title": "Demo",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (package / "analysis.json").write_text(
+                '{"status":"skipped","analysis_profile":"summary"}',
+                encoding="utf-8",
+            )
+            inspection = Mock(
+                analysis_status="skipped",
+                transcript_segments=1,
+                level="warning",
+                issues=[],
+            )
+            inspection.to_dict.return_value = {
+                "analysis_status": "skipped",
+                "transcript_segments": 1,
+                "level": "warning",
+                "issues": [],
+            }
+            with (
+                patch("src.web.OUTPUT_ROOT", root),
+                patch("src.web.inspect_knowledge_package", return_value=inspection),
+            ):
+                detail = load_knowledge_package("demo")
+
+        self.assertTrue(detail["transcriptReady"])
+        self.assertFalse(detail["analysisReady"])
+        self.assertFalse(detail["analysisRequested"])
+        self.assertEqual(detail["analysisStatus"], "skipped")
+        self.assertEqual(
+            detail["analysisSkipReason"],
+            "user_requested_transcript_only",
+        )
+
     def test_detail_omits_private_local_path_and_tolerates_missing_analysis(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -464,6 +629,18 @@ class WebLibraryTests(unittest.TestCase):
         self.assertEqual(payload["knowledgeId"], "")
         self.assertEqual(payload["outputDir"], "")
 
+    def test_job_payload_handles_absolute_shared_output_root(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            job = Job(id="done", command=[], output_dir=str(package), knowledge_id="demo")
+            with patch("src.web.OUTPUT_ROOT", root):
+                payload = job_to_dict(job)
+
+        self.assertEqual(payload["knowledgeId"], "demo")
+        self.assertEqual(payload["outputDir"], str(package.resolve()))
+        self.assertIn({"name": "index.md", "url": "/output/demo/index.md"}, payload["outputFiles"])
+
     def test_library_delete_rejects_processing_record(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -524,6 +701,16 @@ class WebApiTests(unittest.TestCase):
             source = response.read().decode("utf-8")
             self.assertEqual(response.headers.get("Cache-Control"), "no-cache")
             self.assertIn("function handleDeleteAction()", source)
+
+    def test_output_route_serves_files_from_configured_output_root(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            WebLibraryTests()._write_package(root)
+            with patch("src.web.OUTPUT_ROOT", root):
+                with urlopen(f"{self.base_url}/output/demo/index.md", timeout=3) as response:
+                    body = response.read().decode("utf-8")
+
+        self.assertIn("# 真实记录", body)
 
     def test_web_server_does_not_reuse_an_active_port(self) -> None:
         self.assertFalse(VideoSummaryServer.allow_reuse_address)
@@ -664,6 +851,24 @@ class WebApiTests(unittest.TestCase):
         resolve_directory.assert_called_once_with("demo")
         reanalyze.assert_called_once()
         self.assertEqual(payload["knowledge"]["analysis"]["status"], "success")
+
+    @patch("src.web.reanalyze_knowledge_package")
+    @patch("src.web.resolve_library_dir", return_value=Path("demo"))
+    def test_analysis_retry_timeout_returns_gateway_timeout(
+        self,
+        _resolve_directory,
+        reanalyze,
+    ) -> None:
+        reanalyze.side_effect = UserFacingError("DeepSeek 请求超时，请稍后重试。")
+        request = Request(
+            f"{self.base_url}/api/library/demo/analysis/retry",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(request, timeout=3)
+        self.assertEqual(caught.exception.code, HTTPStatus.GATEWAY_TIMEOUT)
 
     @patch("src.web.render_directory_export")
     @patch("src.web.resolve_library_dir")

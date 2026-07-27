@@ -90,6 +90,20 @@ echo 可运行：winget install Gyan.FFmpeg
 echo.
 
 :launch_web
+set "VENV_SITE_PACKAGES=%CD%\.venv\Lib\site-packages"
+
+if exist "%VENV_SITE_PACKAGES%\nvidia\cublas\bin\cublas64_12.dll" (
+    set "PATH=%VENV_SITE_PACKAGES%\nvidia\cublas\bin;%PATH%"
+)
+
+if exist "%VENV_SITE_PACKAGES%\nvidia\cudnn\bin\cudnn64_9.dll" (
+    set "PATH=%VENV_SITE_PACKAGES%\nvidia\cudnn\bin;%PATH%"
+)
+
+if exist "%VENV_SITE_PACKAGES%\ctranslate2" (
+    set "PATH=%VENV_SITE_PACKAGES%\ctranslate2;%PATH%"
+)
+
 echo [4/4] 正在启动 Web UI...
 echo.
 echo 浏览器地址：http://127.0.0.1:5188

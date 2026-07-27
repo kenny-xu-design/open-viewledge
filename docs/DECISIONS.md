@@ -130,3 +130,37 @@ From v1.3, Web, Agent Skills, and automation invoke only the public `python -m s
 v1.5 does not implement registration, login, or email verification. It creates a default local workspace and uses one Provider Catalog and credential-reading service across Web, CLI, and Worker.
 
 Text, visual, and ASR Provider configuration is independent. Optional missing Providers do not block unrelated capabilities. Secrets prefer Windows Credential Manager or the system Keyring and are never returned to the frontend in full.
+
+## D017: Knowledge Package Location Is Runtime Configuration
+
+Knowledge packages belong to the configured output root, not to the HTTP port or the browser origin.
+
+Web, CLI, export, diagnostics, and file serving resolve the same output root. The default remains the project-local `output/`, while `VIEWLEDGE_OUTPUT_ROOT` can point multiple local versions at one shared knowledge-package directory.
+
+## D018: Viewledge Network Proxy Is Process-Scoped Configuration
+
+`VIEWLEDGE_HTTP_PROXY` provides one optional proxy endpoint for Viewledge network clients. At process startup it populates standard HTTP and HTTPS proxy variables only when they are not already configured, so `yt-dlp`, DeepSeek, Gemini, Web jobs, and direct CLI runs follow the same network route.
+
+Runtime diagnostics expose only the proxy source and credential-free endpoint. Existing standard proxy variables take precedence, and Viewledge does not modify the operating system's global proxy configuration.
+
+## D019: Analysis Profiles Share A Flat Report Base
+
+`summary`, `tutorial`, `viral`, and `close-reading` write the flat `summary`, `terminology`, `highlights`, `thoughts`, and `chapters` fields used before the v1.4.3 fixed-section change.
+
+The latter three profiles keep their requested specialized details in `content`, but render only populated modules. Professional terms use the same 3–8 threshold for every profile, and long-video reduction must preserve specialized content. Historical v1.4.3 `content` packages remain readable.
+
+## D020: Local ASR Is Profile-Routed And Quality-Guarded
+
+Local faster-whisper defaults to a balanced profile instead of a fixed
+small/CPU route. Candidate selection combines CTranslate2 CUDA visibility,
+supported compute types, available VRAM, local model presence, actual model
+loading, and an isolated first-batch inference probe.
+
+GPU failure is recoverable: OOM lowers batch size, broken CUDA runtime support
+falls through to small CPU INT8, and media is never downloaded again. Only one
+local ASR task and one model instance are active per process. Models are always
+local-only; quality mode does not implicitly download large-v3.
+
+Balanced and quality outputs retain per-segment quality metrics. Suspect ranges
+receive a bounded same-model retry with stronger decoding, after which the best
+result is kept and unresolved segments are marked low-confidence.

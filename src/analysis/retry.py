@@ -18,7 +18,7 @@ from ..exporters.analysis_markdown import render_profile_analysis
 from ..pipeline.context import PipelineContext
 from ..providers.llm.deepseek import DeepSeekProvider
 from ..transcripts import group_segments, read_jsonl
-from ..utils import UserFacingError, load_json, write_text
+from ..utils import UserFacingError, is_timeout_error, load_json, write_text
 from .service import AnalysisService
 from .profiles import resolve_analysis_profile
 
@@ -85,7 +85,10 @@ def reanalyze_knowledge_package(
     manifest.analysis_profile = profile
     manifest.current_stage = "run_analysis"
     manifest.status = "processing"
+    manifest.analysis_requested = True
     manifest.analysis_status = "pending"
+    manifest.analysis_skip_reason = ""
+    manifest.transcript_only = False
     manifest.analysis_error = ""
     manifest.stage_status["run_analysis"] = "running"
     manifest.errors = [message for message in manifest.errors if "run_analysis" not in message]
@@ -102,6 +105,8 @@ def reanalyze_knowledge_package(
     model_name = str(getattr(selected_provider, "model_name", config.deepseek_model))
     manifest.llm_provider = provider_name
     manifest.llm_model = model_name
+    manifest.analysis_provider = provider_name
+    manifest.analysis_model = model_name
     attempt = ProviderAttempt(provider=provider_name, model=model_name, stage="run_analysis")
 
     try:
@@ -110,6 +115,8 @@ def reanalyze_knowledge_package(
         context.analysis = AnalysisService(selected_provider).analyze(groups, profile, context)
         manifest.llm_model = context.analysis.model or model_name
         manifest.analysis_status = "completed"
+        manifest.analysis_provider = provider_name
+        manifest.analysis_model = manifest.llm_model
         manifest.analysis_error = ""
         manifest.stage_status["run_analysis"] = "completed"
         manifest.status = "completed_with_warnings" if manifest.errors else "completed"
@@ -117,9 +124,10 @@ def reanalyze_knowledge_package(
         attempt.model = manifest.llm_model
         attempt.success = True
     except Exception as exc:
+        timed_out = is_timeout_error(exc)
         if context.analysis is None:
             context.analysis = AnalysisResult(
-                status="failed",
+                status="timeout" if timed_out else "failed",
                 error=str(exc),
                 analysis_profile=profile,
                 provider=provider_name,
@@ -127,9 +135,9 @@ def reanalyze_knowledge_package(
             )
         attempt.error_type = "configuration" if not selected_provider.is_available() else type(exc).__name__
         attempt.error_message = str(exc)
-        manifest.analysis_status = "failed"
+        manifest.analysis_status = "timeout" if timed_out else "failed"
         manifest.analysis_error = context.analysis.error or str(exc)
-        manifest.stage_status["run_analysis"] = "failed"
+        manifest.stage_status["run_analysis"] = "timeout" if timed_out else "failed"
         manifest.status = "completed_with_warnings"
         manifest.errors.append(f"阶段 run_analysis 失败：{str(exc)}")
         raise UserFacingError(str(exc)) from exc
