@@ -535,3 +535,23 @@ git diff --check
 - 评论同步依赖公开平台和 `yt-dlp` 当前能力；关闭评论、平台限制或提取器不返回评论时会跳过评论产物，主知识包仍可用。
 - Obsidian 仅为兼容 Markdown 导出，不是 Vault 数据层。
 - 通用网页正文采集尚未实现；当前 URL 输入面向 `yt-dlp` 支持的视频平台。
+
+## 许可证与商业授权
+
+Viewledge Community Edition 采用
+[GNU Affero General Public License v3.0 only](LICENSE)，SPDX 标识为
+`AGPL-3.0-only`。
+
+你可以在遵守 AGPL-3.0-only 全部要求的前提下使用、修改和分发社区版本。
+AGPL 并不禁止商业使用；通过网络向用户提供修改后的受许可程序时，也需要
+遵守其对应源代码提供义务。
+
+无法采用 AGPL 条款的个人或组织，可查看
+[商业授权说明](COMMERCIAL-LICENSE.md)，并通过 GitHub 账号
+`kenny-xu-design` 联系版权所有者，另行协商书面商业许可。
+
+第三方库、模型、工具、API、平台服务和媒体内容仍分别受其自身许可证与
+服务条款约束。
+
+版权所有 © 2026 kenny-xu-design。代码许可证不自动授予 Viewledge 名称、
+中文名称、Logo 或其他品牌标识的使用权。
