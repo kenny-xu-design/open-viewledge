@@ -151,6 +151,10 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+默认依赖不安装 NVIDIA CUDA、cuBLAS 或 cuDNN 运行库。平台字幕、Groq 云端转写
+和本地 CPU 转写不需要 CUDA。需要本地 GPU 转写的用户应自行安装与显卡驱动及
+CTranslate2 版本兼容的 CUDA 运行库；项目启动脚本不会替用户下载或修改 CUDA。
+
 本地 Whisper 模型应位于：
 
 ```text
