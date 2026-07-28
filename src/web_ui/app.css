@@ -592,8 +592,12 @@ button:disabled { color: var(--faint); cursor: not-allowed; }
 
 dialog { border: 1px solid var(--line-strong); border-radius: 8px; padding: 0; color: var(--text); background: var(--panel); box-shadow: var(--shadow-modal); }
 dialog::backdrop { background: var(--ui-scrim); }
-.task-dialog { width: min(620px, calc(100vw - 30px)); }
+.task-dialog { width: min(620px, calc(100vw - 30px)); max-height: calc(100vh - 20px); overflow-y: auto; scrollbar-width: none; }
+.task-dialog::-webkit-scrollbar { width: 0; height: 0; }
 .task-dialog form, .settings-dialog form { padding: 0; }
+.task-source-row { display: flex; align-items: center; gap: 10px; margin: 16px 16px 12px; }
+.task-source-row .source-tabs { flex: 1 1 auto; min-width: 0; margin: 0; }
+.task-dialog-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
 dialog header { min-height: 60px; display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 dialog h2 { margin: 0; font-size: 19px; }
 .dialog-kicker { color: var(--accent); font-size: 10px; font-weight: 700; }
@@ -618,6 +622,10 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
 .progress-track { height: 5px; margin: 8px 0; background: var(--ui-control-fill); border-radius: 999px; overflow: hidden; }
 .progress-track span { display: block; width: 12%; height: 100%; background: var(--accent); transition: width var(--motion-slow) var(--ease-standard-ui); }
 .task-progress pre { max-height: 110px; overflow: auto; white-space: pre-wrap; margin: 8px 0 0; color: var(--muted); font: 11px/1.5 Consolas, monospace; }
+.task-asr-status { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.task-capabilities { line-height: 1.65; }
+.capability-item.available { color: var(--ui-success); }
+.capability-item.config_required, .capability-item.unavailable, .capability-item.error { color: var(--ui-warning); }
 .task-history { margin: 0 16px 15px; border-top: 1px solid var(--line); padding-top: 12px; }
 .task-history > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
 .task-history > header strong { font-size: 12px; }
@@ -932,7 +940,8 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
   .result-view { padding: 14px 14px 78px; }
   .result-view h2 { font-size: 19px; }
   .form-grid { grid-template-columns: 1fr; }
-  .task-dialog { max-height: calc(100vh - 20px); overflow-y: auto; }
+  .task-source-row { align-items: stretch; flex-direction: column; }
+  .task-dialog-actions { justify-content: flex-end; }
   .source-meta { gap: 6px 10px; }
   .chapter-header { grid-template-columns: auto minmax(0, 1fr); }
   .chapter-toggle { display: none; }

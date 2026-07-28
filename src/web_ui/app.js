@@ -1,6 +1,6 @@
 "use strict";
 
-document.documentElement.dataset.uiVersion = "workspace-16";
+document.documentElement.dataset.uiVersion = "workspace-18";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -31,6 +31,7 @@ const SETTINGS = {
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 const WIDE_SHELL_QUERY = "(min-width: 1280px)";
 const SINGLE_PANE_QUERY = "(max-width: 959px)";
+const RECENT_JOB_LIMIT = 5;
 
 function uiScrollBehavior() {
   return typeof window.matchMedia === "function" && window.matchMedia(REDUCED_MOTION_QUERY).matches ? "auto" : "smooth";
@@ -64,6 +65,7 @@ const state = {
   exportPreset: "full",
   exportSections: new Set(EXPORT_PRESETS.full),
   exportMarkdown: "",
+  uiMode: "product",
 };
 
 const knowledgeCache = new Map();
@@ -248,6 +250,11 @@ async function init() {
 async function loadRuntimeInfo() {
   try {
     const runtime = await api("/api/runtime");
+    state.uiMode = runtime.uiMode === "diagnostic" ? "diagnostic" : "product";
+    const diagnostic = state.uiMode === "diagnostic";
+    [$("#taskRuntime"), $("#settingsRuntime"), $("#taskCapabilities")].forEach((element) => {
+      element.classList.toggle("hidden", !diagnostic);
+    });
     const toolLines = (runtime.tools || []).map((tool) => (
       `${tool.name}: ${tool.available ? `${tool.path} (${tool.source})` : "未配置或未发现"}`
     ));
@@ -267,7 +274,9 @@ async function loadRuntimeInfo() {
       element.classList.toggle("warning", !runtime.inProjectVenv || missingRequiredRuntime);
     });
   } catch (error) {
+    state.uiMode = "product";
     [$("#taskRuntime"), $("#settingsRuntime")].forEach((element) => {
+      element.classList.add("hidden");
       element.textContent = `运行环境读取失败：${error.message}`;
       element.classList.add("warning");
     });
@@ -1569,7 +1578,52 @@ function openNewTask() {
   setTaskSourceType("url");
   updateAnalysisModeDescriptions();
   $("#newTaskDialog").showModal();
+  refreshTaskCapabilities();
   loadJobHistory();
+}
+
+async function refreshTaskCapabilities() {
+  const root = $("#taskCapabilities");
+  root.textContent = "正在检查 DeepSeek、Groq、FFmpeg 和本地 ASR 能力…";
+  try {
+    renderTaskCapabilities(await api("/api/capabilities"));
+    renderTaskCapabilities(await api("/api/capabilities/refresh", {
+      method: "POST",
+      body: "{}",
+    }));
+  } catch (error) {
+    root.textContent = `能力检查失败：${error.message}`;
+  }
+}
+
+function renderTaskCapabilities(payload) {
+  const capabilities = payload.capabilities || {};
+  const labels = {
+    deepseek: "DeepSeek",
+    groq: "Groq",
+    gemini: "Gemini",
+    ffmpeg: "FFmpeg",
+    ffprobe: "ffprobe",
+    local_model: "本地模型",
+    local_cpu: "本地 CPU",
+    local_gpu: "本地 GPU",
+  };
+  $("#taskCapabilities").innerHTML = Object.entries(labels).map(([name, label]) => {
+    const item = capabilities[name] || { status: "checking", displayMessage: "检测中" };
+    return `<span class="capability-item ${escapeAttr(item.status)}"><strong>${label}</strong>：${escapeHtml(item.displayMessage || item.status)}</span>`;
+  }).join("<br>");
+  $("#taskCapabilities").classList.toggle("hidden", state.uiMode !== "diagnostic");
+  const route = $("#taskAsrRoute");
+  const cloudOption = route.querySelector('option[value="cloud"]');
+  const gpuOption = route.querySelector('option[value="local_gpu"]');
+  const cpuOption = route.querySelector('option[value="local_cpu"]');
+  cloudOption.disabled = capabilities.groq?.status !== "available";
+  gpuOption.disabled = capabilities.local_gpu?.status !== "available";
+  cpuOption.disabled = capabilities.local_cpu?.status !== "available";
+  if (route.selectedOptions[0]?.disabled) {
+    const next = [...route.options].find((option) => !option.disabled);
+    if (next) route.value = next.value;
+  }
 }
 
 function updateAnalysisModeDescriptions() {
@@ -1671,8 +1725,10 @@ function renderTaskProgress(job) {
   const latestStage = [...logs].reverse().find((line) => line.includes("阶段：")) || "";
   const stage = latestStage.split("阶段：").pop();
   const stageIndex = Math.max(0, stageOrder.indexOf(stage));
-  const terminal = ["success", "failed", "interrupted"].includes(job.status);
-  const percent = terminal ? 100 : Math.max(8, Math.round(((stageIndex + 1) / stageOrder.length) * 100));
+  const transcriptProgress = Math.max(0, Math.min(1, Number(job.transcriptProgress || 0)));
+  const stageProgress = stage === "acquire_transcript" ? transcriptProgress : 0.5;
+  const calculatedPercent = Math.max(8, Math.round(((stageIndex + stageProgress) / stageOrder.length) * 100));
+  const percent = job.status === "success" ? 100 : calculatedPercent;
   $("#taskStatusText").textContent = job.status === "failed"
     ? (job.error || "处理失败")
     : job.status === "interrupted"
@@ -1684,7 +1740,37 @@ function renderTaskProgress(job) {
   $("#progressBar").style.width = `${percent}%`;
   $("#taskProgressBar").setAttribute("aria-valuenow", String(percent));
   $("#taskProgressBar").setAttribute("aria-valuetext", $("#taskStatusText").textContent);
+  renderTaskAsrStatus(job);
   $("#taskLogs").textContent = logs.slice(-10).join("\n") || "等待任务日志…";
+}
+
+function renderTaskAsrStatus(job) {
+  const root = $("#taskAsrStatus");
+  const requested = ({ cloud: "云端快速转写", local_gpu: "本地 GPU", local_cpu: "本地 CPU" })[job.transcriptRouteRequested] || job.transcriptRouteRequested || "";
+  const actualDevice = ({ cuda: "本地 GPU", cpu: "本地 CPU", cloud: "云端" })[job.transcriptActualDevice] || job.transcriptActualDevice || "";
+  const reasons = {
+    cuda_unavailable: "CUDA 不可用",
+    gpu_model_load_failed: "GPU 模型加载失败",
+    gpu_model_load_timeout: "GPU 模型加载超时",
+    gpu_first_batch_failed: "GPU 首批推理失败",
+    gpu_first_batch_timeout: "GPU 首批推理超时",
+    gpu_transcription_failed: "GPU 转写失败",
+    gpu_transcription_stalled: "GPU 转写长时间无进展",
+    gpu_out_of_memory: "GPU 显存不足",
+    cpu_transcription_stalled: "本地 CPU 转写长时间无进展，任务已终止",
+  };
+  if (!requested && !actualDevice && !job.transcriptFallbackUsed) {
+    root.classList.add("hidden");
+    root.innerHTML = "";
+    return;
+  }
+  root.classList.remove("hidden");
+  root.innerHTML = [
+    requested ? `<span>用户选择：${escapeHtml(requested)}</span>` : "",
+    actualDevice ? `<span>实际设备：${escapeHtml(actualDevice)}</span>` : "",
+    `<span>已发生回退：${job.transcriptFallbackUsed ? "是" : "否"}</span>`,
+    job.transcriptFallbackReason ? `<span>回退原因：${escapeHtml(reasons[job.transcriptFallbackReason] || "本地转写不可用")}</span>` : "",
+  ].filter(Boolean).join("<br>");
 }
 
 function isWideShell() { return window.matchMedia(WIDE_SHELL_QUERY).matches; }
@@ -2123,7 +2209,7 @@ function renderJobHistory(jobs) {
     root.innerHTML = '<div class="task-history-empty">暂无历史任务</div>';
     return;
   }
-  root.innerHTML = jobs.slice(0, 8).map((job) => `
+  root.innerHTML = jobs.slice(0, RECENT_JOB_LIMIT).map((job) => `
     <button type="button" class="task-history-item" data-job-knowledge="${escapeAttr(job.knowledgeId || "")}" ${job.knowledgeId ? "" : "disabled"}>
       <span><strong>${escapeHtml(job.knowledgeId || job.id)}</strong><small>${escapeHtml(formatJobTime(job.updatedAt || job.createdAt))}</small></span>
       <em class="${escapeAttr(job.status)}">${escapeHtml(jobStatusLabel(job.status))}</em>

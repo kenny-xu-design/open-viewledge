@@ -22,6 +22,10 @@ class JobStoreTests(unittest.TestCase):
                 analysis_status="skipped",
                 analysis_skip_reason="user_requested_transcript_only",
                 transcript_only=True,
+                transcript_actual_provider="faster-whisper",
+                transcript_actual_device="cpu",
+                transcript_fallback_used=True,
+                transcript_fallback_reason="gpu_model_load_timeout",
                 status="success",
                 knowledge_id="demo",
                 output_dir="output/demo",
@@ -44,6 +48,11 @@ class JobStoreTests(unittest.TestCase):
             "user_requested_transcript_only",
         )
         self.assertTrue(reloaded[0].transcript_only)
+        self.assertEqual(reloaded[0].transcript_actual_device, "cpu")
+        self.assertEqual(
+            reloaded[0].transcript_fallback_reason,
+            "gpu_model_load_timeout",
+        )
 
     def test_running_job_becomes_interrupted_after_restart(self) -> None:
         with TemporaryDirectory() as temp_dir:

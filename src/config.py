@@ -36,8 +36,12 @@ class AppConfig(BaseModel):
     asr_max_local_retries: int = Field(default=8, ge=0, le=50)
     asr_gpu_detect_timeout_seconds: float = Field(default=5, gt=0, le=60)
     asr_gpu_model_load_timeout_seconds: float = Field(default=45, gt=0, le=300)
+    asr_cpu_model_load_timeout_seconds: float = Field(default=90, gt=0, le=600)
     asr_gpu_first_batch_timeout_seconds: float = Field(default=45, gt=0, le=300)
     asr_transcribe_stall_timeout_seconds: float = Field(default=120, gt=0, le=1800)
+    asr_worker_heartbeat_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    asr_quality_guard_timeout_seconds: float = Field(default=180, gt=0, le=3600)
+    asr_gpu_release_grace_seconds: float = Field(default=1, ge=0, le=30)
     asr_resource_wait_timeout_seconds: float = Field(default=300, gt=0, le=3600)
     asr_max_concurrency: int = Field(default=1, ge=1, le=1)
     ffmpeg_timeout_seconds: float = Field(default=600, gt=0, le=7200)
@@ -108,8 +112,12 @@ def load_config(config_path: Path) -> AppConfig:
         "asr_max_local_retries": os.getenv("ASR_MAX_LOCAL_RETRIES", ""),
         "asr_gpu_detect_timeout_seconds": os.getenv("ASR_GPU_DETECT_TIMEOUT_SECONDS", ""),
         "asr_gpu_model_load_timeout_seconds": os.getenv("ASR_GPU_MODEL_LOAD_TIMEOUT_SECONDS", ""),
+        "asr_cpu_model_load_timeout_seconds": os.getenv("ASR_CPU_MODEL_LOAD_TIMEOUT_SECONDS", ""),
         "asr_gpu_first_batch_timeout_seconds": os.getenv("ASR_GPU_FIRST_BATCH_TIMEOUT_SECONDS", ""),
         "asr_transcribe_stall_timeout_seconds": os.getenv("ASR_TRANSCRIBE_STALL_TIMEOUT_SECONDS", ""),
+        "asr_worker_heartbeat_timeout_seconds": os.getenv("ASR_WORKER_HEARTBEAT_TIMEOUT_SECONDS", ""),
+        "asr_quality_guard_timeout_seconds": os.getenv("ASR_QUALITY_GUARD_TIMEOUT_SECONDS", ""),
+        "asr_gpu_release_grace_seconds": os.getenv("ASR_GPU_RELEASE_GRACE_SECONDS", ""),
         "asr_resource_wait_timeout_seconds": os.getenv("ASR_RESOURCE_WAIT_TIMEOUT_SECONDS", ""),
         "asr_max_concurrency": os.getenv("ASR_MAX_CONCURRENCY", ""),
         "ffmpeg_timeout_seconds": os.getenv("FFMPEG_TIMEOUT_SECONDS", ""),

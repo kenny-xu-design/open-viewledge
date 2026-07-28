@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .processing_profiles import ProcessingProfile, normalize_processing_profile
+from .domain.models import normalize_transcript_status
 from .schema_compat import UnsupportedSchemaVersion, require_supported_schema
 from .utils import UserFacingError
 
@@ -36,6 +37,16 @@ class Job:
     transcript_model: str = ""
     transcript_route_requested: str = "cloud"
     transcript_fallback_used: bool = False
+    transcript_fallback_reason: str = ""
+    transcript_actual_provider: str = ""
+    transcript_actual_device: str = ""
+    asr_worker_status: str = "idle"
+    worker_exitcode: int | None = None
+    last_activity_at: str = ""
+    last_heartbeat_at: str = ""
+    last_segment_at: str = ""
+    last_segment_end: float = 0
+    transcript_progress: float = 0
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -47,6 +58,7 @@ class Job:
     knowledge_id: str = ""
     output_dir: str = ""
     error: str = ""
+    error_code: str = ""
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -95,11 +107,23 @@ class Job:
             analysis_provider=str(value.get("analysis_provider") or ""),
             analysis_model=str(value.get("analysis_model") or ""),
             transcript_only=transcript_only,
-            transcript_status=str(value.get("transcript_status") or "pending"),
+            transcript_status=normalize_transcript_status(
+                value.get("transcript_status")
+            ).value,
             transcript_provider=str(value.get("transcript_provider") or ""),
             transcript_model=str(value.get("transcript_model") or ""),
             transcript_route_requested=str(value.get("transcript_route_requested") or "cloud"),
             transcript_fallback_used=bool(value.get("transcript_fallback_used", False)),
+            transcript_fallback_reason=str(value.get("transcript_fallback_reason") or ""),
+            transcript_actual_provider=str(value.get("transcript_actual_provider") or ""),
+            transcript_actual_device=str(value.get("transcript_actual_device") or ""),
+            asr_worker_status=str(value.get("asr_worker_status") or "idle"),
+            worker_exitcode=_optional_int(value.get("worker_exitcode")),
+            last_activity_at=str(value.get("last_activity_at") or ""),
+            last_heartbeat_at=str(value.get("last_heartbeat_at") or ""),
+            last_segment_at=str(value.get("last_segment_at") or ""),
+            last_segment_end=float(value.get("last_segment_end") or 0),
+            transcript_progress=float(value.get("transcript_progress") or 0),
             created_at=float(value.get("created_at") or time.time()),
             updated_at=float(value.get("updated_at") or value.get("created_at") or time.time()),
             started_at=_optional_float(value.get("started_at")),
@@ -111,6 +135,7 @@ class Job:
             knowledge_id=str(value.get("knowledge_id") or ""),
             output_dir=str(value.get("output_dir") or ""),
             error=str(value.get("error") or ""),
+            error_code=str(value.get("error_code") or ""),
         )
 
 

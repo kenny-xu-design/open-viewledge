@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from src.config import AppConfig
+from src.asr_worker import LocalASRWorkerError
 from src.domain.models import TranscriptResult, TranscriptSegment
 from src.transcription_router import (
     GroqASRProvider,
@@ -58,10 +59,25 @@ class FakeLocal:
         return result("faster-whisper", self.device)
 
 
+class ReasonedLocal(FakeLocal):
+    audio_ids: list[int] = []
+
+    def transcribe(self, audio, context):
+        self.audio_ids.append(id(audio))
+        if self.device == "cuda":
+            raise LocalASRWorkerError(
+                "GPU 模型加载超时",
+                reason="gpu_model_load_timeout",
+                timed_out=True,
+            )
+        return result("faster-whisper", self.device)
+
+
 class TranscriptionRouterTests(unittest.TestCase):
     def setUp(self) -> None:
         FakeLocal.calls = []
         FakeLocal.failures = set()
+        ReasonedLocal.audio_ids = []
         self.audio = Path(__file__)
         self.context = Context()
 
@@ -95,12 +111,23 @@ class TranscriptionRouterTests(unittest.TestCase):
     def test_gpu_failure_falls_back_cpu(self) -> None:
         FakeLocal.failures = {"cuda"}
         value = TranscriptionRouter(
-            AppConfig(),
+            AppConfig(asr_gpu_release_grace_seconds=0),
             route="local_gpu",
             local_provider_factory=FakeLocal,
         ).transcribe(self.audio, self.context)
         self.assertEqual(FakeLocal.calls, ["cuda", "cpu"])
         self.assertEqual(value.device, "cpu")
+
+    def test_gpu_worker_timeout_reuses_audio_and_persists_reason(self) -> None:
+        value = TranscriptionRouter(
+            AppConfig(asr_gpu_release_grace_seconds=0),
+            route="local_gpu",
+            local_provider_factory=ReasonedLocal,
+        ).transcribe(self.audio, self.context)
+        self.assertEqual(value.device, "cpu")
+        self.assertTrue(value.fallback_used)
+        self.assertEqual(value.fallback_reason, "gpu_model_load_timeout")
+        self.assertEqual(ReasonedLocal.audio_ids, [id(self.audio), id(self.audio)])
 
     def test_cloud_without_fallback_fails_directly(self) -> None:
         cloud = Mock()

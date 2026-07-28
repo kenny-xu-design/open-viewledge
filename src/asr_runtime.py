@@ -20,6 +20,7 @@ from .utils import ConfigRequiredError, UserFacingError
 
 ASRProfile = Literal["fast", "balanced", "quality"]
 LogCallback = Callable[[str], None]
+ActivityCallback = Callable[[str, dict[str, Any]], None]
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL = "small"
 DEFAULT_TEMPERATURE_FALLBACK = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
@@ -237,14 +238,15 @@ def has_local_asr_model(
     project_root: Path = PROJECT_ROOT,
 ) -> bool:
     settings = ASRSettings.from_config(config)
-    names = [settings.model] if settings.model else [DEFAULT_MODEL, "turbo", "large-v3"]
-    for name in names:
-        try:
-            _model_reference(name, project_root)
-        except UserFacingError:
-            continue
-        return True
-    return False
+    try:
+        resolve_local_asr_model(
+            "cpu",
+            settings.model or DEFAULT_MODEL,
+            project_root=project_root,
+        )
+    except ConfigRequiredError:
+        return False
+    return True
 
 
 def probe_cuda() -> CudaProbe:
@@ -614,9 +616,11 @@ class LocalASREngine:
         source: str,
         duration: float,
         log_callback: LogCallback | None,
+        activity_callback: ActivityCallback | None = None,
+        run_gpu_preflight: bool = True,
     ) -> ASROutcome:
         initial_batch_size = candidate.batch_size
-        if candidate.device == "cuda":
+        if candidate.device == "cuda" and run_gpu_preflight:
             initial_batch_size = self._ensure_gpu_preflight(
                 audio_path,
                 candidate,
@@ -630,7 +634,15 @@ class LocalASREngine:
                     f"CUDA OOM 预检：批大小 {candidate.batch_size} → "
                     f"{initial_batch_size}",
                 )
+        _activity(activity_callback, "model_loading", device=candidate.device)
         model, load_seconds, reused = self._load_model(candidate)
+        _activity(
+            activity_callback,
+            "model_loaded",
+            device=candidate.device,
+            model=candidate.model,
+            compute_type=candidate.compute_type,
+        )
         _log(log_callback, f"ASR 模型：{candidate.model}")
         _log(log_callback, f"ASR 设备：{candidate.device_label}")
         _log(log_callback, f"计算精度：{candidate.compute_type}")
@@ -643,6 +655,7 @@ class LocalASREngine:
 
         batch_size = max(1, initial_batch_size)
         transcription_started = time.perf_counter()
+        _activity(activity_callback, "transcribing", device=candidate.device)
         while True:
             try:
                 raw_segments, info = self._infer(
@@ -654,6 +667,7 @@ class LocalASREngine:
                     task=settings.task,
                     log_callback=log_callback,
                     duration=duration,
+                    activity_callback=activity_callback,
                 )
                 break
             except Exception as exc:
@@ -667,6 +681,7 @@ class LocalASREngine:
                     continue
                 raise
 
+        _activity(activity_callback, "inference_completed", device=candidate.device)
         segments = _convert_segments(
             raw_segments,
             language=language or str(getattr(info, "language", "") or ""),
@@ -693,6 +708,7 @@ class LocalASREngine:
                 source=source,
                 duration=duration,
                 log_callback=log_callback,
+                activity_callback=activity_callback,
             )
         low_count = sum(1 for item in segments if item.low_confidence)
         low_ratio = low_count / max(1, len(segments))
@@ -723,6 +739,7 @@ class LocalASREngine:
             local_retries=retry_count,
             unresolved_gaps=unresolved_gaps,
         )
+        _activity(activity_callback, "completed", device=candidate.device)
         return ASROutcome(segments=segments, telemetry=telemetry)
 
     def _ensure_gpu_preflight(
@@ -869,6 +886,7 @@ class LocalASREngine:
         task: str,
         log_callback: LogCallback | None,
         duration: float,
+        activity_callback: ActivityCallback | None = None,
     ) -> tuple[list[Any], Any]:
         if candidate.device == "cuda":
             from faster_whisper import BatchedInferencePipeline
@@ -895,7 +913,12 @@ class LocalASREngine:
                 vad_filter=candidate.vad_filter,
                 word_timestamps=candidate.word_timestamps,
             )
-        return _collect_with_progress(iterable, duration, log_callback), info
+        return _collect_with_progress(
+            iterable,
+            duration,
+            log_callback,
+            activity_callback=activity_callback,
+        ), info
 
     def _apply_quality_guard(
         self,
@@ -909,6 +932,7 @@ class LocalASREngine:
         source: str,
         duration: float,
         log_callback: LogCallback | None,
+        activity_callback: ActivityCallback | None = None,
     ) -> tuple[list[TranscriptSegment], int, int]:
         windows = _retry_windows(segments, duration, settings)
         if not windows:
@@ -916,8 +940,17 @@ class LocalASREngine:
         retries = 0
         unresolved_gaps = 0
         current = list(segments)
+        _activity(activity_callback, "quality_guard", state="started")
         for start, end, reason in windows[: settings.max_local_retries]:
             retries += 1
+            _activity(
+                activity_callback,
+                "quality_guard",
+                state="retrying",
+                segment_start=start,
+                segment_end=end,
+                attempt=retries,
+            )
             _log(
                 log_callback,
                 f"局部重试：{_format_duration(start)}–{_format_duration(end)}（{reason}）",
@@ -961,6 +994,7 @@ class LocalASREngine:
                 ]
                 current.extend(retried)
                 current.sort(key=lambda item: (item.start, item.end))
+        _activity(activity_callback, "quality_guard", state="completed")
         return _mark_low_confidence(current, settings), retries, unresolved_gaps
 
 
@@ -1010,12 +1044,23 @@ def _collect_with_progress(
     iterable: Any,
     duration: float,
     log_callback: LogCallback | None,
+    *,
+    activity_callback: ActivityCallback | None = None,
 ) -> list[Any]:
     result: list[Any] = []
     next_progress = 30.0
     for item in iterable:
         result.append(item)
         end = float(getattr(item, "end", 0.0) or 0.0)
+        text = str(getattr(item, "text", "") or "").strip()
+        if text:
+            _activity(
+                activity_callback,
+                "segment",
+                start=float(getattr(item, "start", 0.0) or 0.0),
+                end=end,
+                text=text,
+            )
         if duration > 0 and end >= next_progress:
             _log(
                 log_callback,
@@ -1197,27 +1242,68 @@ def _segments_quality_score(segments: list[TranscriptSegment]) -> float:
     return score
 
 
+def validate_local_model(path: Path) -> Path:
+    resolved = path.expanduser().resolve()
+    missing = _missing_model_files(resolved)
+    if missing:
+        raise ConfigRequiredError(
+            "未安装本地 ASR 模型（config_required）：" + "、".join(missing)
+        )
+    return resolved
+
+
+def resolve_available_local_models(
+    *,
+    project_root: Path = PROJECT_ROOT,
+) -> dict[str, Path]:
+    result: dict[str, Path] = {}
+    for name in (DEFAULT_MODEL, "turbo", "large-v3"):
+        for candidate in (
+            project_root / "models" / f"faster-whisper-{name}",
+            project_root / "models" / name,
+        ):
+            try:
+                result[name] = validate_local_model(candidate)
+            except ConfigRequiredError:
+                continue
+            break
+    return result
+
+
+def resolve_local_asr_model(
+    device: str,
+    preferred_model: str = "",
+    *,
+    project_root: Path = PROJECT_ROOT,
+) -> str:
+    preferred = str(preferred_model or "").strip()
+    if preferred and (
+        Path(preferred).is_absolute()
+        or any(separator in preferred for separator in ("/", "\\"))
+    ):
+        return str(validate_local_model(Path(preferred)))
+    available = resolve_available_local_models(project_root=project_root)
+    if device.strip().lower().startswith("cpu"):
+        order = [preferred, DEFAULT_MODEL, "turbo", "large-v3"]
+    else:
+        order = [preferred, "turbo", DEFAULT_MODEL, "large-v3"]
+    for name in order:
+        if name and name in available:
+            return str(available[name])
+    raise ConfigRequiredError(
+        "未安装本地 ASR 模型（config_required）；已禁止自动下载。"
+    )
+
+
 def _model_reference(model: str, project_root: Path) -> str:
     value = Path(model).expanduser()
     if value.is_absolute() or any(separator in model for separator in ("/", "\\")):
-        resolved = value.resolve()
-        missing = _missing_model_files(resolved)
-        if missing:
-            raise ConfigRequiredError(
-                "未安装本地 ASR 模型（config_required）："
-                + "、".join(missing)
-            )
-        return str(resolved)
-    candidates = (
-        project_root / "models" / f"faster-whisper-{model}",
-        project_root / "models" / model,
-    )
-    for candidate in candidates:
-        if not _missing_model_files(candidate):
-            return str(candidate.resolve())
+        return str(validate_local_model(value))
+    available = resolve_available_local_models(project_root=project_root)
+    if model in available:
+        return str(available[model])
     raise ConfigRequiredError(
-        f"未安装本地 ASR 模型（config_required）：faster-whisper-{model}；"
-        "已禁止自动下载。"
+        f"未安装本地 ASR 模型（config_required）：faster-whisper-{model}；已禁止自动下载。"
     )
 
 
@@ -1356,6 +1442,15 @@ def _format_duration(seconds: float) -> str:
 def _log(callback: LogCallback | None, message: str) -> None:
     if callback:
         callback(message)
+
+
+def _activity(
+    callback: ActivityCallback | None,
+    event: str,
+    **payload: Any,
+) -> None:
+    if callback:
+        callback(event, payload)
 
 
 _DEFAULT_ENGINE = LocalASREngine()

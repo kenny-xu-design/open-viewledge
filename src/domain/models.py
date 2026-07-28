@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,6 +13,25 @@ from ..schema_compat import require_supported_schema
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+class TranscriptStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    SKIPPED = "skipped"
+
+
+def normalize_transcript_status(value: object) -> TranscriptStatus:
+    normalized = str(value or TranscriptStatus.PENDING.value).strip().lower()
+    if normalized == "success":
+        normalized = TranscriptStatus.COMPLETED.value
+    try:
+        return TranscriptStatus(normalized)
+    except ValueError:
+        return TranscriptStatus.PENDING
 
 
 class SourceRecord(BaseModel):
@@ -57,6 +77,7 @@ class TranscriptResult(BaseModel):
     duration_seconds: float = Field(default=0, ge=0)
     segments: list[TranscriptSegment] = Field(default_factory=list)
     fallback_used: bool = False
+    fallback_reason: str = ""
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -711,11 +732,21 @@ class ProcessingManifest(BaseModel):
     asr_audio_duration_seconds: float = Field(default=0, ge=0)
     asr_transcription_seconds: float = Field(default=0, ge=0)
     asr_rtf: float = Field(default=0, ge=0)
-    transcript_status: Literal["pending", "completed", "failed"] = "pending"
+    transcript_status: TranscriptStatus = TranscriptStatus.PENDING
     transcript_provider: str = ""
     transcript_model: str = ""
     transcript_route_requested: Literal["cloud", "local_gpu", "local_cpu"] = "cloud"
     transcript_fallback_used: bool = False
+    transcript_fallback_reason: str = ""
+    transcript_actual_provider: str = ""
+    transcript_actual_device: str = ""
+    asr_worker_status: str = "idle"
+    worker_exitcode: int | None = None
+    last_activity_at: str = Field(default_factory=utc_now)
+    last_heartbeat_at: str = ""
+    last_segment_at: str = ""
+    last_segment_end: float = Field(default=0, ge=0)
+    transcript_progress: float = Field(default=0, ge=0, le=1)
     llm_provider: str = ""
     llm_model: str = ""
     analysis_requested: bool = True
@@ -737,6 +768,11 @@ class ProcessingManifest(BaseModel):
     first_readable_result_duration_ms: int | None = Field(default=None, ge=0)
     full_completion_duration_ms: int | None = Field(default=None, ge=0)
     provider_attempts: list[ProviderAttempt] = Field(default_factory=list)
+
+    @field_validator("transcript_status", mode="before")
+    @classmethod
+    def normalize_legacy_transcript_status(cls, value: object) -> TranscriptStatus:
+        return normalize_transcript_status(value)
 
     @field_validator("schema_version")
     @classmethod

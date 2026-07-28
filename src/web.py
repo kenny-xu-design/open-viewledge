@@ -27,6 +27,7 @@ from .cli_contract import sanitize_message
 from .analysis.retry import reanalyze_knowledge_package
 from .chat import answer_question, prepare_grounded_request
 from .chat_store import ChatStore
+from .capabilities import CapabilityRegistry
 from .config import load_config, resolve_output_root
 from .domain.models import AnalysisResult
 from .exporters import export_directory_to_vault, refresh_compatible_export, render_directory_export, selection_for_request
@@ -81,8 +82,63 @@ JOB_STORE = JobStore(LOCAL_STATE_ROOT / "web_jobs.json")
 JOBS: dict[str, Job] = {job.id: job for job in JOB_STORE.load_jobs()}
 JOBS_LOCK = threading.RLock()
 JOB_ENV_OVERRIDES: dict[str, dict[str, str]] = {}
+JOB_ASR_PERSIST_STATE: dict[str, dict[str, Any]] = {}
 LOGGER = logging.getLogger(__name__)
 WEB_PROVIDER_CONFIG = WebProviderConfigStore()
+CAPABILITY_CACHE: dict[str, Any] = {}
+CAPABILITY_LOCK = threading.RLock()
+
+
+def _diagnostic_ui_mode() -> bool:
+    return os.getenv("VIEWLEDGE_UI_MODE", "").strip().lower() == "diagnostic"
+
+
+def _diagnostic_flag(name: str) -> bool:
+    return _diagnostic_ui_mode() and os.getenv(name, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _safe_process_log(line: str) -> str:
+    value = re.sub(
+        r"(?i)\b(authorization|cookie|set-cookie|proxy-authorization)"
+        r"(\s*[:=]\s*)([^\r\n]+)",
+        r"\1\2[REDACTED]",
+        str(line),
+    )
+    value = sanitize_message(value)
+    value = re.sub(
+        r"(?i)\b(cookie|set-cookie|proxy-authorization)(\s*[:=]\s*)([^\r\n]+)",
+        r"\1\2[REDACTED]",
+        value,
+    )
+    return value
+
+
+def _product_log(line: str) -> str:
+    value = _safe_process_log(line)
+    for path in (sys.executable, str(PROJECT_ROOT), str(OUTPUT_ROOT)):
+        if path:
+            value = value.replace(path, "[LOCAL_PATH]")
+    return value
+
+
+def capability_payload(*, refresh: bool = False) -> dict[str, Any]:
+    global CAPABILITY_CACHE
+    with CAPABILITY_LOCK:
+        if CAPABILITY_CACHE and not refresh:
+            return dict(CAPABILITY_CACHE)
+    payload = CapabilityRegistry(
+        load_config(PROJECT_ROOT / "config.example.json"),
+        project_root=PROJECT_ROOT,
+        provider_resolver=ProviderConfigResolver(WEB_PROVIDER_CONFIG),
+    ).inspect()
+    with CAPABILITY_LOCK:
+        CAPABILITY_CACHE = payload
+    return dict(payload)
 
 
 class KnowledgeDeletionError(RuntimeError):
@@ -188,8 +244,15 @@ def _clean_source_value(value: str) -> str:
 
 
 def start_job(payload: dict[str, Any]) -> Job:
-    command = build_cli_command(payload)
     analysis_requested, analysis_skip_reason = _analysis_request_from_payload(payload)
+    if analysis_requested and not ProviderConfigResolver(
+        WEB_PROVIDER_CONFIG
+    ).resolve("deepseek").configured:
+        raise ValueError(
+            "DeepSeek 尚未配置（config_required）；请配置后运行分析，"
+            "或明确选择“仅转写”。"
+        )
+    command = build_cli_command(payload)
     env_overrides = ProviderConfigResolver(WEB_PROVIDER_CONFIG).env_overrides()
     job = Job(
         id=uuid.uuid4().hex[:12],
@@ -299,14 +362,110 @@ def _handle_cli_output_line(job: Job, line: str) -> None:
             result.get("transcript_route_requested") or job.transcript_route_requested
         )
         job.transcript_fallback_used = bool(result.get("transcript_fallback_used", False))
+        job.transcript_fallback_reason = str(result.get("transcript_fallback_reason") or "")
+        job.transcript_actual_provider = str(result.get("transcript_actual_provider") or "")
+        job.transcript_actual_device = str(result.get("transcript_actual_device") or "")
+        job.asr_worker_status = str(result.get("asr_worker_status") or "completed")
+        job.worker_exitcode = result.get("worker_exitcode")
+        job.last_activity_at = str(result.get("last_activity_at") or "")
+        job.last_heartbeat_at = str(result.get("last_heartbeat_at") or "")
+        job.last_segment_at = str(result.get("last_segment_at") or "")
+        job.last_segment_end = float(result.get("last_segment_end") or 0)
+        job.transcript_progress = float(result.get("transcript_progress") or 0)
+    elif event == "asr_status":
+        worker_event = str(payload.get("worker_event") or "")
+        job.transcript_route_requested = str(
+            payload.get("requested_route") or job.transcript_route_requested
+        )
+        job.transcript_actual_provider = str(
+            payload.get("actual_provider") or job.transcript_actual_provider
+        )
+        job.transcript_actual_device = str(
+            payload.get("actual_device") or job.transcript_actual_device
+        )
+        job.transcript_fallback_used = bool(
+            payload.get("fallback_used", job.transcript_fallback_used)
+        )
+        job.transcript_fallback_reason = str(
+            payload.get("fallback_reason") or job.transcript_fallback_reason
+        )
+        job.asr_worker_status = str(
+            payload.get("asr_worker_status") or job.asr_worker_status
+        )
+        if payload.get("worker_exitcode") is not None:
+            job.worker_exitcode = int(payload["worker_exitcode"])
+        job.last_activity_at = str(payload.get("last_activity_at") or job.last_activity_at)
+        job.last_heartbeat_at = str(
+            payload.get("last_heartbeat_at") or job.last_heartbeat_at
+        )
+        job.last_segment_at = str(
+            payload.get("last_segment_at") or job.last_segment_at
+        )
+        job.last_segment_end = float(payload.get("last_segment_end") or job.last_segment_end)
+        job.transcript_progress = float(
+            payload.get("transcript_progress") or job.transcript_progress
+        )
+        job.transcript_status = str(
+            payload.get("transcript_status") or job.transcript_status
+        )
+        if worker_event == "error" and payload.get("reason"):
+            job.error_code = str(payload["reason"])
+        elif (
+            job.transcript_fallback_reason.startswith("cpu_")
+            and job.transcript_status in {"failed", "timeout"}
+        ):
+            # Compatibility for older CLI events that placed terminal CPU errors
+            # in fallback_reason. New events use error_code/reason instead.
+            job.error_code = job.transcript_fallback_reason
+            job.transcript_fallback_reason = ""
     elif event == "task_failed" and isinstance(payload.get("error"), dict):
         job.error = str(payload["error"].get("message") or "")
+        job.error_code = job.error_code or str(payload["error"].get("code") or "")
     stage = str(payload.get("stage") or "")
     progress = payload.get("progress")
     detail = f"{event}{' ' + stage if stage else ''}"
     if isinstance(progress, (int, float)):
         detail += f" {float(progress):.0%}"
     _append_log(job, detail)
+    if event == "asr_status" and _should_persist_asr_job(job):
+        _persist_job(job)
+
+
+def _should_persist_asr_job(job: Job) -> bool:
+    now = time.monotonic()
+    state = JOB_ASR_PERSIST_STATE.setdefault(
+        job.id,
+        {
+            "at": 0.0,
+            "progress": 0.0,
+            "segments": 0,
+            "fallback": False,
+        },
+    )
+    if job.asr_worker_status == "transcribing" and job.last_segment_at:
+        state["segments"] = int(state["segments"]) + 1
+    force = (
+        job.transcript_status in {"completed", "failed", "timeout"}
+        or job.asr_worker_status
+        in {"model_loaded", "terminated", "failed", "completed", "finalizing"}
+        or job.transcript_fallback_used != bool(state["fallback"])
+    )
+    threshold = (
+        now - float(state["at"]) >= 10
+        or int(state["segments"]) >= 20
+        or job.transcript_progress - float(state["progress"]) >= 0.02
+    )
+    if not (force or threshold):
+        return False
+    state.update(
+        {
+            "at": now,
+            "progress": job.transcript_progress,
+            "segments": 0,
+            "fallback": job.transcript_fallback_used,
+        }
+    )
+    return True
 
 
 def _append_runtime_logs(job: Job) -> None:
@@ -339,17 +498,58 @@ def runtime_status_payload() -> dict[str, Any]:
             project_root=PROJECT_ROOT,
         )
     ]
-    return {
+    payload = {
         "version": __version__,
-        "pythonExecutable": sys.executable,
-        "projectRoot": str(PROJECT_ROOT),
-        "outputRoot": str(OUTPUT_ROOT),
         "network": NETWORK_PROXY_STATUS.public_payload(),
         "inProjectVenv": _is_project_venv_python(),
         "warning": _runtime_python_warning(),
-        "tools": tools,
-        "providers": ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses(),
+        "tools": [
+            {
+                "name": item["name"],
+                "available": item["available"],
+                "path": "",
+                "source": item["source"],
+                "error": item["error"],
+            }
+            for item in tools
+        ],
+        "providers": [
+            {
+                "provider": item["provider"],
+                "name": item["name"],
+                "configured": item["configured"],
+                "model": "",
+            }
+            for item in ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses()
+        ],
+        "uiMode": "diagnostic" if _diagnostic_ui_mode() else "product",
     }
+    if _diagnostic_flag("SHOW_TECH_DETAILS"):
+        payload.update(
+            {
+                "pythonExecutable": sys.executable,
+                "projectRoot": str(PROJECT_ROOT),
+                "outputRoot": str(OUTPUT_ROOT),
+                "tools": tools,
+                "providers": [
+                    {
+                        key: value
+                        for key, value in item.items()
+                        if key
+                        in {
+                            "provider",
+                            "name",
+                            "configured",
+                            "model",
+                            "keySource",
+                            "configSource",
+                        }
+                    }
+                    for item in ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses()
+                ],
+            }
+        )
+    return payload
 
 
 def _is_project_venv_python(python_executable: str | None = None) -> bool:
@@ -491,9 +691,8 @@ def job_to_dict(job: Job) -> dict[str, Any]:
                 for path in sorted(output_path.iterdir())
                 if path.is_file()
             ]
-    return {
+    payload = {
         "id": job.id,
-        "command": job.command,
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
         "startedAt": job.started_at,
@@ -505,21 +704,43 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "analysisStatus": job.analysis_status,
         "analysisSkipReason": job.analysis_skip_reason,
         "analysisProvider": job.analysis_provider,
-        "analysisModel": job.analysis_model,
         "transcriptOnly": job.transcript_only,
         "transcriptStatus": job.transcript_status,
         "transcriptProvider": job.transcript_provider,
-        "transcriptModel": job.transcript_model,
         "transcriptRouteRequested": job.transcript_route_requested,
         "transcriptFallbackUsed": job.transcript_fallback_used,
+        "transcriptFallbackReason": job.transcript_fallback_reason,
+        "transcriptActualProvider": job.transcript_actual_provider,
+        "transcriptActualDevice": job.transcript_actual_device,
+        "asrWorkerStatus": job.asr_worker_status,
+        "lastActivityAt": job.last_activity_at,
+        "lastHeartbeatAt": job.last_heartbeat_at,
+        "lastSegmentAt": job.last_segment_at,
+        "lastSegmentEnd": job.last_segment_end,
+        "transcriptProgress": job.transcript_progress,
         "returncode": job.returncode,
         "cliTaskId": job.cli_task_id,
-        "logs": job.logs,
+        "logs": [_product_log(line) for line in job.logs],
         "knowledgeId": job.knowledge_id if output_available else "",
-        "outputDir": _display_output_dir(output_path) if output_available else "",
         "outputFiles": output_files,
         "error": job.error,
+        "errorCode": job.error_code,
     }
+    if _diagnostic_flag("SHOW_TECH_DETAILS"):
+        payload.update(
+            {
+                "command": [_safe_process_log(part) for part in job.command],
+                "analysisModel": job.analysis_model,
+                "transcriptModel": job.transcript_model,
+                "workerExitcode": job.worker_exitcode,
+                "outputDir": _display_output_dir(output_path) if output_available else "",
+            }
+        )
+    if _diagnostic_flag("SHOW_RAW_PROCESS_LOGS"):
+        payload["logs"] = [_safe_process_log(line) for line in job.logs]
+    payload["error"] = _safe_process_log(str(payload.get("error") or ""))
+    payload["errorCode"] = _safe_process_log(str(payload.get("errorCode") or ""))
+    return payload
 
 
 def _resolve_output_dir_reference(value: str) -> Path:
@@ -1263,6 +1484,8 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             self._send_json({"items": list_library_items()})
         elif parsed.path == "/api/runtime":
             self._send_json(runtime_status_payload())
+        elif parsed.path == "/api/capabilities":
+            self._send_json(capability_payload())
         elif parsed.path == "/api/providers":
             self._send_json({"providers": ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses()})
         elif parsed.path == "/api/provider-config":
@@ -1370,6 +1593,9 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                 self._send_json(apply_provider_config(self._read_json_body()))
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/api/capabilities/refresh":
+            self._send_json(capability_payload(refresh=True))
             return
         if parsed.path == "/api/provider-config/test":
             try:

@@ -10,6 +10,7 @@ from . import __version__
 from .config import AppConfig, resolve_output_root
 from .providers.llm import ProviderRegistry
 from .runtime_tools import runtime_tool_statuses
+from .asr_runtime import resolve_available_local_models
 
 
 DIAGNOSTIC_SCHEMA_VERSION = "1.0"
@@ -32,10 +33,15 @@ def run_doctor(config: AppConfig, *, project_root: Path) -> dict[str, Any]:
     ):
         checks.append(_check(status.name, status.available, status.path or status.error, required=True))
 
-    model_root = _whisper_model_path(config, project_root)
-    required_model_files = ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt")
-    model_ready = all((model_root / name).is_file() for name in required_model_files)
-    checks.append(_check("whisper_model", model_ready, str(model_root), required=False))
+    models = resolve_available_local_models(project_root=project_root)
+    checks.append(
+        _check(
+            "whisper_model",
+            bool(models),
+            ",".join(sorted(models)) if models else "not installed",
+            required=False,
+        )
+    )
 
     providers = ProviderRegistry().statuses()
     for provider in providers:

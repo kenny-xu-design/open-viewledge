@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from .domain.models import TranscriptResult, TranscriptSegment
-from .providers.asr.local_whisper import LocalWhisperProvider
+from .domain.models import TranscriptResult, TranscriptSegment, TranscriptStatus
+from .asr_runtime import has_local_asr_model
+from .asr_worker import LocalASRWorkerError, LocalASRWorkerRunner
 from .runtime_tools import resolve_executable
 from .utils import UserFacingError, run_command
 
@@ -160,23 +161,44 @@ class LocalFasterWhisperProvider:
     name = "faster-whisper"
 
     def __init__(self, config: object, *, device: Literal["cuda", "cpu"], fallback: bool):
-        self.provider = LocalWhisperProvider(
-            config, device=device, fallback_enabled=fallback
-        )
+        self.config = config
         self.device = device
 
     def transcribe(self, audio_path: Path, context: object) -> TranscriptResult:
-        if not self.provider.is_available():
-            raise UserFacingError("本地 faster-whisper 模型不可用。")
-        segments = self.provider.transcribe(audio_path, context)
-        telemetry = self.provider.telemetry
+        if not has_local_asr_model(self.config):
+            raise UserFacingError("未安装本地 ASR 模型（config_required）。")
+        config = self.config.model_copy(
+            update={
+                "asr_device": self.device,
+                "asr_compute_type": "int8" if self.device == "cpu" else "",
+                "asr_fallback_enabled": False,
+            }
+        )
+        callback = getattr(context, "asr_event", None)
+
+        def handle_event(message: dict[str, Any]) -> None:
+            if message.get("type") == "log":
+                _log(getattr(context, "log", None), str(message.get("message") or ""))
+            elif callback:
+                callback(message)
+
+        outcome = LocalASRWorkerRunner(
+            project_root=Path(__file__).resolve().parents[1]
+        ).run(
+            audio_path,
+            config=config,
+            device=self.device,
+            language=str(getattr(config, "language", "") or "") or None,
+            event_callback=handle_event,
+        )
+        telemetry = outcome.telemetry
         return TranscriptResult(
             provider="faster-whisper",
-            model=self.provider.model_name,
+            model=telemetry.model,
             device="cuda" if telemetry.device.startswith("cuda") else "cpu",
-            language=str(getattr(getattr(context, "config", None), "language", "") or ""),
+            language=str(getattr(config, "language", "") or ""),
             duration_seconds=telemetry.audio_duration_seconds,
-            segments=segments,
+            segments=outcome.segments,
             warnings=list(telemetry.fallback_messages),
         )
 
@@ -206,6 +228,11 @@ class TranscriptionRouter:
         return items
 
     def _local(self, device: str, fallback: bool, audio: Path, context: object) -> TranscriptResult:
+        manifest = getattr(context, "manifest", None)
+        if manifest is not None:
+            manifest.transcript_actual_provider = "faster-whisper"
+            manifest.transcript_actual_device = device
+            manifest.asr_worker_status = "starting"
         provider = self.local_provider_factory(
             self.config, device=device, fallback=fallback
         )
@@ -227,18 +254,89 @@ class TranscriptionRouter:
         else:
             attempts = [("本地 CPU", lambda: self._local("cpu", False, audio_path, context))]
         errors: list[str] = []
+        reasons: list[str] = []
+        last_exception: Exception | None = None
         for index, (label, operation) in enumerate(attempts):
             try:
                 result = operation()
                 result.fallback_used = index > 0
+                result.fallback_reason = reasons[-1] if index > 0 and reasons else ""
                 result.warnings = errors + result.warnings
                 return result
             except Exception as exc:
+                last_exception = exc
                 message = _safe_message(exc)
+                reason = str(
+                    getattr(exc, "reason", "")
+                    or (
+                        "cloud_transcription_failed"
+                        if label == "Groq"
+                        else "gpu_transcription_failed"
+                        if label == "本地 GPU"
+                        else "cpu_transcription_failed"
+                    )
+                )
                 errors.append(f"{label}：{message}")
+                reasons.append(reason)
+                manifest = getattr(context, "manifest", None)
+                if manifest is not None:
+                    will_fallback = index + 1 < len(attempts)
+                    if will_fallback:
+                        manifest.transcript_fallback_reason = reason
+                    manifest.transcript_fallback_used = (
+                        manifest.transcript_fallback_used or will_fallback
+                    )
+                    manifest.asr_worker_status = "terminated"
+                    manifest.worker_exitcode = getattr(exc, "worker_exitcode", None)
+                    if label == "本地 GPU":
+                        manifest.transcript_actual_provider = "faster-whisper"
+                        manifest.transcript_actual_device = "cuda"
+                event_callback = getattr(context, "asr_event", None)
+                if event_callback:
+                    event_callback(
+                        {
+                            "type": "worker_terminated",
+                            "reason": reason,
+                            "fallback": index + 1 < len(attempts),
+                        }
+                    )
                 _log(log, f"{label}失败：{message}")
                 if index + 1 < len(attempts):
+                    if attempts[index + 1][0] == "本地 CPU":
+                        _log(log, "已终止 GPU Worker")
+                        if isinstance(exc, LocalASRWorkerError):
+                            time.sleep(
+                                float(
+                                    getattr(
+                                        self.config,
+                                        "asr_gpu_release_grace_seconds",
+                                        1,
+                                    )
+                                )
+                            )
+                        _log(log, "正在切换本地 CPU INT8")
                     _log(log, f"已回退{attempts[index + 1][0]}")
+        if isinstance(last_exception, LocalASRWorkerError):
+            manifest = getattr(context, "manifest", None)
+            if manifest is not None:
+                manifest.transcript_status = (
+                    TranscriptStatus.TIMEOUT
+                    if last_exception.timed_out
+                    else TranscriptStatus.FAILED
+                )
+                manifest.asr_worker_status = "terminated"
+                if not manifest.transcript_fallback_used:
+                    manifest.transcript_fallback_reason = last_exception.reason
+            event_callback = getattr(context, "asr_event", None)
+            if event_callback:
+                event_callback(
+                    {
+                        "type": "error",
+                        "reason": last_exception.reason,
+                        "timed_out": last_exception.timed_out,
+                    }
+                )
+            raise last_exception
         raise UserFacingError("转写失败：" + "；".join(errors))
 
 

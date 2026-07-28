@@ -13,7 +13,7 @@ from ..audio import extract_audio
 from ..cache import CacheStore, build_cache_key, source_cache_dimensions, transcript_content_hash
 from ..comments import CommentInsightService, CommentRepository, CommentSyncService
 from ..config import AppConfig
-from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, NormalizedComment, ProcessingManifest, ProviderAttempt, SourceRecord, StageMetric, TranscriptSegment, utc_now
+from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, NormalizedComment, ProcessingManifest, ProviderAttempt, SourceRecord, StageMetric, TranscriptSegment, TranscriptStatus, utc_now
 from ..exporters import export_knowledge_package
 from ..exporters.analysis_markdown import render_profile_analysis
 from ..transcription_router import PlatformSubtitleProvider, TranscriptionRouter, normalize_asr_route
@@ -34,10 +34,16 @@ from .stages import STAGES
 
 def _apply_transcript_result(context: PipelineContext, result) -> None:
     assert context.manifest
-    context.manifest.transcript_status = "completed"
+    context.manifest.transcript_status = TranscriptStatus.COMPLETED
     context.manifest.transcript_provider = result.provider
     context.manifest.transcript_model = result.model
     context.manifest.transcript_fallback_used = result.fallback_used
+    context.manifest.transcript_fallback_reason = result.fallback_reason
+    context.manifest.transcript_actual_provider = result.provider
+    context.manifest.transcript_actual_device = result.device
+    context.manifest.asr_worker_status = "completed"
+    context.manifest.transcript_progress = 1.0
+    context.manifest.last_activity_at = utc_now()
     context.manifest.asr_provider = result.provider
     context.manifest.asr_model = result.model
     context.manifest.asr_device = result.device
@@ -94,6 +100,7 @@ class PipelineOrchestrator:
             generate_frames=self.generate_frames,
             sample_seconds=self.sample_seconds,
             log_callback=self.log_callback,
+            event_callback=self.event_callback,
             manifest=ProcessingManifest(
                 task_id=task_id,
                 privacy_mode=False,
@@ -108,6 +115,7 @@ class PipelineOrchestrator:
                 transcript_route_requested=self.asr_route,
             ),
         )
+        context.manifest_save_callback = lambda: self._save_manifest(context)
         try:
             self._stage(context, "resolve_source", lambda: setattr(context, "source", source_adapter.resolve(input_value)))
 
@@ -190,7 +198,7 @@ class PipelineOrchestrator:
                 )
                 if cached_transcript and _cache_matches_language(cached_transcript, self.config.language):
                     context.segments = cached_transcript
-                    context.manifest.transcript_status = "completed"
+                    context.manifest.transcript_status = TranscriptStatus.COMPLETED
                     context.manifest.transcript_provider = str(
                         context.previous_manifest.get("transcript_provider") or "cache"
                     )
@@ -203,7 +211,7 @@ class PipelineOrchestrator:
                 )
                 if cached_subtitle and _cache_matches_language(cached_subtitle, self.config.language):
                     context.segments = cached_subtitle
-                    context.manifest.transcript_status = "completed"
+                    context.manifest.transcript_status = TranscriptStatus.COMPLETED
                     context.manifest.transcript_provider = "platform"
                     context.mark_cache_hit("acquire_transcript")
                     context.log("命中平台字幕缓存，跳过字幕下载、媒体下载和 ASR。")
@@ -222,7 +230,7 @@ class PipelineOrchestrator:
                         and (not previous_key or previous_key == transcript_key)
                     ):
                         context.segments = cached_segments
-                        context.manifest.transcript_status = "completed"
+                        context.manifest.transcript_status = TranscriptStatus.COMPLETED
                         context.manifest.transcript_provider = str(
                             cached_manifest.get("transcript_provider") or "cache"
                         )
@@ -761,7 +769,7 @@ class PipelineOrchestrator:
         except Exception as exc:
             message = sanitize_message(f"阶段 {name} 失败：{exc}")
             context.manifest.errors.append(message)
-            metric.error_code = type(exc).__name__
+            metric.error_code = str(getattr(exc, "reason", "") or type(exc).__name__)
             metric.error_message = message
             if name == "run_analysis":
                 context.manifest.stage_status[name] = (
@@ -770,8 +778,12 @@ class PipelineOrchestrator:
                     else "failed"
                 )
             elif name == "acquire_transcript":
-                context.manifest.transcript_status = "failed"
-                context.manifest.stage_status[name] = "failed"
+                timed_out = bool(getattr(exc, "timed_out", False)) or is_timeout_error(exc)
+                context.manifest.transcript_status = (
+                    TranscriptStatus.TIMEOUT if timed_out else TranscriptStatus.FAILED
+                )
+                context.manifest.asr_worker_status = "terminated"
+                context.manifest.stage_status[name] = "timeout" if timed_out else "failed"
             else:
                 context.manifest.stage_status[name] = "warning" if soft_fail else "failed"
             self._finish_stage_metric(metric, started)

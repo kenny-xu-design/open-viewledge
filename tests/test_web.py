@@ -39,6 +39,60 @@ from src.web import (
 
 
 class WebCommandTests(unittest.TestCase):
+    def test_asr_status_preserves_cpu_stall_error_code(self) -> None:
+        job = Job(id="job", command=[])
+        payload = {
+            "schema_version": "1.0",
+            "event": "asr_status",
+            "requested_route": "local_gpu",
+            "actual_provider": "faster-whisper",
+            "actual_device": "cpu",
+            "fallback_used": True,
+            "fallback_reason": "cpu_transcription_stalled",
+            "asr_worker_status": "terminated",
+            "transcript_status": "timeout",
+        }
+        with patch("src.web._persist_job"):
+            _handle_cli_output_line(job, json.dumps(payload))
+        self.assertEqual(job.transcript_actual_device, "cpu")
+        self.assertEqual(job.transcript_status, "timeout")
+        self.assertEqual(job.error_code, "cpu_transcription_stalled")
+
+    def test_product_and_diagnostic_job_payloads_keep_credentials_redacted(self) -> None:
+        job = Job(
+            id="diagnostic",
+            command=["python", "--authorization=Bearer secret-token"],
+            analysis_model="private-model",
+            transcript_model="turbo",
+            logs=[
+                f"project={PROJECT_ROOT}",
+                "Cookie: session=private-cookie",
+                "Authorization: Bearer secret-token",
+            ],
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            product = job_to_dict(job)
+        self.assertNotIn("analysisModel", product)
+        self.assertNotIn("transcriptModel", product)
+        self.assertNotIn("command", product)
+        self.assertNotIn(str(PROJECT_ROOT), json.dumps(product))
+
+        with patch.dict(
+            os.environ,
+            {
+                "VIEWLEDGE_UI_MODE": "diagnostic",
+                "SHOW_TECH_DETAILS": "1",
+                "SHOW_RAW_PROCESS_LOGS": "1",
+            },
+            clear=True,
+        ):
+            diagnostic = job_to_dict(job)
+        self.assertEqual(diagnostic["analysisModel"], "private-model")
+        self.assertEqual(diagnostic["transcriptModel"], "turbo")
+        serialized = json.dumps(diagnostic)
+        self.assertNotIn("private-cookie", serialized)
+        self.assertNotIn("secret-token", serialized)
+
     def test_web_reads_public_cli_jsonl_completion(self) -> None:
         job = Job(id="job", command=[])
         _handle_cli_output_line(
@@ -338,7 +392,7 @@ class WebCommandTests(unittest.TestCase):
         self.assertEqual(_timestamp_seconds("01:30"), 90)
         self.assertEqual(_timestamp_seconds("01:01:01"), 3661)
 
-    def test_runtime_status_reports_tools_and_provider_models_without_keys(self) -> None:
+    def test_runtime_status_reports_provider_models_only_in_diagnostic_mode(self) -> None:
         with patch("src.web.runtime_tool_statuses") as mocked_tools, patch("src.web.ProviderRegistry") as registry:
             mocked_tools.return_value = [
                 __import__("src.runtime_tools", fromlist=["ExecutableStatus"]).ExecutableStatus(
@@ -351,11 +405,20 @@ class WebCommandTests(unittest.TestCase):
             registry.return_value.statuses.return_value = [
                 {"name": "deepseek", "model": "deepseek-v4-flash", "configured": True}
             ]
-            payload = runtime_status_payload()
+            with patch.dict(
+                os.environ,
+                {
+                    "VIEWLEDGE_UI_MODE": "diagnostic",
+                    "SHOW_TECH_DETAILS": "1",
+                },
+                clear=False,
+            ):
+                payload = runtime_status_payload()
 
         self.assertEqual(payload["tools"][0]["name"], "ffmpeg")
         self.assertEqual(payload["providers"][0]["model"], "deepseek-v4-flash")
         self.assertNotIn("api_key", json.dumps(payload).lower())
+        self.assertNotIn("keyTail", json.dumps(payload))
 
 
 class WebLibraryTests(unittest.TestCase):
@@ -627,14 +690,42 @@ class WebLibraryTests(unittest.TestCase):
         job = Job(id="stale", command=[], output_dir="output/missing", knowledge_id="missing")
         payload = __import__("src.web", fromlist=["job_to_dict"]).job_to_dict(job)
         self.assertEqual(payload["knowledgeId"], "")
-        self.assertEqual(payload["outputDir"], "")
+        self.assertNotIn("outputDir", payload)
+
+    def test_job_payload_exposes_asr_fallback_state(self) -> None:
+        job = Job(
+            id="fallback",
+            command=[],
+            transcript_route_requested="local_gpu",
+            transcript_actual_provider="faster-whisper",
+            transcript_actual_device="cpu",
+            transcript_fallback_used=True,
+            transcript_fallback_reason="gpu_model_load_timeout",
+            asr_worker_status="completed",
+            last_segment_end=12.5,
+            transcript_progress=1,
+        )
+        payload = job_to_dict(job)
+        self.assertEqual(payload["transcriptActualDevice"], "cpu")
+        self.assertEqual(
+            payload["transcriptFallbackReason"],
+            "gpu_model_load_timeout",
+        )
+        self.assertTrue(payload["transcriptFallbackUsed"])
 
     def test_job_payload_handles_absolute_shared_output_root(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             package = self._write_package(root)
             job = Job(id="done", command=[], output_dir=str(package), knowledge_id="demo")
-            with patch("src.web.OUTPUT_ROOT", root):
+            with patch("src.web.OUTPUT_ROOT", root), patch.dict(
+                os.environ,
+                {
+                    "VIEWLEDGE_UI_MODE": "diagnostic",
+                    "SHOW_TECH_DETAILS": "1",
+                },
+                clear=False,
+            ):
                 payload = job_to_dict(job)
 
         self.assertEqual(payload["knowledgeId"], "demo")
@@ -822,7 +913,8 @@ class WebApiTests(unittest.TestCase):
         with urlopen(f"{self.base_url}/api/runtime", timeout=3) as response:
             payload = json.loads(response.read().decode("utf-8"))
         self.assertEqual(payload["version"], __version__)
-        self.assertEqual(payload["pythonExecutable"], __import__("sys").executable)
+        self.assertNotIn("pythonExecutable", payload)
+        self.assertEqual(payload["uiMode"], "product")
         self.assertIn("tools", payload)
         self.assertIn("providers", payload)
         self.assertIn("inProjectVenv", payload)

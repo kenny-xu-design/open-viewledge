@@ -326,6 +326,9 @@ class WebUiContractTests(unittest.TestCase):
     def test_progress_loading_and_empty_state_are_accessible(self) -> None:
         self.assertIn('id="taskProgress" role="status" aria-live="polite"', self.html)
         self.assertIn('id="taskProgressBar" role="progressbar" aria-label="任务处理进度"', self.html)
+        self.assertIn('id="taskAsrStatus"', self.html)
+        self.assertIn("function renderTaskAsrStatus(job)", self.js)
+        self.assertIn('gpu_model_load_timeout: "GPU 模型加载超时"', self.js)
         self.assertIn('aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"', self.html)
         self.assertIn('setAttribute("aria-valuenow", String(percent))', self.js)
         self.assertIn('setAttribute("aria-valuetext", $("#taskStatusText").textContent)', self.js)
