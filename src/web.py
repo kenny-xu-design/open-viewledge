@@ -87,6 +87,33 @@ LOGGER = logging.getLogger(__name__)
 WEB_PROVIDER_CONFIG = WebProviderConfigStore()
 CAPABILITY_CACHE: dict[str, Any] = {}
 CAPABILITY_LOCK = threading.RLock()
+PRODUCT_SENSITIVE_KEYS = {
+    "analysis_model",
+    "analysis_provider",
+    "asr_model",
+    "asr_provider",
+    "compute_type",
+    "device",
+    "ffmpeg_path",
+    "ffprobe_path",
+    "llm_model",
+    "llm_provider",
+    "local_path",
+    "model",
+    "model_name",
+    "models",
+    "output_dir",
+    "package_path",
+    "provider",
+    "source_path",
+    "transcript_model",
+    "transcript_provider",
+}
+PRODUCT_PROVIDER_SERVICES = {
+    "deepseek": "analysis_text",
+    "gemini": "visual_understanding",
+    "groq": "cloud_transcription",
+}
 
 
 def _diagnostic_ui_mode() -> bool:
@@ -126,11 +153,67 @@ def _product_log(line: str) -> str:
     return value
 
 
+def _product_message(value: str) -> str:
+    text = _product_log(value)
+    replacements = {
+        "DeepSeek": "文字分析服务",
+        "Gemini": "视觉理解服务",
+        "Groq": "云端转写服务",
+        "faster-whisper": "本地转写组件",
+        "CTranslate2": "本地计算组件",
+        "CUDA": "本地 GPU",
+        "cuDNN": "GPU 运行组件",
+        "cuBLAS": "GPU 运行组件",
+        "FFmpeg": "媒体处理组件",
+        "ffmpeg": "媒体处理组件",
+        "ffprobe": "媒体检测组件",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    text = re.sub(r"(?i)\b(?:small|turbo|large-v3|whisper-large-v3-turbo)\b", "本地模型", text)
+    return text
+
+
+def _product_capabilities(payload: dict[str, Any]) -> dict[str, Any]:
+    raw = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+
+    def aggregate(*names: str) -> tuple[str, bool]:
+        items = [raw.get(name) for name in names if isinstance(raw.get(name), dict)]
+        available = bool(items) and all(item.get("status") == "available" for item in items)
+        if available:
+            return "available", True
+        config_required = any(item.get("status") == "config_required" for item in items)
+        return ("config_required" if config_required else "unavailable"), False
+
+    definitions = {
+        "analysis_text": (("deepseek",), "已配置", "未配置"),
+        "cloud_transcription": (("groq",), "已配置", "未配置"),
+        "visual_understanding": (("gemini",), "已配置", "未配置"),
+        "media_processing": (("ffmpeg", "ffprobe"), "可用", "不可用"),
+        "local_model": (("local_model",), "可用", "未安装"),
+        "local_cpu": (("local_cpu",), "可用", "不可用"),
+        "local_gpu": (("local_gpu",), "可用", "不可用"),
+    }
+    capabilities: dict[str, Any] = {}
+    for name, (sources, available_label, unavailable_label) in definitions.items():
+        status, available = aggregate(*sources)
+        capabilities[name] = {
+            "status": status,
+            "displayMessage": available_label if available else unavailable_label,
+        }
+    return {
+        "status": payload.get("status") or "available",
+        "updatedAt": payload.get("updatedAt"),
+        "capabilities": capabilities,
+    }
+
+
 def capability_payload(*, refresh: bool = False) -> dict[str, Any]:
     global CAPABILITY_CACHE
     with CAPABILITY_LOCK:
         if CAPABILITY_CACHE and not refresh:
-            return dict(CAPABILITY_CACHE)
+            cached = dict(CAPABILITY_CACHE)
+            return cached if _diagnostic_ui_mode() else _product_capabilities(cached)
     payload = CapabilityRegistry(
         load_config(PROJECT_ROOT / "config.example.json"),
         project_root=PROJECT_ROOT,
@@ -138,7 +221,32 @@ def capability_payload(*, refresh: bool = False) -> dict[str, Any]:
     ).inspect()
     with CAPABILITY_LOCK:
         CAPABILITY_CACHE = payload
-    return dict(payload)
+    return dict(payload) if _diagnostic_ui_mode() else _product_capabilities(payload)
+
+
+def data_directory_status(*, create: bool = True) -> dict[str, Any]:
+    try:
+        if create:
+            OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+        if not OUTPUT_ROOT.is_dir():
+            raise OSError("not_a_directory")
+        probe = OUTPUT_ROOT / f".viewledge-write-test-{uuid.uuid4().hex}.tmp"
+        try:
+            probe.write_text("ok", encoding="utf-8")
+        finally:
+            probe.unlink(missing_ok=True)
+    except OSError:
+        result: dict[str, Any] = {"available": False, "status": "unwritable", "displayMessage": "不可写"}
+    else:
+        result = {"available": True, "status": "available", "displayMessage": "可用"}
+    if _diagnostic_flag("SHOW_TECH_DETAILS"):
+        result["path"] = str(OUTPUT_ROOT)
+    return result
+
+
+def ensure_data_directory_writable() -> None:
+    if not data_directory_status()["available"]:
+        raise UserFacingError("数据目录不可写，请在设置中选择当前用户可写的目录。")
 
 
 class KnowledgeDeletionError(RuntimeError):
@@ -244,6 +352,7 @@ def _clean_source_value(value: str) -> str:
 
 
 def start_job(payload: dict[str, Any]) -> Job:
+    ensure_data_directory_writable()
     analysis_requested, analysis_skip_reason = _analysis_request_from_payload(payload)
     if analysis_requested and not ProviderConfigResolver(
         WEB_PROVIDER_CONFIG
@@ -498,35 +607,17 @@ def runtime_status_payload() -> dict[str, Any]:
             project_root=PROJECT_ROOT,
         )
     ]
-    payload = {
+    payload: dict[str, Any] = {
         "version": __version__,
-        "network": NETWORK_PROXY_STATUS.public_payload(),
-        "inProjectVenv": _is_project_venv_python(),
-        "warning": _runtime_python_warning(),
-        "tools": [
-            {
-                "name": item["name"],
-                "available": item["available"],
-                "path": "",
-                "source": item["source"],
-                "error": item["error"],
-            }
-            for item in tools
-        ],
-        "providers": [
-            {
-                "provider": item["provider"],
-                "name": item["name"],
-                "configured": item["configured"],
-                "model": "",
-            }
-            for item in ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses()
-        ],
         "uiMode": "diagnostic" if _diagnostic_ui_mode() else "product",
+        "dataDirectory": data_directory_status(),
     }
     if _diagnostic_flag("SHOW_TECH_DETAILS"):
         payload.update(
             {
+                "network": NETWORK_PROXY_STATUS.public_payload(),
+                "inProjectVenv": _is_project_venv_python(),
+                "warning": _runtime_python_warning(),
                 "pythonExecutable": sys.executable,
                 "projectRoot": str(PROJECT_ROOT),
                 "outputRoot": str(OUTPUT_ROOT),
@@ -626,8 +717,31 @@ def _snapshot_job(job: Job) -> Job:
 
 
 def provider_config_payload() -> dict[str, Any]:
+    statuses = ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses()
+    safe_statuses = []
+    for item in statuses:
+        safe_item = {key: value for key, value in item.items() if key != "keyTail"}
+        if isinstance(safe_item.get("lastTest"), dict):
+            safe_item["lastTest"] = {
+                key: value
+                for key, value in safe_item["lastTest"].items()
+                if key not in {"model", "provider", "error"}
+            }
+        safe_statuses.append(safe_item)
+    if not _diagnostic_ui_mode():
+        safe_statuses = [
+            {
+                "service": PRODUCT_PROVIDER_SERVICES.get(
+                    str(item.get("provider") or item.get("name") or ""),
+                    "service",
+                ),
+                "configured": bool(item.get("configured")),
+                "lastTest": item.get("lastTest") or {},
+            }
+            for item in safe_statuses
+        ]
     return {
-        "providers": ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses(),
+        "providers": safe_statuses,
         "message": "API Key 默认仅用于当前本地运行会话，服务重启后需要重新填写。",
     }
 
@@ -665,7 +779,21 @@ def test_provider_config(payload: dict[str, Any]) -> dict[str, Any]:
         result = test_provider_connection(provider)
     result["testedAt"] = time.time()
     WEB_PROVIDER_CONFIG.set_last_test(normalized_provider, result)
-    return {"test": result, **provider_config_payload()}
+    if _diagnostic_ui_mode():
+        public_test = {
+            key: value
+            for key, value in result.items()
+            if key not in {"apiKey", "key", "keyTail", "headers"}
+        }
+    else:
+        public_test = {
+            key: value
+            for key, value in result.items()
+            if key in {"ok", "durationMs", "testedAt", "errorType"}
+        }
+        if not public_test.get("ok"):
+            public_test["error"] = "连接测试失败，请检查凭据、网络和服务配置。"
+    return {"test": public_test, **provider_config_payload()}
 
 
 def _with_api_config_hint(message: str) -> str:
@@ -703,43 +831,48 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "analysisRequested": job.analysis_requested,
         "analysisStatus": job.analysis_status,
         "analysisSkipReason": job.analysis_skip_reason,
-        "analysisProvider": job.analysis_provider,
         "transcriptOnly": job.transcript_only,
         "transcriptStatus": job.transcript_status,
-        "transcriptProvider": job.transcript_provider,
         "transcriptRouteRequested": job.transcript_route_requested,
         "transcriptFallbackUsed": job.transcript_fallback_used,
-        "transcriptFallbackReason": job.transcript_fallback_reason,
-        "transcriptActualProvider": job.transcript_actual_provider,
-        "transcriptActualDevice": job.transcript_actual_device,
-        "asrWorkerStatus": job.asr_worker_status,
         "lastActivityAt": job.last_activity_at,
-        "lastHeartbeatAt": job.last_heartbeat_at,
-        "lastSegmentAt": job.last_segment_at,
         "lastSegmentEnd": job.last_segment_end,
         "transcriptProgress": job.transcript_progress,
-        "returncode": job.returncode,
-        "cliTaskId": job.cli_task_id,
-        "logs": [_product_log(line) for line in job.logs],
+        "logs": [],
         "knowledgeId": job.knowledge_id if output_available else "",
         "outputFiles": output_files,
-        "error": job.error,
-        "errorCode": job.error_code,
+        "error": _product_message(job.error),
     }
     if _diagnostic_flag("SHOW_TECH_DETAILS"):
         payload.update(
             {
                 "command": [_safe_process_log(part) for part in job.command],
+                "analysisProvider": job.analysis_provider,
                 "analysisModel": job.analysis_model,
+                "transcriptProvider": job.transcript_provider,
                 "transcriptModel": job.transcript_model,
+                "transcriptFallbackReason": job.transcript_fallback_reason,
+                "transcriptActualProvider": job.transcript_actual_provider,
+                "transcriptActualDevice": job.transcript_actual_device,
+                "asrWorkerStatus": job.asr_worker_status,
+                "lastHeartbeatAt": job.last_heartbeat_at,
+                "lastSegmentAt": job.last_segment_at,
                 "workerExitcode": job.worker_exitcode,
+                "returncode": job.returncode,
+                "cliTaskId": job.cli_task_id,
+                "errorCode": job.error_code,
                 "outputDir": _display_output_dir(output_path) if output_available else "",
             }
         )
     if _diagnostic_flag("SHOW_RAW_PROCESS_LOGS"):
         payload["logs"] = [_safe_process_log(line) for line in job.logs]
-    payload["error"] = _safe_process_log(str(payload.get("error") or ""))
-    payload["errorCode"] = _safe_process_log(str(payload.get("errorCode") or ""))
+    payload["error"] = (
+        _safe_process_log(str(payload.get("error") or ""))
+        if _diagnostic_ui_mode()
+        else _product_message(str(payload.get("error") or ""))
+    )
+    if "errorCode" in payload:
+        payload["errorCode"] = _safe_process_log(str(payload.get("errorCode") or ""))
     return payload
 
 
@@ -963,7 +1096,7 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
     if normalized_platform not in {"local", "youtube", "bilibili"}:
         normalized_platform = "generic" if external_url else "local"
     video_id = str((embed or {}).get("videoId") or source.get("video_id") or metadata.get("video_id") or "")
-    return {
+    payload = {
         "id": knowledge_id,
         "knowledge_id": knowledge_id,
         "source_type": "online_video" if external_url and not media_available else "local",
@@ -997,8 +1130,26 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
             "externalUrl": external_url,
             "thumbnail": source.get("thumbnail") or metadata.get("thumbnail") or "",
             "embed": embed,
+            "previewStatus": (
+                "external_only"
+                if external_url and not media_available and not embed
+                else "available" if media_available or embed else "unavailable"
+            ),
         },
     }
+    return payload if _diagnostic_ui_mode() else _strip_product_details(payload)
+
+
+def _strip_product_details(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_product_details(item)
+            for key, item in value.items()
+            if key.lower() not in PRODUCT_SENSITIVE_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_product_details(item) for item in value]
+    return value
 
 
 def _normalize_analysis_view(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1487,7 +1638,7 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/capabilities":
             self._send_json(capability_payload())
         elif parsed.path == "/api/providers":
-            self._send_json({"providers": ProviderConfigResolver(WEB_PROVIDER_CONFIG).statuses()})
+            self._send_json(provider_config_payload())
         elif parsed.path == "/api/provider-config":
             self._send_json(provider_config_payload())
         elif parsed.path.startswith("/api/library/"):
@@ -1578,7 +1729,10 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/chat":
             try:
-                self._send_json(chat_with_knowledge(self._read_json_body()))
+                chat_payload = chat_with_knowledge(self._read_json_body())
+                self._send_json(
+                    chat_payload if _diagnostic_ui_mode() else _strip_product_details(chat_payload)
+                )
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except FileNotFoundError:
@@ -2221,22 +2375,29 @@ def main() -> None:
     parser.add_argument("--open", action="store_true", help="Open the browser after starting.")
     args = parser.parse_args()
 
-    server = VideoSummaryServer((args.host, args.port), VideoSummaryHandler)
+    try:
+        ensure_data_directory_writable()
+        server = VideoSummaryServer((args.host, args.port), VideoSummaryHandler)
+    except UserFacingError as exc:
+        raise SystemExit(str(exc)) from exc
+    except OSError as exc:
+        raise SystemExit(f"端口 {args.port} 已被占用或不可用。") from exc
     url = f"http://{args.host}:{args.port}"
     print(f"Video Summary Web UI: {url}")
-    print(f"Python executable: {sys.executable}")
-    print(f"Working directory: {PROJECT_ROOT}")
-    print("Subprocess runner: uses this Web UI process sys.executable")
     runtime = runtime_status_payload()
-    for tool in runtime["tools"]:
-        detail = f"{tool['path']} ({tool['source']})" if tool["available"] else "未配置或未发现"
-        print(f"{tool['name']}: {detail}")
-    for provider in runtime["providers"]:
-        configured = "configured" if provider["configured"] else "not configured"
-        print(f"Provider: {provider['name']} / {provider['model']} ({configured})")
-    warning = _runtime_python_warning()
-    if warning:
-        print(warning)
+    if _diagnostic_flag("SHOW_TECH_DETAILS"):
+        print(f"Python executable: {sys.executable}")
+        print(f"Working directory: {PROJECT_ROOT}")
+        print("Subprocess runner: uses this Web UI process sys.executable")
+        for tool in runtime.get("tools", []):
+            detail = f"{tool['path']} ({tool['source']})" if tool["available"] else "未配置或未发现"
+            print(f"{tool['name']}: {detail}")
+        for provider in runtime.get("providers", []):
+            configured = "configured" if provider["configured"] else "not configured"
+            print(f"Provider: {provider['name']} / {provider['model']} ({configured})")
+        warning = _runtime_python_warning()
+        if warning:
+            print(warning)
     if args.open:
         webbrowser.open(url)
     try:

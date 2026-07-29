@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Video Summary Workspace</title>
-  <link rel="stylesheet" href="/static/app.workspace-18.css">
+  <link rel="stylesheet" href="/static/app.workspace-19.css">
 </head>
-<body>
+<body data-ui-mode="product">
   <svg class="icon-sprite" aria-hidden="true">
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -205,7 +205,7 @@
         <div class="chat-composer">
           <textarea id="chatInput" rows="3" placeholder="询问当前知识记录…" aria-label="聊天问题"></textarea>
           <div class="composer-footer">
-            <div class="composer-tools"><button class="icon-button small" aria-label="添加附件待开发" title="附件功能待开发" disabled><svg><use href="#i-clip"/></svg></button><select id="chatProvider" aria-label="对话模型"><option value="auto">自动</option><option value="deepseek">DeepSeek</option><option value="gemini">Gemini</option></select><span class="model-label" id="chatModelLabel">当前视频字幕</span></div>
+            <div class="composer-tools"><button class="icon-button small" aria-label="添加附件待开发" title="附件功能待开发" disabled><svg><use href="#i-clip"/></svg></button><select id="chatProvider" aria-label="对话模型"><option value="auto">自动</option><option value="deepseek">文字分析</option><option value="gemini">视觉理解</option></select><span class="model-label" id="chatModelLabel">当前视频字幕</span></div>
             <button class="send-button" id="sendChat" aria-label="发送问题"><svg><use href="#i-send"/></svg></button>
           </div>
         </div>
@@ -236,7 +236,7 @@
       <div class="form-grid">
         <label class="field"><span>分析模式</span><select class="ui-select" id="taskMode"><option value="summary">标准摘要</option><option value="tutorial">教程提取</option><option value="viral">爆款分析</option><option value="close-reading">深度精读</option></select><small id="taskModeDescription">适合资讯、访谈、介绍和一般知识视频</small></label>
         <label class="field"><span>处理模式</span><select class="ui-select" id="taskProcessingProfile"><option value="complete">complete（完整兼容）</option><option value="fast">fast（优先文本）</option></select></label>
-        <label class="field"><span>AI 分析</span><input value="DeepSeek" disabled><input id="taskBackend" type="hidden" value="deepseek"></label>
+        <label class="field"><span>AI 分析</span><input value="文字分析" disabled><input id="taskBackend" type="hidden" value="deepseek"></label>
         <label class="field"><span>字幕语言</span><select id="taskLanguage"><option value="">默认 zh</option><option value="zh">zh</option><option value="zh-Hans">zh-Hans</option><option value="en">en</option></select></label>
         <label class="field"><span>字幕转写方式</span><select id="taskAsrRoute"><option value="cloud">云端快速转写</option><option value="local_gpu">本地 GPU</option><option value="local_cpu">本地 CPU</option></select><small>仅在视频没有可用平台字幕时生效。云端模式会把提取后的音频发送至第三方转写服务。</small></label>
         <label class="field"><span>字幕分组</span><select disabled><option>60秒（当前配置）</option></select></label>
@@ -283,24 +283,24 @@
       <div class="settings-list api-config-list">
         <p class="api-config-notice">API Key 默认仅用于当前本地运行会话，服务重启后需要重新填写。保存后页面只显示尾号，不会返回完整 Key。</p>
         <section class="api-provider-card" data-provider-card="deepseek">
-          <header><strong>DeepSeek / OpenAI-compatible</strong><span class="module-status" id="deepseekConfigStatus">未配置</span></header>
+          <header><strong>文字分析</strong><span class="module-status" id="deepseekConfigStatus">未配置</span></header>
           <label>API Key<div class="secret-field"><input id="deepseekApiKey" type="password" autocomplete="off" placeholder="输入后应用，已保存时仅显示尾号"><button type="button" class="quiet-button" data-toggle-secret="deepseekApiKey">显示</button></div><small id="deepseekKeyHint"></small></label>
-          <label>Base URL<input id="deepseekBaseUrl" type="text" autocomplete="off"></label>
-          <label>Model<input id="deepseekModel" type="text" autocomplete="off"></label>
+          <label class="technical-provider-field">Base URL<input id="deepseekBaseUrl" type="text" autocomplete="off"></label>
+          <label class="technical-provider-field">Model<input id="deepseekModel" type="text" autocomplete="off"></label>
           <div class="api-config-actions"><button type="button" class="quiet-button" data-provider-test="deepseek">测试连接</button><button type="button" class="primary-button" data-provider-apply="deepseek">应用配置</button><button type="button" class="secondary-button" data-provider-clear="deepseek">清除配置</button></div>
           <p class="api-test-result" id="deepseekTestResult"></p>
         </section>
         <section class="api-provider-card" data-provider-card="gemini">
-          <header><strong>Gemini</strong><span class="module-status" id="geminiConfigStatus">未配置</span></header>
+          <header><strong>视觉理解</strong><span class="module-status" id="geminiConfigStatus">未配置</span></header>
           <label>API Key<div class="secret-field"><input id="geminiApiKey" type="password" autocomplete="off" placeholder="输入后应用，已保存时仅显示尾号"><button type="button" class="quiet-button" data-toggle-secret="geminiApiKey">显示</button></div><small id="geminiKeyHint"></small></label>
-          <label>Model<input id="geminiModel" type="text" autocomplete="off"></label>
+          <label class="technical-provider-field">Model<input id="geminiModel" type="text" autocomplete="off"></label>
           <div class="api-config-actions"><button type="button" class="quiet-button" data-provider-test="gemini">测试连接</button><button type="button" class="primary-button" data-provider-apply="gemini">应用配置</button><button type="button" class="secondary-button" data-provider-clear="gemini">清除配置</button></div>
           <p class="api-test-result" id="geminiTestResult"></p>
         </section>
         <section class="api-provider-card" data-provider-card="groq">
-          <header><strong>Groq Speech-to-Text</strong><span class="module-status" id="groqConfigStatus">未配置</span></header>
+          <header><strong>云端转写</strong><span class="module-status" id="groqConfigStatus">未配置</span></header>
           <label>API Key<div class="secret-field"><input id="groqApiKey" type="password" autocomplete="off" placeholder="输入后应用，已保存时仅显示尾号"><button type="button" class="quiet-button" data-toggle-secret="groqApiKey">显示</button></div><small id="groqKeyHint"></small></label>
-          <label>Model<input id="groqModel" type="text" autocomplete="off"></label>
+          <label class="technical-provider-field">Model<input id="groqModel" type="text" autocomplete="off"></label>
           <div class="api-config-actions"><button type="button" class="quiet-button" data-provider-test="groq">测试连接</button><button type="button" class="primary-button" data-provider-apply="groq">应用配置</button><button type="button" class="secondary-button" data-provider-clear="groq">清除配置</button></div>
           <p class="api-test-result" id="groqTestResult"></p>
         </section>
@@ -312,6 +312,6 @@
   <dialog id="imageDialog" class="image-dialog"><button class="icon-button image-close" data-close-dialog aria-label="关闭预览"><svg><use href="#i-close"/></svg></button><img id="imagePreview" alt="关键帧预览"></dialog>
   <div class="drawer-scrim" id="drawerScrim"></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.workspace-18.js" defer></script>
+  <script src="/static/app.workspace-19.js" defer></script>
 </body>
 </html>

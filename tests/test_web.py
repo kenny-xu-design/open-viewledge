@@ -420,6 +420,71 @@ class WebCommandTests(unittest.TestCase):
         self.assertNotIn("api_key", json.dumps(payload).lower())
         self.assertNotIn("keyTail", json.dumps(payload))
 
+    def test_product_capabilities_use_only_generic_fields(self) -> None:
+        raw = {
+            "status": "available",
+            "updatedAt": 1,
+            "capabilities": {
+                "deepseek": {"status": "available", "model": "private-model"},
+                "groq": {"status": "config_required", "reason": "groq_api_key_missing"},
+                "gemini": {"status": "available", "model": "vision-model"},
+                "ffmpeg": {"status": "available", "source": "C:/private/ffmpeg.exe"},
+                "ffprobe": {"status": "available", "source": "C:/private/ffprobe.exe"},
+                "local_model": {"status": "available", "models": ["small", "turbo"]},
+                "local_cpu": {"status": "available"},
+                "local_gpu": {"status": "unavailable", "computeTypes": ["float16"]},
+            },
+        }
+        module = __import__("src.web", fromlist=["capability_payload"])
+        old_cache = module.CAPABILITY_CACHE
+        try:
+            with patch.dict(os.environ, {"VIEWLEDGE_UI_MODE": "product"}, clear=False), patch(
+                "src.web.CapabilityRegistry.inspect",
+                return_value=raw,
+            ):
+                module.CAPABILITY_CACHE = {}
+                payload = module.capability_payload(refresh=True)
+        finally:
+            module.CAPABILITY_CACHE = old_cache
+        serialized = json.dumps(payload)
+        self.assertEqual(
+            set(payload["capabilities"]),
+            {
+                "analysis_text",
+                "cloud_transcription",
+                "visual_understanding",
+                "media_processing",
+                "local_model",
+                "local_cpu",
+                "local_gpu",
+            },
+        )
+        for forbidden in ("deepseek", "groq", "gemini", "private-model", "small", "turbo", "C:/private"):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_product_provider_status_does_not_return_credentials_or_models(self) -> None:
+        module = __import__("src.web", fromlist=["provider_config_payload"])
+        statuses = [
+            {
+                "provider": "deepseek",
+                "name": "deepseek",
+                "configured": True,
+                "baseUrl": "https://private.invalid",
+                "model": "secret-model",
+                "keyTail": "1234",
+                "lastTest": {"ok": True, "model": "secret-model"},
+            }
+        ]
+        with patch.dict(os.environ, {"VIEWLEDGE_UI_MODE": "product"}, clear=False), patch(
+            "src.web.ProviderConfigResolver.statuses",
+            return_value=statuses,
+        ):
+            payload = module.provider_config_payload()
+        serialized = json.dumps(payload)
+        self.assertEqual(payload["providers"][0]["service"], "analysis_text")
+        for forbidden in ("deepseek", "secret-model", "private.invalid", "1234", "keyTail"):
+            self.assertNotIn(forbidden, serialized)
+
 
 class WebLibraryTests(unittest.TestCase):
     def _write_package(self, root: Path, name: str = "demo") -> Path:
@@ -692,7 +757,7 @@ class WebLibraryTests(unittest.TestCase):
         self.assertEqual(payload["knowledgeId"], "")
         self.assertNotIn("outputDir", payload)
 
-    def test_job_payload_exposes_asr_fallback_state(self) -> None:
+    def test_job_payload_exposes_asr_fallback_state_only_in_diagnostic_mode(self) -> None:
         job = Job(
             id="fallback",
             command=[],
@@ -705,7 +770,12 @@ class WebLibraryTests(unittest.TestCase):
             last_segment_end=12.5,
             transcript_progress=1,
         )
-        payload = job_to_dict(job)
+        with patch.dict(
+            os.environ,
+            {"VIEWLEDGE_UI_MODE": "diagnostic", "SHOW_TECH_DETAILS": "1"},
+            clear=False,
+        ):
+            payload = job_to_dict(job)
         self.assertEqual(payload["transcriptActualDevice"], "cpu")
         self.assertEqual(
             payload["transcriptFallbackReason"],
@@ -915,9 +985,10 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(payload["version"], __version__)
         self.assertNotIn("pythonExecutable", payload)
         self.assertEqual(payload["uiMode"], "product")
-        self.assertIn("tools", payload)
-        self.assertIn("providers", payload)
-        self.assertIn("inProjectVenv", payload)
+        self.assertNotIn("tools", payload)
+        self.assertNotIn("providers", payload)
+        self.assertNotIn("inProjectVenv", payload)
+        self.assertIn("dataDirectory", payload)
 
     @patch("src.web.load_knowledge_package")
     @patch("src.web.reanalyze_knowledge_package")

@@ -1,0 +1,13 @@
+Component: FFmpeg and FFprobe
+Version: 8.1.2-full_build-www.gyan.dev
+Build type: Windows x64 static full build
+Compiler: gcc 16.1.0 (MSYS2)
+License profile: GPL v3 or later build
+Acquisition: Gyan.FFmpeg package installed through Microsoft WinGet
+Verification command: tools\ffmpeg\bin\ffmpeg.exe -version
+Verification command: tools\ffmpeg\bin\ffprobe.exe -version
+
+These executables are portable application tools. They do not install or bundle
+the NVIDIA CUDA runtime. Hardware-acceleration features compiled into FFmpeg
+remain unavailable unless the user's operating system already provides their
+optional runtime requirements.

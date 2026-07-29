@@ -1,0 +1,13 @@
+Upstream project:
+https://ffmpeg.org/
+
+Windows build distributor:
+https://www.gyan.dev/ffmpeg/builds/
+
+Package identifier:
+Gyan.FFmpeg
+
+Bundled build:
+ffmpeg 8.1.2-full_build-www.gyan.dev
+
+The complete license text supplied with this build is included as LICENSE.txt.

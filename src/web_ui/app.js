@@ -251,6 +251,7 @@ async function loadRuntimeInfo() {
   try {
     const runtime = await api("/api/runtime");
     state.uiMode = runtime.uiMode === "diagnostic" ? "diagnostic" : "product";
+    document.body.dataset.uiMode = state.uiMode;
     const diagnostic = state.uiMode === "diagnostic";
     [$("#taskRuntime"), $("#settingsRuntime"), $("#taskCapabilities")].forEach((element) => {
       element.classList.toggle("hidden", !diagnostic);
@@ -470,7 +471,7 @@ async function api(path, options = {}) {
 async function loadProviderStatuses() {
   try {
     const data = await api("/api/providers");
-    state.providerStatuses = Object.fromEntries((data.providers || []).map((item) => [item.name, item]));
+    state.providerStatuses = providerStateEntries(data.providers || []);
   } catch (error) {
     state.providerStatuses = {};
   }
@@ -480,7 +481,7 @@ async function loadProviderStatuses() {
 async function loadProviderConfig() {
   try {
     const data = await api("/api/provider-config");
-    state.providerConfig = Object.fromEntries((data.providers || []).map((item) => [item.provider || item.name, item]));
+    state.providerConfig = providerStateEntries(data.providers || []);
     renderApiConfig();
   } catch (error) {
     state.providerConfig = {};
@@ -515,8 +516,12 @@ function renderOneApiProvider(provider) {
   if (!status || !keyHint || !testResult) return;
   const tested = config.lastTest || {};
   const statusText = !config.configured ? "未配置" : tested.ok === true ? "测试成功" : tested.ok === false ? "测试失败" : "已配置未测试";
-  status.textContent = `${statusText} · ${sourceLabel(config.keySource)} · ${config.model || ""}`.trim();
-  keyHint.textContent = config.keyTail ? `已保存 Key 尾号：${config.keyTail}` : "未保存 Web 会话 Key，可使用环境变量或填写后应用。";
+  status.textContent = state.uiMode === "diagnostic"
+    ? `${statusText} · ${sourceLabel(config.keySource)} · ${config.model || ""}`.trim()
+    : statusText;
+  keyHint.textContent = config.configured
+    ? "凭据已配置；出于安全考虑不会返回或显示其内容。"
+    : "尚未配置凭据，可填写后应用。";
   if (provider === "deepseek") {
     $("#deepseekBaseUrl").value = config.baseUrl || "https://api.deepseek.com";
     $("#deepseekModel").value = config.model || "deepseek-v4-flash";
@@ -530,7 +535,9 @@ function renderOneApiProvider(provider) {
   }
   if (tested.ok === true) {
     testResult.className = "api-test-result success";
-    testResult.textContent = `最近测试成功：${tested.model || config.model || ""}，${tested.durationMs ?? 0} ms。`;
+    testResult.textContent = state.uiMode === "diagnostic"
+      ? `最近测试成功：${tested.model || config.model || ""}，${tested.durationMs ?? 0} ms。`
+      : "最近测试成功。";
   } else if (tested.ok === false) {
     testResult.className = "api-test-result failed";
     testResult.textContent = `最近测试失败：${tested.error || "请检查配置。"}（${tested.errorType || "provider_error"}）`;
@@ -599,11 +606,23 @@ async function clearApiProviderConfig(provider) {
 }
 
 function updateProviderConfigState(data) {
-  state.providerConfig = Object.fromEntries((data.providers || []).map((item) => [item.provider || item.name, item]));
-  state.providerStatuses = Object.fromEntries((data.providers || []).map((item) => [item.provider || item.name, item]));
+  state.providerConfig = providerStateEntries(data.providers || []);
+  state.providerStatuses = providerStateEntries(data.providers || []);
   renderApiConfig();
   renderProviderStatus();
   loadRuntimeInfo();
+}
+
+function providerStateEntries(items) {
+  const serviceToProvider = {
+    analysis_text: "deepseek",
+    visual_understanding: "gemini",
+    cloud_transcription: "groq",
+  };
+  return Object.fromEntries(items.map((item) => [
+    serviceToProvider[item.service] || item.provider || item.name,
+    item,
+  ]));
 }
 
 function toggleSecretField(id, button) {
@@ -752,8 +771,10 @@ function renderKnowledge(knowledge) {
   $("#workspaceTitle").textContent = knowledge.source?.title || knowledge.id || "视频知识工作台";
   const model = knowledge.manifest?.llm_model || knowledge.analysis?.model || "";
   const provider = knowledge.manifest?.llm_provider || knowledge.analysis?.provider || "";
-  $("#modelBadge").textContent = model ? `${providerLabel(provider)} · ${model}` : "未运行 AI 分析";
-  $("#modelBadge").title = model ? `本知识包实际使用模型：${model}` : "当前知识包未记录分析模型";
+  $("#modelBadge").textContent = model
+    ? `${providerLabel(provider)} · ${model}`
+    : knowledge.analysisReady ? "AI 分析已完成" : "未运行 AI 分析";
+  $("#modelBadge").title = model ? `本知识包实际使用模型：${model}` : $("#modelBadge").textContent;
   $("#chapterCount").textContent = (knowledge.analysis?.chapters?.length || knowledge.timeline?.length || 0);
   renderAnalysisRetry(knowledge);
   renderLibrary();
@@ -996,6 +1017,7 @@ function syncMediaControls() {
   const iframeMedia = mediaController instanceof YouTubeMediaController || mediaController instanceof BilibiliEmbedController;
   const externalOnly = mediaController instanceof ExternalLinkController;
   const embeddedBilibili = mediaController instanceof BilibiliEmbedController;
+  $("#mediaControls").classList.toggle("hidden", externalOnly);
   $('[data-media="play"]').disabled = externalOnly || embeddedBilibili;
   $$('[data-media="back"], [data-media="forward"]').forEach((button) => button.disabled = externalOnly);
   $('[data-media="play"]').title = embeddedBilibili ? "请在 B站播放器内点击播放" : externalOnly ? "请打开原视频播放" : "";
@@ -1035,10 +1057,31 @@ function renderExternalMedia(surface, knowledge, message = "") {
     image.referrerPolicy = "no-referrer";
     wrapper.appendChild(image);
   }
-  if (message) {
+  const source = knowledge.source || {};
+  const details = document.createElement("div");
+  details.className = "external-details";
+  const title = document.createElement("strong");
+  title.textContent = source.title || "外部视频";
+  details.appendChild(title);
+  const meta = [
+    source.author,
+    Number(knowledge.duration || 0) > 0 ? formatTime(Number(knowledge.duration)) : "",
+  ].filter(Boolean);
+  if (meta.length) {
+    const metaLine = document.createElement("span");
+    metaLine.textContent = meta.join(" · ");
+    details.appendChild(metaLine);
+  }
+  wrapper.appendChild(details);
+  const externalMessage = message || (
+    media.previewStatus === "external_only"
+      ? "当前来源不支持工作台内播放，字幕、摘要和知识包功能不受影响。"
+      : ""
+  );
+  if (externalMessage) {
     const notice = document.createElement("span");
     notice.className = "external-notice";
-    notice.textContent = message;
+    notice.textContent = externalMessage;
     wrapper.appendChild(notice);
   }
   const button = document.createElement("button");
@@ -1584,7 +1627,7 @@ function openNewTask() {
 
 async function refreshTaskCapabilities() {
   const root = $("#taskCapabilities");
-  root.textContent = "正在检查 DeepSeek、Groq、FFmpeg 和本地 ASR 能力…";
+  root.textContent = "正在检查当前可用能力…";
   try {
     renderTaskCapabilities(await api("/api/capabilities"));
     renderTaskCapabilities(await api("/api/capabilities/refresh", {
@@ -1598,16 +1641,26 @@ async function refreshTaskCapabilities() {
 
 function renderTaskCapabilities(payload) {
   const capabilities = payload.capabilities || {};
-  const labels = {
-    deepseek: "DeepSeek",
-    groq: "Groq",
-    gemini: "Gemini",
-    ffmpeg: "FFmpeg",
-    ffprobe: "ffprobe",
-    local_model: "本地模型",
-    local_cpu: "本地 CPU",
-    local_gpu: "本地 GPU",
-  };
+  const labels = state.uiMode === "diagnostic"
+    ? {
+        deepseek: "DeepSeek",
+        groq: "Groq",
+        gemini: "Gemini",
+        ffmpeg: "FFmpeg",
+        ffprobe: "ffprobe",
+        local_model: "本地模型",
+        local_cpu: "本地 CPU",
+        local_gpu: "本地 GPU",
+      }
+    : {
+        analysis_text: "文字分析",
+        cloud_transcription: "云端转写",
+        visual_understanding: "视觉理解",
+        media_processing: "媒体处理",
+        local_model: "本地模型",
+        local_cpu: "本地 CPU",
+        local_gpu: "本地 GPU",
+      };
   $("#taskCapabilities").innerHTML = Object.entries(labels).map(([name, label]) => {
     const item = capabilities[name] || { status: "checking", displayMessage: "检测中" };
     return `<span class="capability-item ${escapeAttr(item.status)}"><strong>${label}</strong>：${escapeHtml(item.displayMessage || item.status)}</span>`;
@@ -1617,7 +1670,8 @@ function renderTaskCapabilities(payload) {
   const cloudOption = route.querySelector('option[value="cloud"]');
   const gpuOption = route.querySelector('option[value="local_gpu"]');
   const cpuOption = route.querySelector('option[value="local_cpu"]');
-  cloudOption.disabled = capabilities.groq?.status !== "available";
+  const cloudCapability = capabilities.cloud_transcription || capabilities.groq;
+  cloudOption.disabled = cloudCapability?.status !== "available";
   gpuOption.disabled = capabilities.local_gpu?.status !== "available";
   cpuOption.disabled = capabilities.local_cpu?.status !== "available";
   if (route.selectedOptions[0]?.disabled) {
@@ -2357,6 +2411,7 @@ function platformLabel(platform) {
 }
 
 function providerLabel(provider) {
+  if (state.uiMode !== "diagnostic") return "AI";
   const value = String(provider || "").toLowerCase();
   if (value.includes("deepseek")) return "DeepSeek";
   if (value.includes("gemini")) return "Gemini";

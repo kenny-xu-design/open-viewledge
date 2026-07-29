@@ -191,6 +191,7 @@ button { color: inherit; }
 svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .hidden { display: none !important; }
+body[data-ui-mode="product"] .technical-provider-field { display: none !important; }
 
 /* Cupertino component primitives. Keep this layer framework-free and token-driven. */
 .ui-button {
@@ -475,6 +476,9 @@ button:disabled { color: var(--faint); cursor: not-allowed; }
 .external-media::after { content: ""; position: absolute; inset: 0; background: rgba(14, 16, 20, .18); }
 .external-open { position: absolute; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%); height: 40px; border: 0; border-radius: 7px; background: var(--ui-material-strong); color: var(--text); padding: 0 14px; display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .external-notice { position: absolute; z-index: 2; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); color: white; font-size: 12px; }
+.external-details { position: absolute; z-index: 2; left: 18px; right: 18px; top: 16px; display: flex; flex-direction: column; gap: 4px; color: white; text-shadow: 0 1px 3px rgba(0, 0, 0, .75); }
+.external-details strong { font-size: 16px; }
+.external-details span { font-size: 12px; opacity: .9; }
 .audio-surface { width: 100%; height: 100%; display: grid; place-items: center; align-content: center; gap: 24px; color: white; background: #252933; }
 .audio-surface svg { width: 54px; height: 54px; opacity: .7; }
 .audio-surface audio { filter: invert(1); }

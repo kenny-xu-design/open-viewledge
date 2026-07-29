@@ -122,11 +122,17 @@ class ProviderConfigTests(unittest.TestCase):
             }
         )
 
-        self.assertIn("9999", json.dumps(applied))
+        self.assertNotIn("9999", json.dumps(applied))
         self.assertNotIn("unit-session-secret-9999", json.dumps(applied))
 
         cleared = web.clear_provider_config("deepseek")
-        self.assertFalse(next(item for item in cleared["providers"] if item["provider"] == "deepseek")["configured"])
+        self.assertFalse(
+            next(
+                item
+                for item in cleared["providers"]
+                if item["service"] == "analysis_text"
+            )["configured"]
+        )
 
     def test_env_overrides_are_available_for_web_subprocess_without_job_record(self) -> None:
         store = WebProviderConfigStore()

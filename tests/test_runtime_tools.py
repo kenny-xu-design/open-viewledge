@@ -14,7 +14,7 @@ class RuntimeToolTests(unittest.TestCase):
         path.write_bytes(b"tool")
         return path
 
-    def test_explicit_path_precedes_environment_and_path(self) -> None:
+    def test_explicit_path_precedes_environment_and_path_without_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             explicit = self._tool(root, "explicit")
@@ -27,6 +27,31 @@ class RuntimeToolTests(unittest.TestCase):
                 project_root=root / "project",
             )
         self.assertEqual(found, str(explicit.resolve()))
+
+    def test_bundled_ffmpeg_precedes_explicit_environment_and_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundled = root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe"
+            bundled.parent.mkdir(parents=True)
+            bundled.write_bytes(b"bundled")
+            explicit = self._tool(root, "explicit")
+            env_tool = self._tool(root, "environment")
+            found = resolve_executable(
+                "ffmpeg",
+                explicit,
+                environ={"FFMPEG_PATH": str(env_tool)},
+                which=lambda _: str(root / "path.exe"),
+                project_root=root,
+            )
+            status = executable_status(
+                "ffmpeg",
+                explicit,
+                environ={"FFMPEG_PATH": str(env_tool)},
+                which=lambda _: str(root / "path.exe"),
+                project_root=root,
+            )
+        self.assertEqual(found, str(bundled.resolve()))
+        self.assertEqual(status.source, "bundled")
 
     def test_invalid_explicit_path_is_not_silently_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

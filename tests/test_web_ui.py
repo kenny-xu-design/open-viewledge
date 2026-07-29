@@ -371,6 +371,9 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("supportsSeek()", self.js)
         self.assertIn("mediaController?.destroy()", self.js)
         self.assertIn("function openOriginal()", self.js)
+        self.assertIn('media.previewStatus === "external_only"', self.js)
+        self.assertIn('$("#mediaControls").classList.toggle("hidden", externalOnly)', self.js)
+        self.assertIn("当前来源不支持工作台内播放，字幕、摘要和知识包功能不受影响。", self.js)
 
     def test_chat_uses_real_endpoint_and_has_no_simulated_answer(self) -> None:
         self.assertIn('api("/api/chat"', self.js)
@@ -405,7 +408,7 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('/api/provider-config"', self.js)
         self.assertIn('/api/provider-config/test"', self.js)
         self.assertIn("toggleSecretField", self.js)
-        self.assertIn("keyTail", self.js)
+        self.assertNotIn("keyTail", self.js)
         self.assertNotIn("localStorage.setItem(SETTINGS.api", self.js)
         self.assertNotIn("sessionStorage", self.js)
 

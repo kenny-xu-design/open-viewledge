@@ -44,6 +44,10 @@ def resolve_executable(
     if normalized not in TOOL_ENV_VARS:
         raise ValueError(f"不支持的运行工具：{name}")
 
+    bundled = _bundled_candidate(normalized, project_root)
+    if bundled.is_file():
+        return str(bundled.resolve())
+
     if explicit_path:
         return _resolve_configured_candidate(
             normalized,
@@ -61,7 +65,7 @@ def resolve_executable(
     if discovered:
         return str(Path(discovered).expanduser().resolve())
 
-    for candidate in _project_candidates(normalized, project_root):
+    for candidate in _legacy_project_candidates(normalized, project_root):
         if candidate.is_file():
             return str(candidate.resolve())
 
@@ -137,13 +141,25 @@ def _configured_candidates(path: Path, name: str) -> list[Path]:
 
 
 def _project_candidates(name: str, project_root: Path) -> list[Path]:
+    return [_bundled_candidate(name, project_root), *_legacy_project_candidates(name, project_root)]
+
+
+def _bundled_candidate(name: str, project_root: Path) -> Path:
+    executable_name = f"{name}.exe" if os.name == "nt" else name
+    windows_name = f"{name}.exe"
+    preferred = project_root / "tools" / "ffmpeg" / "bin" / executable_name
+    if preferred.is_file() or executable_name == windows_name:
+        return preferred
+    return project_root / "tools" / "ffmpeg" / "bin" / windows_name
+
+
+def _legacy_project_candidates(name: str, project_root: Path) -> list[Path]:
     result: list[Path] = []
     for executable_name in _executable_names(name):
         result.extend(
             [
                 project_root / "tools" / executable_name,
                 project_root / "bin" / executable_name,
-                project_root / "tools" / "ffmpeg" / "bin" / executable_name,
                 project_root / "vendor" / "ffmpeg" / "bin" / executable_name,
                 project_root / "ffmpeg" / "bin" / executable_name,
                 project_root / ".tools" / "ffmpeg" / "bin" / executable_name,
@@ -164,6 +180,8 @@ def _resolution_source(
     which: Callable[[str], str | None],
     project_root: Path,
 ) -> str:
+    if _bundled_candidate(name, project_root).is_file():
+        return "bundled"
     if explicit_path:
         return f"config:{TOOL_CONFIG_FIELDS[name]}"
     env = os.environ if environ is None else environ
@@ -171,7 +189,7 @@ def _resolution_source(
         return f"env:{TOOL_ENV_VARS[name]}"
     if which(name):
         return "PATH"
-    if any(candidate.is_file() for candidate in _project_candidates(name, project_root)):
+    if any(candidate.is_file() for candidate in _legacy_project_candidates(name, project_root)):
         return "project"
     return ""
 

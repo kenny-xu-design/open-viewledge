@@ -39,6 +39,10 @@ input/
 
 node_modules/
 
+# Portable release build inputs are staged locally and embedded in the ZIP.
+# Do not commit large third-party binaries to the source repository.
+tools/ffmpeg/bin/*.exe
+
 .vscode/
 .idea/
 .DS_Store
