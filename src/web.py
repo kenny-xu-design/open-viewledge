@@ -1140,16 +1140,28 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
     return payload if _diagnostic_ui_mode() else _strip_product_details(payload)
 
 
-def _strip_product_details(value: Any) -> Any:
+def _strip_product_details(value: Any, path: tuple[str, ...] = ()) -> Any:
     if isinstance(value, dict):
         return {
-            key: _strip_product_details(item)
+            key: _strip_product_details(item, (*path, key))
             for key, item in value.items()
-            if key.lower() not in PRODUCT_SENSITIVE_KEYS
+            if not _is_product_sensitive_key(key, path)
         }
     if isinstance(value, list):
-        return [_strip_product_details(item) for item in value]
+        return [_strip_product_details(item, path) for item in value]
     return value
+
+
+def _is_product_sensitive_key(key: str, path: tuple[str, ...]) -> bool:
+    normalized_path = tuple(item.lower() for item in path)
+    normalized_key = key.lower()
+    if normalized_path[-2:] == ("media", "embed") and normalized_key in {
+        "provider",
+        "videoid",
+        "url",
+    }:
+        return False
+    return normalized_key in PRODUCT_SENSITIVE_KEYS
 
 
 def _normalize_analysis_view(payload: dict[str, Any]) -> dict[str, Any]:

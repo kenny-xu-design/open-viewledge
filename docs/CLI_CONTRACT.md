@@ -1,5 +1,8 @@
 # CLI Contract
 
+> Compatibility detail for the implemented CLI. Cross-surface and future public
+> integration rules are canonical in `API_CONTRACTS.md`.
+
 Contract version: `1.0`
 
 The only public command entry point is:
@@ -47,6 +50,9 @@ Stable options:
 --backend
 --mode
 --processing-profile
+--asr-route
+--no-asr-fallback
+--comments
 --export
 --no-summary
 --no-frames
@@ -58,7 +64,10 @@ Stable options:
 
 `--processing-profile` accepts `fast` or `complete`. Missing values default to `complete`, so v1.3 commands keep their existing execution behavior. The field is independent from `--mode`: mode selects the analysis shape, while processing profile selects how the pipeline executes. `fast` requests audio-only media when subtitles are unavailable and skips keyframe extraction; `complete` retains the existing full plan. `--no-frames` continues to disable frame generation independently.
 
-The deprecated root-level form remains accepted and mirrors `--processing-profile` during its compatibility window. `--comments` remains accepted only as a deprecated no-op and is never silent.
+The deprecated root-level form remains accepted and mirrors
+`--processing-profile` during its compatibility window. `--comments` is an
+active, explicit opt-in that writes separate comment artifacts; comment
+failures do not invalidate the main analysis package.
 
 Successful data includes `task_id`, `knowledge_id`, `output_dir`, task status, `analysis_profile`, `processing_profile`, analysis status, Provider/model, and artifact paths.
 

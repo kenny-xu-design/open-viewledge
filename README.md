@@ -1,8 +1,10 @@
-# Video Summary Skill
+# Viewledge
 
-AI 驱动的视频内容解析与知识沉淀工具，支持 YouTube、B站和本地媒体，可生成结构化摘要、教程步骤、传播分析、深度精读、评论洞察及 Obsidian Markdown 知识包。
+Viewledge 是一款正在私有开发中的本地优先 AI 视频解析与知识沉淀产品，支持 YouTube、B站和本地媒体，可生成结构化摘要、教程步骤、传播分析、深度精读、评论洞察及 Obsidian-ready Markdown knowledge packages。
 
-**当前测试版本：v1.4.5**
+**当前测试版本：v1.4.5 内部便携 Beta**
+
+当前核心源码暂未公开。本仓库是私有开发仓库；v1.4.5 源码便携包仅用于内部和可信测试，不应上传到公开 GitHub Release。未来公开仓库只承担产品展示、下载、反馈和版本说明；公开产品包将在后续版本中去除可直接复用的核心源码。
 
 ## 功能概览
 
@@ -16,7 +18,7 @@ AI 驱动的视频内容解析与知识沉淀工具，支持 YouTube、B站和�
 
 ## 快速开始
 
-### Windows ZIP 用户
+### Windows 内部测试包用户
 
 准备条件：
 
@@ -26,13 +28,13 @@ AI 驱动的视频内容解析与知识沉淀工具，支持 YouTube、B站和�
 
 启动步骤：
 
-1. 下载并完整解压 ZIP。
+1. 获取内部测试 ZIP 并完整解压。
 2. 双击项目根目录中的 `start_web.bat`。
 3. 首次启动会自动创建项目专用的 `.venv` 运行环境并安装依赖。
 4. 浏览器打开后，进入“API 配置”填写自己的模型信息。
 5. 点击“新总结”，输入公开视频链接或选择本地媒体并开始处理。
 
-ZIP 用户不需要安装 Git 或 GitHub Desktop，不需要把项目放在固定目录。请将 ZIP 解压到任意普通、可写目录，不要直接在压缩包内部运行 `start_web.bat`。
+内部测试包用户不需要安装 Git 或 GitHub Desktop，不需要把项目放在固定目录。请将 ZIP 解压到任意普通、可写目录，不要直接在压缩包内部运行 `start_web.bat`。
 
 Web 默认地址：
 
@@ -264,7 +266,7 @@ VIEWLEDGE_HTTP_PROXY=
 CLI/Web 共用同一批知识包，可在启动前设置共享输出目录：
 
 ```powershell
-$env:VIEWLEDGE_OUTPUT_ROOT = "E:\ViewledgeData\knowledge"
+$env:VIEWLEDGE_OUTPUT_ROOT = "$env:LOCALAPPDATA\Viewledge\knowledge"
 .\start_web.ps1
 ```
 
@@ -608,9 +610,15 @@ git diff --check
 ## 版本与文档
 
 - [变更记录](CHANGELOG.md)
-- [当前状态](docs/CURRENT_STATE.md)
+- [当前项目状态](docs/PROJECT_STATE.md)
+- [总路线图](docs/MASTER_ROADMAP.md)
+- [仓库边界](docs/REPO_BOUNDARY.md)
+- [API 契约](docs/API_CONTRACTS.md)
+- [测试基线](docs/TEST_BASELINE.md)
+- [下一任务](docs/NEXT_TASK.md)
+- [旧状态入口](docs/CURRENT_STATE.md)
 - [架构](docs/ARCHITECTURE.md)
-- [路线图](docs/ROADMAP.md)
+- [旧路线图入口](docs/ROADMAP.md)
 - [长期决策](docs/DECISIONS.md)
 - [历史文档归档](docs/archive/)
 
@@ -622,22 +630,15 @@ git diff --check
 - Obsidian 仅为兼容 Markdown 导出，不是 Vault 数据层。
 - 通用网页正文采集尚未实现；当前 URL 输入面向 `yt-dlp` 支持的视频平台。
 
-## 许可证与商业授权
+## 授权状态
 
-Viewledge Community Edition 采用
-[GNU Affero General Public License v3.0 only](LICENSE)，SPDX 标识为
-`AGPL-3.0-only`。
+Viewledge 当前处于私有开发和内部测试阶段，核心源码暂未公开。正式公开产品包、公开展示仓库和外部分发授权仍需单独完成许可证与发布策略审查。
 
-你可以在遵守 AGPL-3.0-only 全部要求的前提下使用、修改和分发社区版本。
-AGPL 并不禁止商业使用；通过网络向用户提供修改后的受许可程序时，也需要
-遵守其对应源代码提供义务。
+仓库中现有的 [LICENSE](LICENSE) 和 [商业授权说明](COMMERCIAL-LICENSE.md) 属于历史授权材料和待审查文件。本轮不删除、不替换，也不将其作为未来公开产品包的最终授权承诺。正式外部分发前，需要明确 Viewledge 自身代码、品牌、发行包和第三方组件的授权边界。
 
-无法采用 AGPL 条款的个人或组织，可查看
-[商业授权说明](COMMERCIAL-LICENSE.md)，并通过 GitHub 账号
-`kenny-xu-design` 联系版权所有者，另行协商书面商业许可。
+v1.4.5 源码便携包仅用于内部和可信测试，不应公开传播或上传到公开 Release。未来公开产品包计划去除可直接复用的核心源码，但这不构成“无法逆向”或“绝对保护源码”的承诺。
 
 第三方库、模型、工具、API、平台服务和媒体内容仍分别受其自身许可证与
 服务条款约束。
 
-版权所有 © 2026 kenny-xu-design。代码许可证不自动授予 Viewledge 名称、
-中文名称、Logo 或其他品牌标识的使用权。
+版权所有 © 2026 kenny-xu-design。未经明确书面许可，Viewledge 名称、中文名称、Logo 或其他品牌标识不得用于混淆来源的再包装或分发。

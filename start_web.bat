@@ -1,14 +1,14 @@
 @echo off
-chcp 65001 >nul
 setlocal EnableExtensions
 
-title Video Summary Skill Web UI
+title Viewledge Web UI
 cd /d "%~dp0"
 
 if not defined VIEWLEDGE_UI_MODE set "VIEWLEDGE_UI_MODE=product"
 if not defined SHOW_TECH_DETAILS set "SHOW_TECH_DETAILS=0"
 if not defined SHOW_RAW_PROCESS_LOGS set "SHOW_RAW_PROCESS_LOGS=0"
 if not defined VIEWLEDGE_OUTPUT_ROOT set "VIEWLEDGE_OUTPUT_ROOT=%LOCALAPPDATA%\Viewledge\knowledge"
+set "VIEWLEDGE_VERSION_CHECK=%TEMP%\viewledge-python-version-%RANDOM%.txt"
 
 echo.
 echo ==========================================
@@ -21,7 +21,7 @@ if not exist "requirements.txt" goto project_missing
 
 if exist ".venv\Scripts\python.exe" goto validate_existing_venv
 
-echo [1/4] 正在检测 Python...
+echo [1/4] Checking Python...
 
 where py >nul 2>&1
 if not errorlevel 1 goto try_py312
@@ -41,15 +41,17 @@ if not errorlevel 1 goto use_python
 goto python_missing
 
 :use_py312
-echo [2/4] 正在创建 Python 3.12 虚拟环境...
+echo [2/4] Creating Python 3.12 virtual environment...
 py -3.12 -m venv ".venv"
 goto check_venv
 
 :use_python
-python -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,12) else 1)" >nul 2>&1
-if errorlevel 1 goto python_version_error
+python --version >"%VIEWLEDGE_VERSION_CHECK%" 2>&1
+set /p VIEWLEDGE_PYTHON_VERSION=<"%VIEWLEDGE_VERSION_CHECK%"
+del /q "%VIEWLEDGE_VERSION_CHECK%" >nul 2>&1
+if not "%VIEWLEDGE_PYTHON_VERSION:~0,11%"=="Python 3.12" goto python_version_error
 
-echo [2/4] 正在创建 Python 虚拟环境...
+echo [2/4] Creating Python virtual environment...
 python -m venv ".venv"
 goto check_venv
 
@@ -58,20 +60,28 @@ if errorlevel 1 goto venv_failed
 if not exist ".venv\Scripts\python.exe" goto venv_failed
 
 :validate_existing_venv
-".venv\Scripts\python.exe" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,12) else 1)" >nul 2>&1
-if errorlevel 1 goto venv_version_error
+".venv\Scripts\python.exe" --version >"%VIEWLEDGE_VERSION_CHECK%" 2>&1
+set /p VIEWLEDGE_PYTHON_VERSION=<"%VIEWLEDGE_VERSION_CHECK%"
+del /q "%VIEWLEDGE_VERSION_CHECK%" >nul 2>&1
+if not "%VIEWLEDGE_PYTHON_VERSION:~0,11%"=="Python 3.12" goto venv_version_error
 
 :install_dependencies
-echo [3/4] 正在检查项目依赖...
-echo 首次运行可能需要几分钟，请保持网络连接。
+echo [3/4] Checking project dependencies...
+echo First run may take a few minutes. Keep the network available.
 echo.
 
-if exist "requirements.lock.txt" (
-    ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r "requirements.lock.txt"
-) else (
-    ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r "requirements.txt"
-)
+if exist "requirements.lock.txt" goto install_locked
+goto install_regular
 
+:install_locked
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r "requirements.lock.txt"
+goto dependencies_checked
+
+:install_regular
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r "requirements.txt"
+goto dependencies_checked
+
+:dependencies_checked
 if errorlevel 1 goto dependencies_failed
 
 echo.
@@ -79,16 +89,14 @@ if exist "tools\ffmpeg\bin\ffmpeg.exe" goto check_data_dir
 where ffmpeg >nul 2>&1
 if not errorlevel 1 goto check_data_dir
 
-echo [提示] 未检测到 FFmpeg。
-echo 已有平台字幕的视频仍可处理，其他媒体功能可能不可用。
+echo [NOTICE] FFmpeg was not detected.
+echo Videos with platform subtitles may still work. Media extraction may be unavailable.
 echo.
 
 :check_data_dir
 if not exist "%VIEWLEDGE_OUTPUT_ROOT%" mkdir "%VIEWLEDGE_OUTPUT_ROOT%" >nul 2>&1
 if errorlevel 1 goto data_dir_failed
-(
-    >"%VIEWLEDGE_OUTPUT_ROOT%\.viewledge-write-test.tmp" echo ok
-) 2>nul
+>"%VIEWLEDGE_OUTPUT_ROOT%\.viewledge-write-test.tmp" echo ok
 if errorlevel 1 goto data_dir_failed
 del /q "%VIEWLEDGE_OUTPUT_ROOT%\.viewledge-write-test.tmp" >nul 2>&1
 
@@ -96,10 +104,10 @@ del /q "%VIEWLEDGE_OUTPUT_ROOT%\.viewledge-write-test.tmp" >nul 2>&1
 netstat -ano | findstr /R /C:":5188 .*LISTENING" >nul 2>&1
 if not errorlevel 1 goto port_in_use
 
-echo [4/4] 正在启动 Web UI...
+echo [4/4] Starting Web UI...
 echo.
-echo 浏览器地址：http://127.0.0.1:5188
-echo 请勿关闭此窗口，结束程序请按 Ctrl+C。
+echo Browser: http://127.0.0.1:5188
+echo Keep this window open. Press Ctrl+C to stop Viewledge.
 echo.
 
 set "PYTHONUTF8=1"
@@ -115,8 +123,8 @@ endlocal
 exit /b 0
 
 :project_missing
-echo [错误] 项目文件不完整。
-echo 请确认已完整解压 ZIP，并且当前目录包含：
+echo [ERROR] Project files are incomplete.
+echo Make sure the ZIP is fully extracted and contains:
 echo.
 echo   src\web.py
 echo   requirements.txt
@@ -125,64 +133,58 @@ pause
 exit /b 1
 
 :python_missing
-echo [错误] 未检测到 Python。
-echo.
-echo 请安装 Python 3.12，并勾选：
-echo Add Python to PATH
+echo [ERROR] Python was not detected.
+echo Install Python 3.12 and enable Add Python to PATH.
 echo.
 pause
 exit /b 1
 
 :python_version_error
-echo [错误] Python 版本过低。
-echo 请安装 Python 3.12。
+echo [ERROR] Python 3.12 is required.
+echo Install Python 3.12 and enable Add Python to PATH.
 echo.
 pause
 exit /b 1
 
 :venv_failed
-echo [错误] Python 虚拟环境创建失败。
-echo.
-echo 请删除项目目录中的 .venv 文件夹后重试。
-echo 若仍然失败，请在终端运行：
-echo python -m venv .venv
+echo [ERROR] Failed to create the Python virtual environment.
+echo Delete the .venv folder in this project and try again.
 echo.
 pause
 exit /b 1
 
 :dependencies_failed
-echo [错误] 项目依赖安装失败。
-echo 请检查网络、代理和 requirements.txt。
+echo [ERROR] Failed to install project dependencies.
+echo Check network, proxy settings, and requirements files.
 echo.
 pause
 exit /b 1
 
 :venv_version_error
-echo [错误] 现有 .venv 不是 Python 3.12 环境。
-echo 请删除项目目录中的 .venv 文件夹，然后重新双击 start_web.bat。
+echo [ERROR] Existing .venv is not Python 3.12.
+echo Delete the .venv folder in this project, then run start_web.bat again.
 echo.
 pause
 exit /b 1
 
 :data_dir_failed
-echo [错误] Viewledge 数据目录不可写。
-echo 请确认当前 Windows 用户有权创建和写入个人数据目录，
-echo 或设置 VIEWLEDGE_OUTPUT_ROOT 为可写目录后重试。
+echo [ERROR] Viewledge data directory is not writable.
+echo Set VIEWLEDGE_OUTPUT_ROOT to a writable folder and try again.
 echo.
 pause
 exit /b 1
 
 :port_in_use
-echo [错误] 端口 5188 已被占用。
-echo 请关闭旧的 Viewledge 窗口或占用该端口的程序后重试。
+echo [ERROR] Port 5188 is already in use.
+echo Close the old Viewledge window or the program using this port, then try again.
 echo.
 pause
 exit /b 1
 
 :web_failed
 echo.
-echo [错误] Web UI 启动失败。
-echo 请保留上方错误信息用于反馈。
+echo [ERROR] Web UI failed to start.
+echo Keep the error output above for troubleshooting.
 echo.
 pause
 exit /b 1

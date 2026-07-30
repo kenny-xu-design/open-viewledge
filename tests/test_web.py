@@ -23,6 +23,7 @@ from src.web import (
     VideoSummaryServer,
     _is_project_venv_python,
     _runtime_python_warning,
+    _strip_product_details,
     build_cli_command,
     delete_knowledge_packages,
     list_library_items,
@@ -92,6 +93,26 @@ class WebCommandTests(unittest.TestCase):
         serialized = json.dumps(diagnostic)
         self.assertNotIn("private-cookie", serialized)
         self.assertNotIn("secret-token", serialized)
+
+    def test_product_payload_keeps_media_embed_fields_for_preview(self) -> None:
+        payload = {
+            "analysis": {"provider": "deepseek", "model": "private-model"},
+            "media": {
+                "embed": {
+                    "provider": "youtube",
+                    "videoId": "BqF6PUAXY1M",
+                    "url": "https://player.example/embed",
+                }
+            },
+        }
+
+        product = _strip_product_details(payload)
+
+        self.assertNotIn("provider", product["analysis"])
+        self.assertNotIn("model", product["analysis"])
+        self.assertEqual(product["media"]["embed"]["provider"], "youtube")
+        self.assertEqual(product["media"]["embed"]["videoId"], "BqF6PUAXY1M")
+        self.assertEqual(product["media"]["embed"]["url"], "https://player.example/embed")
 
     def test_web_reads_public_cli_jsonl_completion(self) -> None:
         job = Job(id="job", command=[])

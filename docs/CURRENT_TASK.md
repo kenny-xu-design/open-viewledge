@@ -6,7 +6,7 @@ Last updated: 2026-07-27
 
 v1.4.3 评论同步、Web API 配置、四种分析模式输出结构，以及自适应长视频分层分析收尾。
 
-Repository: `E:\AGT\git\video-summary-skill`
+Repository: private `video-summary-skill` core
 
 Branch: `feat/v1.4-processing-pipeline`
 

@@ -78,11 +78,11 @@ v1.2 may use a lightweight local persistence mechanism for jobs.
 
 It must not introduce a cloud queue, hosted worker system, or SaaS infrastructure. Interrupted jobs must not remain displayed as running after restart.
 
-## D010: Comment Analysis Is Disabled
+## D010: Comment Analysis Is Disabled (superseded by D021)
 
-Comment retrieval and comment analysis are not current product features.
+This was the v1.2 decision. It is retained as history and is no longer current.
 
-Compatibility flags may produce a deprecation message, but docs and UI must not advertise comment analysis.
+See D021 for the implemented opt-in, separately stored comment contract.
 
 ## D011: Platform Preview Must Use Official Boundaries
 
@@ -91,14 +91,14 @@ Compatibility flags may produce a deprecation message, but docs and UI must not 
 - The product must not claim reliable Bilibili programmatic time synchronization.
 - Unsupported or blocked embeds fall back to an external source link.
 
-## D012: Obsidian Means Compatible Markdown In v1.2
+## D012: Obsidian Means Compatible Markdown In v1.2 (partially superseded)
 
 `--export obsidian` means generating Markdown suitable for use in Obsidian.
 
-It does not mean:
+The product may also write a generated Markdown file to a locally configured,
+server-owned Vault path. It still does not mean:
 
 - Vault discovery;
-- direct Vault writes;
 - synchronization;
 - bidirectional note management.
 
@@ -125,9 +125,11 @@ v1.2 completes the local product. Scale and SaaS work must remain separate and m
 
 From v1.3, Web, Agent Skills, and automation invoke only the public `python -m src.main <command>` contract. JSON results, JSONL events, exit codes, and Schema versions are centralized. Internal Python call construction is not a public integration contract.
 
-## D016: v1.5 Is Account-Free And Local
+## D016: v1.5 Is Account-Free And Local (superseded by D025)
 
-v1.5 does not implement registration, login, or email verification. It creates a default local workspace and uses one Provider Catalog and credential-reading service across Web, CLI, and Worker.
+This was an earlier local-product scope. The current roadmap keeps v1.5.0 and
+v1.5.1 usable through a local Bridge, then introduces private cloud accounts,
+quota, and the Usage Ledger in v1.5.2. See D025.
 
 Text, visual, and ASR Provider configuration is independent. Optional missing Providers do not block unrelated capabilities. Secrets prefer Windows Credential Manager or the system Keyring and are never returned to the frontend in full.
 
@@ -164,3 +166,62 @@ local-only; quality mode does not implicitly download large-v3.
 Balanced and quality outputs retain per-segment quality metrics. Suspect ranges
 receive a bounded same-model retry with stronger decoding, after which the best
 result is kept and unresolved segments are marked low-confidence.
+
+## D021: Comments Are Explicit, Optional, And Separate
+
+Public comment collection is implemented only when the user explicitly enables
+it. Comment fetch and comment analysis are non-blocking stages.
+
+Comment artifacts and opinions remain separate from the main factual
+`analysis.json`. A comment failure must not invalidate an otherwise successful
+knowledge package.
+
+## D022: The Current Core And History Remain Private
+
+`video-summary-skill` remains the private core repository. It must not be made
+public and its Git history must not seed a public repository.
+
+Future public `viewledge-clipper` and `viewledge` repositories use new histories
+and receive only explicitly allowlisted files. Private `viewledge-cloud` owns
+accounts, plans, quotas, the Usage Ledger, cloud jobs, billing, secret storage,
+and abuse prevention.
+
+## D023: Public Contracts Do Not Depend On Private Implementations
+
+Public Schemas describe Intake, inbox, clips, knowledge state, quota/usage
+authorization, and stable errors. They must not expose or require private module
+names, Provider/model routes, prompts, Worker details, filesystem paths, queue
+tables, or billing implementation.
+
+Private core and cloud services may implement public contracts. Public clients
+must be buildable and testable from public Schemas alone.
+
+## D024: Knowledge Identity Precedes Browser Intake
+
+Stable `knowledge_id`, duplicate-task recognition, package locking, and
+interrupted-task recovery belong in v1.4.6 and must land before browser Intake.
+
+Identity and duplicate detection are implemented test-first. Public clients can
+request reuse, refresh, revision, or reject behavior but do not reproduce the
+private identity algorithm.
+
+## D025: Cloud Authorization And Usage Are Server-Owned
+
+v1.5.0 and v1.5.1 may use a local Bridge without an account. v1.5.2 introduces
+accounts, entitlements, quotas, and an append-only Usage Ledger in the private
+cloud repository.
+
+Desktop and browser clients never contain shared production cloud keys. They use
+authenticated sessions and short-lived, scoped action authorization. Usage
+mutations are idempotent, retries cannot double-charge, and user-visible balance
+is derived from ledger entries rather than accepted from clients.
+
+## D026: Internal Source Betas Are Not Public Releases
+
+The v1.4.5 Windows ZIP contains runnable private source and is restricted to
+internal or trusted-user testing. Passing release verification does not make it
+eligible for a public release.
+
+Future public product artifacts are generated by private build/signing
+infrastructure from a user-approved stable commit, scanned through an explicit
+allowlist boundary, and introduced only into a fresh-history public repository.

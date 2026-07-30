@@ -75,6 +75,7 @@ class AnalysisService:
                 max_duration=max_duration,
                 processing_profile=processing_profile,
                 source=source_payload,
+                coerce_timestamps=True,
             )
         except AnalysisParseError as first_error:
             repair_messages = messages + [
@@ -95,6 +96,7 @@ class AnalysisService:
                     max_duration=max_duration,
                     processing_profile=processing_profile,
                     source=source_payload,
+                    coerce_timestamps=True,
                 )
             except AnalysisParseError as exc:
                 failed = exc.partial_result.model_copy(

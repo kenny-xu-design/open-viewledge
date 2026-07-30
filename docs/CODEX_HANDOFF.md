@@ -4,7 +4,7 @@ Last updated: 2026-07-26
 
 ## Repository State
 
-- Repository: `E:\AGT\git\video-summary-skill`
+- Repository: private `video-summary-skill` core
 - Branch: `feat/v1.4-processing-pipeline`
 - Baseline commit: `52c1bb7` (`feat: add v1.4.1 cache-aware fast processing`)
 - Upstream v1.3.1 branch marker: `origin/feat/v1.3.1-cupertino-ui`

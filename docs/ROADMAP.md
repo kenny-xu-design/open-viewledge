@@ -1,5 +1,9 @@
 # Roadmap
 
+> Compatibility entry point. The canonical forward plan is
+> [`MASTER_ROADMAP.md`](MASTER_ROADMAP.md). The material below is the older
+> v1.2-v1.5 planning model and is retained only as historical context.
+
 - [x] v1.2.1 structured tutorial profile and backward-compatible analysis fields.
 - [x] Unified Markdown/Obsidian export with summary, chat, and user-note selection.
 - [x] Safe local Vault writes and Obsidian URI generation.

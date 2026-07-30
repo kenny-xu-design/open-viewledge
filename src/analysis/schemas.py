@@ -20,6 +20,7 @@ def parse_analysis_response(
     processing_profile: str = "complete",
     source: dict | None = None,
     visual_context_used: bool = False,
+    coerce_timestamps: bool = False,
 ) -> AnalysisResult:
     cleaned = _strip_code_fence(raw_response)
     safe_raw_response = sanitize_message(raw_response)
@@ -50,6 +51,8 @@ def parse_analysis_response(
             }
         )
         result = AnalysisResult.model_validate(payload)
+        if coerce_timestamps:
+            result = _coerce_timestamps(result, max_duration)
         _validate_meaningful_content(result)
         _validate_timestamps(result, max_duration)
         return normalize_analysis_entities(result)
@@ -200,6 +203,36 @@ def _validate_timestamps(result: AnalysisResult, max_duration: float | None) -> 
             continue
         if value < 0 or (limit > 0 and value > limit):
             raise ValueError(f"{field} 超出字幕时间范围")
+
+
+def _coerce_timestamps(result: AnalysisResult, max_duration: float | None) -> AnalysisResult:
+    limit = float(max_duration or 0)
+
+    def clamp(value: float | None) -> float | None:
+        if value is None:
+            return None
+        value = max(0.0, float(value))
+        if limit > 0:
+            value = min(value, limit)
+        return value
+
+    for item in result.highlights:
+        item.start = clamp(item.start)
+        item.end = clamp(item.end)
+        item.timestamp = clamp(item.timestamp)
+        if item.start is not None and item.end is not None and item.end < item.start:
+            item.end = item.start
+    for item in result.thoughts:
+        item.start = clamp(item.start)
+    for item in result.chapters:
+        item.start = clamp(item.start) or 0.0
+        item.end = clamp(item.end) or item.start
+        if item.end < item.start:
+            item.end = item.start
+    for collection_name in ("action_items", "prerequisites", "steps", "warnings"):
+        for item in getattr(result, collection_name):
+            item.timestamp = clamp(item.timestamp)
+    return result
 
 
 def _validate_meaningful_content(result: AnalysisResult) -> None:

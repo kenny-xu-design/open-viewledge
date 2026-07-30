@@ -75,6 +75,21 @@ class AnalysisSchemaTests(unittest.TestCase):
                 max_duration=30,
             )
 
+    def test_timestamp_outside_transcript_can_be_coerced_for_analysis_service(self) -> None:
+        result = parse_analysis_response(
+            '{"summary":"ok","chapters":[{"title":"late","start":20,"end":99,"summary":"章节"}],"highlights":[{"title":"late","start":31,"end":32}]}',
+            "summary",
+            "deepseek",
+            "model",
+            max_duration=30,
+            coerce_timestamps=True,
+        )
+
+        self.assertEqual(result.chapters[0].start, 20)
+        self.assertEqual(result.chapters[0].end, 30)
+        self.assertEqual(result.highlights[0].start, 30)
+        self.assertEqual(result.highlights[0].end, 30)
+
     def test_empty_analysis_is_not_marked_successful(self) -> None:
         with self.assertRaisesRegex(AnalysisParseError, "没有包含任何有效内容"):
             parse_analysis_response("{}", "summary", "deepseek", "model")
@@ -194,3 +209,21 @@ class AnalysisServiceTests(unittest.TestCase):
 
         self.assertEqual(result.summary, "repaired")
         self.assertEqual(provider.calls, 2)
+
+    def test_analysis_service_coerces_out_of_range_timestamps(self) -> None:
+        class Provider:
+            name = "deepseek"
+            model_name = "deepseek-chat"
+
+            def complete(self, messages, **kwargs):
+                return LLMResponse(
+                    '{"summary":"ok","chapters":[{"title":"越界章节","start":10,"end":999,"summary":"内容"}]}',
+                    self.name,
+                    self.model_name,
+                )
+
+        group = TranscriptGroup(index=0, start=0, end=30, title="开场", text="字幕", segment_indexes=[0])
+        result = AnalysisService(Provider()).analyze([group], "summary", SimpleNamespace())
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.chapters[0].end, 30)

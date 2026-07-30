@@ -1,5 +1,9 @@
 # Task Lifecycle
 
+> Historical v1.3 lifecycle detail. Current state and the planned v1.4.6
+> identity/recovery lifecycle are canonical in `PROJECT_STATE.md` and
+> `MASTER_ROADMAP.md`.
+
 ## v1.3 synchronous CLI task
 
 ```text
@@ -24,4 +28,5 @@ run_analysis
 export_knowledge_package
 ```
 
-v1.4 may introduce queued/leased execution, but it must preserve the v1.3 public CLI and event contract.
+Later identity, lock, recovery, and queue work must preserve the v1.3 public CLI
+and event contract.

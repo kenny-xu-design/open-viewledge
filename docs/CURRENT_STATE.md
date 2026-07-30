@@ -1,16 +1,22 @@
 # Current State
 
-Last verified: 2026-07-28
+> Compatibility entry point. The canonical current state is
+> [`PROJECT_STATE.md`](PROJECT_STATE.md). The detailed material below is a
+> historical implementation record through earlier v1.4 work and must not be
+> used to infer the active branch, version, test count, or next task.
 
-This document describes the implementation that currently exists. Planned work belongs in `ROADMAP.md`.
+Last historical verification: 2026-07-28
+
+Current verified summary: v1.4.5 on
+`feat/v1.4.5-portable-release`, with 345 unit tests passing on 2026-07-30.
+Planned work belongs in `MASTER_ROADMAP.md`.
 
 ## Repository
 
-- Formal repository: `E:\AGT\git\video-summary-skill`
-- Current branch: `main`
-- Current stable source version: `v1.4.3`
-- Release commit and tag: not created in this workspace
-- Current implementation unit: `v1.4.3 stable source package`
+- Repository role: private Viewledge core
+- Historical branch described below: `main`
+- Historical source version described below: `v1.4.3`
+- Current state: see `PROJECT_STATE.md`
 
 ## v1.4.0 processing contract
 
@@ -213,9 +219,8 @@ Not implemented:
   CLI/Web help, JavaScript syntax, dependency consistency, and diff checks.
 - Web smoke acceptance on an isolated port confirms the root, runtime, library,
   and jobs endpoints return HTTP 200 while using the project `.venv`.
-- `doctor --json` completes without hanging and reports the shared
-  `E:\ViewledgeData\knowledge` output directory writable outside the test
-  sandbox.
+- `doctor --json` completes without hanging and reports the configured shared
+  output directory writable outside the test sandbox.
 
 Runtime discovery:
 
