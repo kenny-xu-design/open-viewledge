@@ -5,7 +5,7 @@ import re
 from ..domain.models import TranscriptGroup, TranscriptSegment
 
 
-def group_segments(segments: list[TranscriptSegment], chapters: list[dict] | None = None, target_seconds: int = 60, max_segments: int = 12) -> list[TranscriptGroup]:
+def group_segments(segments: list[TranscriptSegment], chapters: list[dict] | None = None, target_seconds: int = 30, max_segments: int = 12) -> list[TranscriptGroup]:
     if not segments:
         return []
     chapter_starts = sorted(float(item.get("start_time", item.get("start", 0))) for item in (chapters or []) if isinstance(item, dict))
@@ -36,4 +36,3 @@ def _make_group(index: int, items: list[TranscriptSegment]) -> TranscriptGroup:
     start, end = items[0].start, items[-1].end
     return TranscriptGroup(index=index, start=start, end=end, title=title, text=text,
         segment_indexes=[item.index for item in items], representative_time=(start + end) / 2)
-

@@ -156,6 +156,8 @@ def classify_error(message: str) -> ExitCode:
         return ExitCode.INPUT_INACCESSIBLE
     if any(value in normalized for value in ("schema", "知识包完整性", "知识包损坏")):
         return ExitCode.KNOWLEDGE_PACKAGE_DAMAGED
+    if any(value in normalized for value in ("locked", "claim")):
+        return ExitCode.RETRYABLE_FAILURE
     if any(value in normalized for value in ("429", "timeout", "timed out", "暂时", "临时失败")):
         return ExitCode.RETRYABLE_FAILURE
     return ExitCode.EXECUTION_FAILED

@@ -1,6 +1,6 @@
 # Viewledge Master Roadmap
 
-Last updated: 2026-07-30
+Last updated: 2026-08-02
 
 This is the canonical forward roadmap. Version scopes are ordered dependencies,
 not promises of public release dates.
@@ -52,12 +52,19 @@ Exit criteria:
 
 ## v1.4.6 — Knowledge identity, duplicate tasks, and recovery
 
-Status: next implementation version; not started.
+Status: implementation complete and audit-verified in the uncommitted working
+tree. Identity/request-fingerprint, duplicate decisions, runtime persistence,
+Web task-entry integration, API-config session-test reuse, package-level
+claim/stale-claim recovery, task-level transcript grouping, and initial
+stage-aware package repair are implemented and tested. The final audit verified
+CLI recovery against an incomplete package, Web active-duplicate decision
+handling, and the 15/30/60/120-second grouping selector. User review and a
+stable commit remain pending.
 
 Scope:
 
-- deterministic `knowledge_id` based on normalized source identity and relevant
-  processing dimensions;
+- deterministic `knowledge_id` based on normalized source identity;
+- separate request fingerprint for relevant processing dimensions;
 - duplicate-task detection before expensive work begins;
 - explicit reuse, refresh, revision, or reject decisions;
 - package-level locking and stale-lock recovery;

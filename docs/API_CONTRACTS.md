@@ -1,6 +1,6 @@
 # Viewledge API Contracts
 
-Last updated: 2026-07-30
+Last updated: 2026-08-02
 
 This document separates implemented local contracts from future public Bridge
 contracts. A documented future contract is not an implemented endpoint.
@@ -97,11 +97,42 @@ Every event contains `schema_version`, `event`, `task_id`, and `timestamp`.
 
 Current `analyze` input includes exactly one URL or local file plus optional
 language, analysis profile, processing profile, ASR route/fallback, comment,
-frame, sample, export, and machine-output options.
+frame, sample, transcript grouping, export, and machine-output options.
 
-The current `knowledge_id` is a package identifier, but v1.4.6 must formalize
-its deterministic identity and duplicate semantics before it becomes part of a
-public Intake contract.
+The v1.4.6 identity contract defines an opaque, versioned `knowledge_id` from
+normalized source identity and a separate request fingerprint for exact task
+matching. Duplicate decisions distinguish active, completed, recoverable, and
+same-source revision cases.
+
+Current local integration:
+
+- `analyze` JSON results include stable `knowledge_id`,
+  `identity_schema_version`, and `request_fingerprint`;
+- JSONL `task_created` and `task_completed` carry the identity fields;
+- CLI task records persist stable `knowledge_id` and `request_fingerprint`;
+- Web job records persist identity and duplicate-decision metadata;
+- transcript grouping is a task dimension: the default target is 30 seconds,
+  Web exposes 15/30/60/120 second choices, and values below 15 seconds are
+  rejected before a task starts;
+- local Web job creation rejects active exact duplicates before starting the
+  CLI subprocess;
+- local Web job creation accepts explicit `duplicateAction` values for detected
+  duplicates: `reuse` reuses a completed exact package without starting a new
+  subprocess, `resume` starts the CLI `resume` command for a recoverable exact
+  duplicate, `reject` returns a conflict, and `refresh`/`revision` proceed as a
+  new run;
+- direct package writes are guarded by an internal atomic claim keyed by stable
+  `knowledge_id`; active claims are retryable, stale claims may be recovered,
+  and claim records are not public API objects;
+- CLI/Web recovery of an incomplete package with a matching stable
+  `knowledge_id` reuses valid source information and raw transcript artifacts
+  before reacquiring source metadata, subtitles, media, or ASR;
+- knowledge-package lookup accepts both stable `knowledge_id` and historical
+  package directory name.
+
+Package directories remain the historical `<title>_<source-id>` names for
+compatibility. Public clients must always treat `knowledge_id` values as opaque
+and must not reproduce the private identity algorithm.
 
 ## Implemented knowledge-package contract
 

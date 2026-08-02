@@ -1,6 +1,6 @@
 # Viewledge Project State
 
-Last verified: 2026-07-30
+Last verified: 2026-08-02
 
 This is the canonical current-state document. Git state, current code, and
 reproducible commands take precedence over older notes.
@@ -8,9 +8,9 @@ reproducible commands take precedence over older notes.
 ## Repository baseline
 
 - Repository role: private Viewledge core.
-- Current branch: `feat/v1.4.5-portable-release`.
-- Upstream: `origin/feat/v1.4.5-portable-release`.
-- Current HEAD: `289354a feat(release): prepare Viewledge v1.4.5 portable Windows beta`.
+- Current branch: `feat/v1.4.6-knowledge-identity-recovery`.
+- Branch point/current HEAD: `02b864b v1.4.5final`.
+- The branch currently has no upstream.
 - Package version: `1.4.5`, defined by `src/__init__.py`.
 - No release tag was created during this audit.
 - The working tree is intentionally uncommitted. No staging, commit, push,
@@ -38,29 +38,41 @@ The current base ZIP contains runnable Python source and is therefore an
 internal or trusted-user beta artifact only. It is not eligible for a public
 release.
 
-## Working-tree baseline at audit start
+## v1.4.6 identity, duplicate, and claim baseline
 
-Pre-existing modified tracked files:
+The current v1.4.6 working tree adds:
 
-- `README.md`
-- `src/analysis/schemas.py`
-- `src/analysis/service.py`
-- `src/web.py`
-- `start_web.bat`
-- `tests/test_analysis.py`
-- `tests/test_web.py`
+- a versioned opaque `knowledge_id` from normalized source identity;
+- a separate `request_fingerprint` for processing dimensions;
+- duplicate decisions for active exact, completed exact, recoverable exact, and
+  same-source revision cases;
+- manifest, CLI task record, Web job record, JSONL, and local Web API
+  persistence of identity fields;
+- Web active-exact duplicate rejection before starting the CLI subprocess;
+- explicit Web duplicate actions: `reuse` returns an already completed exact
+  package without starting a new CLI subprocess, `resume` starts
+  `src.main resume <task_id> --jsonl` for a recoverable exact duplicate,
+  `reject` returns the duplicate conflict, and `refresh`/`revision` keep the
+  existing new-run behavior;
+- stable `knowledge_id` library lookup while preserving historical directory
+  lookup;
+- package-level atomic claims under `.viewledge_claims/`, heartbeat refresh on
+  manifest save, normal release on success/failure, stale-claim recovery, and
+  stale-owner overwrite prevention;
+- stage-aware repair for incomplete packages with a matching stable
+  `knowledge_id`: recovery reuses valid manifest/metadata source information
+  and `transcript.raw.jsonl` instead of reacquiring source metadata, subtitles,
+  media, or ASR;
+- task-level subtitle grouping selection: default target grouping is now 30
+  seconds, Web exposes 15/30/60/120 second choices, CLI accepts
+  `--transcript-group-seconds`, and grouping seconds participate in the
+  request fingerprint so different grouping requests are same-source revisions
+  rather than exact duplicates;
+- the API configuration regression fix: testing a saved Provider with empty
+  input fields reuses the process-local saved session configuration.
 
-Pre-existing untracked file:
-
-- `docs/PRODUCT_RELEASE_STRATEGY.md`
-
-The code changes clamp model-produced timestamps to the known transcript range,
-preserve external player embed fields after product redaction, harden the
-Windows launcher, and add focused regression tests. These changes are part of
-the current candidate state but are not yet committed.
-
-This audit adds or updates project-governance documents only. It does not change
-the v1.4.5 processing implementation.
+Historical package directories remain `<title>_<source-id>/`. Stable
+`knowledge_id` is the manifest/API identifier, not the physical directory name.
 
 ## Local-only development launcher
 
@@ -84,22 +96,24 @@ The v1.4.5 base ZIP and model extension:
 - contain no `.env`, `.git`, or `start_dev.bat` entries;
 - execute the bundled FFmpeg and FFprobe version checks successfully.
 
-A normalized comparison found 112 packaged files identical to the current
-working tree and one mismatch: `README.md` changed after the ZIP was built.
-Tests are not shipped in the base ZIP. A frozen beta artifact must therefore be
-rebuilt from the user-approved stable commit and verified again.
+An earlier normalized comparison found 112 packaged files identical to the
+working tree at that time and one mismatch: `README.md` had changed after the
+ZIP was built. The current ZIP predates the uncommitted v1.4.6 changes and is
+not a v1.4.6 artifact. Tests are not shipped in the base ZIP. A frozen beta
+artifact must therefore be rebuilt from the user-approved stable commit and
+verified again.
 
 ## Test baseline
 
-The current project interpreter is Python 3.12.13. The full suite reports:
+The current project interpreter is Python 3.12.13. The latest full suite
+reports:
 
 ```text
-Ran 345 tests
+Ran 382 tests
 OK
 ```
 
-See `docs/TEST_BASELINE.md` for the complete command matrix. The historical
-figures of 312 or 342 tests are not the current baseline.
+See `docs/TEST_BASELINE.md` for the current command matrix.
 
 ## Documentation truth
 
@@ -138,5 +152,10 @@ The freeze decision is therefore: **conditional candidate, not yet frozen**.
 
 ## Scope boundary
 
-No v1.4.6 implementation, browser extension, public repository, code split,
-cloud account system, or paid feature was created during this audit.
+The v1.4.6 identity, duplicate, API-config, package-claim, explicit Web
+duplicate-action API/UI, task-level transcript grouping, and initial
+stage-aware repair units are in the working tree. The final audit has now
+verified CLI recovery against an incomplete package, Web active-duplicate
+decision handling, and the 15/30/60/120-second grouping selector. No browser
+extension, public repository, code split, cloud account system, or paid feature
+was created. User review and a stable commit are still pending.

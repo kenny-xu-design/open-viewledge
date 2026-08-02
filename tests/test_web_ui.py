@@ -446,6 +446,27 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('api("/api/jobs")', self.js)
         self.assertIn("interrupted", self.js)
 
+    def test_duplicate_task_decision_flow_is_user_visible(self) -> None:
+        self.assertIn('id="taskDuplicateDecision"', self.html)
+        self.assertIn('id="taskDuplicateActions"', self.html)
+        self.assertIn("function renderDuplicateDecision", self.js)
+        self.assertIn("function handleDuplicateAction", self.js)
+        self.assertIn("isDuplicateTaskError(error)", self.js)
+        self.assertIn("payload.duplicateAction = duplicateAction", self.js)
+        self.assertIn("data.job.knowledgeId ||", self.js)
+        self.assertIn("data-duplicate-action", self.js)
+        for action in ("reuse", "resume", "refresh", "revision", "reject"):
+            self.assertIn(action, self.js)
+        self.assertIn(".task-duplicate", self.css)
+
+    def test_transcript_group_selector_is_visible_and_submitted(self) -> None:
+        self.assertIn('id="taskTranscriptGroupSeconds"', self.html)
+        self.assertIn('<option value="30" selected>30秒（推荐）</option>', self.html)
+        for value in ("15", "30", "60", "120"):
+            self.assertIn(f'<option value="{value}"', self.html)
+        self.assertIn('transcriptGroupSeconds: $("#taskTranscriptGroupSeconds").value', self.js)
+        self.assertNotIn("60秒（当前配置）", self.html)
+
     def test_library_records_show_processing_duration_timer(self) -> None:
         self.assertIn("processingDurationMs", self.js)
         self.assertIn("formatProcessingDuration", self.js)

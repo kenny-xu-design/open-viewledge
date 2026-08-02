@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import shutil
 import time
@@ -16,6 +17,8 @@ from ..config import AppConfig
 from ..domain.models import AnalysisResult, ChapterSummary, KnowledgePackage, NormalizedComment, ProcessingManifest, ProviderAttempt, SourceRecord, StageMetric, TranscriptSegment, TranscriptStatus, utc_now
 from ..exporters import export_knowledge_package
 from ..exporters.analysis_markdown import render_profile_analysis
+from ..knowledge_identity import KnowledgeIdentity, KnowledgeRequestDimensions, build_knowledge_identity
+from ..package_claim import acquire_package_claim
 from ..transcription_router import PlatformSubtitleProvider, TranscriptionRouter, normalize_asr_route
 from ..providers.asr import LocalWhisperProvider  # compatibility for existing mocks
 from ..providers.llm import DeepSeekProvider, GeminiProvider
@@ -30,6 +33,13 @@ from ..visual import generate_tutorial_step_snapshots
 from ..cli_contract import sanitize_message
 from .context import PipelineContext
 from .stages import STAGES
+
+
+@dataclass(frozen=True, slots=True)
+class _RepairPackage:
+    output_dir: Path
+    manifest_data: dict
+    source: SourceRecord
 
 
 def _apply_transcript_result(context: PipelineContext, result) -> None:
@@ -48,6 +58,43 @@ def _apply_transcript_result(context: PipelineContext, result) -> None:
     context.manifest.asr_model = result.model
     context.manifest.asr_device = result.device
     context.manifest.asr_audio_duration_seconds = result.duration_seconds
+
+
+def _find_repair_package(output_root: Path, identity: KnowledgeIdentity | None) -> _RepairPackage | None:
+    if not identity or not output_root.exists():
+        return None
+    for directory in output_root.iterdir():
+        if not directory.is_dir():
+            continue
+        manifest_path = directory / "manifest.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest_data = load_json(manifest_path)
+        except (OSError, ValueError):
+            continue
+        if str(manifest_data.get("knowledge_id") or "") != identity.knowledge_id:
+            continue
+        source = _repair_source_from_package(directory, manifest_data)
+        if source:
+            return _RepairPackage(output_dir=directory, manifest_data=manifest_data, source=source)
+    return None
+
+
+def _repair_source_from_package(directory: Path, manifest_data: dict) -> SourceRecord | None:
+    candidates = [manifest_data.get("source")]
+    try:
+        candidates.append(load_json(directory / "metadata.json"))
+    except (OSError, ValueError):
+        pass
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or not candidate:
+            continue
+        try:
+            return SourceRecord.model_validate(candidate)
+        except ValueError:
+            continue
+    return None
 
 
 class PipelineOrchestrator:
@@ -69,6 +116,7 @@ class PipelineOrchestrator:
         event_callback=None,
         task_id: str | None = None,
         cache_store: CacheStore | None = None,
+        knowledge_identity: KnowledgeIdentity | None = None,
     ) -> None:
         self.config = config
         self.backend = backend or config.summary_backend
@@ -85,15 +133,18 @@ class PipelineOrchestrator:
         self.event_callback = event_callback
         self.task_id = task_id
         self.cache_store = cache_store or CacheStore()
+        self.knowledge_identity = knowledge_identity
 
     def run(self, input_value: str, is_url: bool) -> KnowledgePackage:
         run_started = time.perf_counter()
         task_id = self.task_id or uuid.uuid4().hex[:12]
         source_adapter = YtdlpSource() if is_url else LocalMediaSource()
+        output_root = Path(self.config.output_dir)
+        repair_package = _find_repair_package(output_root, self.knowledge_identity)
         context = PipelineContext(
             config=self.config,
             input_value=input_value,
-            output_dir=Path(self.config.output_dir),
+            output_dir=output_root,
             analysis_profile=self.analysis_profile,
             processing_profile=self.processing_profile,
             no_analysis=self.no_analysis,
@@ -105,6 +156,7 @@ class PipelineOrchestrator:
                 task_id=task_id,
                 privacy_mode=False,
                 sample_seconds=self.sample_seconds,
+                transcript_group_seconds=self.config.transcript_group_seconds,
                 processing_profile=self.processing_profile,
                 analysis_requested=not self.no_analysis,
                 analysis_status="skipped" if self.no_analysis else "pending",
@@ -117,43 +169,107 @@ class PipelineOrchestrator:
         )
         context.manifest_save_callback = lambda: self._save_manifest(context)
         try:
-            self._stage(context, "resolve_source", lambda: setattr(context, "source", source_adapter.resolve(input_value)))
+            identity: KnowledgeIdentity
+            if repair_package:
+                context.source = repair_package.source
+                identity = self.knowledge_identity
+                assert identity is not None
+                context.output_dir = repair_package.output_dir
+                context.previous_manifest = repair_package.manifest_data
+                context.manifest.identity_schema_version = identity.schema_version
+                context.manifest.knowledge_id = identity.knowledge_id
+                context.manifest.source_fingerprint = identity.source_fingerprint
+                context.manifest.request_fingerprint = identity.request_fingerprint
+                context.package_claim = acquire_package_claim(
+                    output_root,
+                    knowledge_id=identity.knowledge_id,
+                    request_fingerprint=identity.request_fingerprint,
+                    task_id=task_id,
+                    output_dir=context.output_dir,
+                )
+                context.output_dir = ensure_dir(context.output_dir)
+                ensure_dir(context.output_dir / "audio")
+                ensure_dir(context.output_dir / "frames")
+                ensure_dir(context.output_dir / "assets" / "highlights")
+                ensure_dir(context.output_dir / "assets" / "tutorial")
+                context.manifest.source = context.source
+                self._save_manifest(context)
 
-            def collect_metadata() -> None:
+                def reuse_source_stage(stage: str) -> None:
+                    context.mark_cache_hit(stage)
+                    context.log(f"恢复任务复用已有来源信息：{context.output_dir}")
+
+                self._stage(context, "resolve_source", lambda: reuse_source_stage("resolve_source"))
+                self._stage(context, "collect_metadata", lambda: reuse_source_stage("collect_metadata"))
+            else:
+                self._stage(context, "resolve_source", lambda: setattr(context, "source", source_adapter.resolve(input_value)))
+
+                def collect_metadata() -> None:
+                    assert context.source and context.manifest
+                    metadata_key = build_cache_key(
+                        "metadata",
+                        input=input_value,
+                        platform=context.source.platform,
+                        source_id=context.source.source_id,
+                    )
+                    context.manifest.cache_keys["metadata"] = metadata_key
+                    cached = self._cache_get(context, "metadata", metadata_key)
+                    if isinstance(cached, dict):
+                        try:
+                            context.source = SourceRecord.model_validate(cached)
+                        except ValueError:
+                            context.log("元数据缓存无效，将重新读取来源信息。")
+                        else:
+                            context.mark_cache_hit("collect_metadata")
+                            context.log("命中元数据缓存。")
+                            return
+                    context.source = source_adapter.collect_metadata()
+                    self._cache_put(
+                        context,
+                        "metadata",
+                        metadata_key,
+                        context.source.model_dump(mode="json"),
+                    )
+
+                self._stage(context, "collect_metadata", collect_metadata)
                 assert context.source and context.manifest
-                metadata_key = build_cache_key(
-                    "metadata",
-                    input=input_value,
-                    platform=context.source.platform,
-                    source_id=context.source.source_id,
+                identity = self.knowledge_identity or build_knowledge_identity(
+                    context.source,
+                    KnowledgeRequestDimensions(
+                        language=self.config.language,
+                        analysis_profile=self.analysis_profile,
+                        processing_profile=self.processing_profile,
+                        transcript_only=self.no_analysis,
+                        comments_enabled=self.comments_enabled,
+                        sample_seconds=self.sample_seconds,
+                        transcript_group_seconds=self.config.transcript_group_seconds,
+                        asr_route=self.asr_route,
+                        asr_fallback_enabled=self.asr_fallback_enabled,
+                        generate_frames=self.generate_frames,
+                    ),
+                    input_value=input_value,
                 )
-                context.manifest.cache_keys["metadata"] = metadata_key
-                cached = self._cache_get(context, "metadata", metadata_key)
-                if isinstance(cached, dict):
-                    try:
-                        context.source = SourceRecord.model_validate(cached)
-                    except ValueError:
-                        context.log("元数据缓存无效，将重新读取来源信息。")
-                    else:
-                        context.mark_cache_hit("collect_metadata")
-                        context.log("命中元数据缓存。")
-                        return
-                context.source = source_adapter.collect_metadata()
-                self._cache_put(
-                    context,
-                    "metadata",
-                    metadata_key,
-                    context.source.model_dump(mode="json"),
+                context.output_dir = Path(self.config.output_dir) / _package_name(
+                    context.source.title,
+                    context.source.source_id,
                 )
-
-            self._stage(context, "collect_metadata", collect_metadata)
-            assert context.source and context.manifest
-            context.output_dir = ensure_dir(Path(self.config.output_dir) / _package_name(context.source.title, context.source.source_id))
-            context.previous_manifest = load_json(context.output_dir / "manifest.json")
-            ensure_dir(context.output_dir / "audio")
-            ensure_dir(context.output_dir / "frames")
-            ensure_dir(context.output_dir / "assets" / "highlights")
-            ensure_dir(context.output_dir / "assets" / "tutorial")
+                context.package_claim = acquire_package_claim(
+                    output_root,
+                    knowledge_id=identity.knowledge_id,
+                    request_fingerprint=identity.request_fingerprint,
+                    task_id=task_id,
+                    output_dir=context.output_dir,
+                )
+                context.output_dir = ensure_dir(context.output_dir)
+                context.previous_manifest = load_json(context.output_dir / "manifest.json")
+                ensure_dir(context.output_dir / "audio")
+                ensure_dir(context.output_dir / "frames")
+                ensure_dir(context.output_dir / "assets" / "highlights")
+                ensure_dir(context.output_dir / "assets" / "tutorial")
+            context.manifest.identity_schema_version = identity.schema_version
+            context.manifest.knowledge_id = identity.knowledge_id
+            context.manifest.source_fingerprint = identity.source_fingerprint
+            context.manifest.request_fingerprint = identity.request_fingerprint
             context.manifest.source = context.source
             self._save_manifest(context)
             source_dimensions = source_cache_dimensions(context.source, input_value)
@@ -736,6 +852,13 @@ class PipelineOrchestrator:
                 self._save_manifest(context)
             raise UserFacingError(f"处理管线失败：{exc}") from exc
 
+        finally:
+            if context.package_claim:
+                try:
+                    context.package_claim.release()
+                except OSError as exc:
+                    context.log(sanitize_message(f"package claim release failed: {exc}"))
+
     def _stage(self, context: PipelineContext, name: str, action, soft_fail: bool = False) -> None:
         assert context.manifest
         stage_index = STAGES.index(name) if name in STAGES else 0
@@ -863,6 +986,8 @@ class PipelineOrchestrator:
             return
         if context.manifest and output_dir.exists() and output_dir.is_dir():
             save_json(output_dir / "manifest.json", context.manifest.model_dump(mode="json"))
+            if context.package_claim:
+                context.package_claim.refresh()
 
 
 def _package_name(title: str, source_id: str) -> str:

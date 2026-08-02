@@ -627,6 +627,12 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
 .progress-track span { display: block; width: 12%; height: 100%; background: var(--accent); transition: width var(--motion-slow) var(--ease-standard-ui); }
 .task-progress pre { max-height: 110px; overflow: auto; white-space: pre-wrap; margin: 8px 0 0; color: var(--muted); font: 11px/1.5 Consolas, monospace; }
 .task-asr-status { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.task-duplicate { margin: 3px 16px 15px; padding: 12px; border: 1px solid var(--ui-warning-border); border-radius: 7px; background: var(--orange-soft); color: var(--orange); }
+.task-duplicate strong { display: block; margin-bottom: 5px; color: var(--text); }
+.task-duplicate p { margin: 0 0 10px; line-height: 1.55; }
+.task-duplicate-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.task-duplicate-actions button { min-height: 34px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--panel); color: var(--text); cursor: pointer; }
+.task-duplicate-actions button[data-duplicate-action="reject"] { color: var(--red); }
 .task-capabilities { line-height: 1.65; }
 .capability-item.available { color: var(--ui-success); }
 .capability-item.config_required, .capability-item.unavailable, .capability-item.error { color: var(--ui-warning); }

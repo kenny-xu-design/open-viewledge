@@ -26,6 +26,8 @@ class CliTaskRecord(BaseModel):
     updated_at: str = Field(default_factory=utc_timestamp)
     output_dir: str = ""
     knowledge_id: str = ""
+    identity_schema_version: str = ""
+    request_fingerprint: str = ""
     exit_code: int | None = None
     error_code: str = ""
     error_message: str = ""

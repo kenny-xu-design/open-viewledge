@@ -28,6 +28,12 @@ class JobStoreTests(unittest.TestCase):
                 transcript_fallback_reason="gpu_model_load_timeout",
                 status="success",
                 knowledge_id="demo",
+                identity_schema_version="1.0",
+                request_fingerprint="fp",
+                duplicate_kind="completed_exact",
+                duplicate_matched_task_id="older",
+                duplicate_matched_knowledge_id="demo",
+                duplicate_allowed_actions=["reuse", "refresh", "reject"],
                 output_dir="output/demo",
                 logs=["完成"],
             )
@@ -37,6 +43,11 @@ class JobStoreTests(unittest.TestCase):
 
         self.assertEqual(len(reloaded), 1)
         self.assertEqual(reloaded[0].knowledge_id, "demo")
+        self.assertEqual(reloaded[0].identity_schema_version, "1.0")
+        self.assertEqual(reloaded[0].request_fingerprint, "fp")
+        self.assertEqual(reloaded[0].duplicate_kind, "completed_exact")
+        self.assertEqual(reloaded[0].duplicate_matched_task_id, "older")
+        self.assertEqual(reloaded[0].duplicate_allowed_actions, ["reuse", "refresh", "reject"])
         self.assertEqual(reloaded[0].status, "success")
         self.assertEqual(reloaded[0].logs, ["完成"])
         self.assertEqual(reloaded[0].analysis_profile, "tutorial")

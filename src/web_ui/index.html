@@ -239,13 +239,18 @@
         <label class="field"><span>AI 分析</span><input value="文字分析" disabled><input id="taskBackend" type="hidden" value="deepseek"></label>
         <label class="field"><span>字幕语言</span><select id="taskLanguage"><option value="">默认 zh</option><option value="zh">zh</option><option value="zh-Hans">zh-Hans</option><option value="en">en</option></select></label>
         <label class="field"><span>字幕转写方式</span><select id="taskAsrRoute"><option value="cloud">云端快速转写</option><option value="local_gpu">本地 GPU</option><option value="local_cpu">本地 CPU</option></select><small>仅在视频没有可用平台字幕时生效。云端模式会把提取后的音频发送至第三方转写服务。</small></label>
-        <label class="field"><span>字幕分组</span><select disabled><option>60秒（当前配置）</option></select></label>
+        <label class="field"><span>字幕分组</span><select class="ui-select" id="taskTranscriptGroupSeconds"><option value="15">15秒（细分）</option><option value="30" selected>30秒（推荐）</option><option value="60">60秒（长段）</option><option value="120">120秒（超长段）</option></select></label>
         <label class="field"><span>样本秒数</span><input id="taskSampleSeconds" type="number" min="1" placeholder="留空处理完整媒体"></label>
         <label class="field"><span>导出</span><select id="taskExport"><option value="none">知识包</option><option value="obsidian">兼容 Obsidian</option></select></label>
       </div>
       <div class="toggle-list"><label class="ui-toggle"><input id="taskFrames" type="checkbox" checked><span class="ui-toggle__track" aria-hidden="true"></span><span>生成关键帧</span></label><label><input id="taskComments" type="checkbox"><span>同步公开评论</span></label><label><input id="taskAsrFallback" type="checkbox" checked><span>失败时自动回退</span></label><label><input id="taskNoSummary" type="checkbox">仅转写，不运行分析</label></div>
       <div class="runtime-info hidden" id="taskRuntime" aria-live="polite">正在读取 Python 运行环境…</div>
       <div class="runtime-info task-capabilities hidden" id="taskCapabilities" aria-live="polite">能力状态将在打开弹窗时检查。</div>
+      <section class="task-duplicate hidden" id="taskDuplicateDecision" aria-live="polite">
+        <strong id="taskDuplicateTitle">检测到重复任务</strong>
+        <p id="taskDuplicateMessage">请选择如何处理。</p>
+        <div class="task-duplicate-actions" id="taskDuplicateActions"></div>
+      </section>
       <div class="task-progress hidden" id="taskProgress" role="status" aria-live="polite"><div><span id="taskStatusText">正在创建任务…</span><span id="taskPercent"></span></div><div class="progress-track ui-progress" id="taskProgressBar" role="progressbar" aria-label="任务处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="ui-progress__bar" id="progressBar"></span></div><div class="task-asr-status hidden" id="taskAsrStatus"></div><pre id="taskLogs"></pre></div>
       <section class="task-history" aria-labelledby="taskHistoryTitle">
         <header><strong id="taskHistoryTitle">最近任务</strong><button class="icon-button ui-icon-button" id="refreshJobs" type="button" aria-label="刷新任务历史"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button></header>
@@ -276,7 +281,7 @@
     </div>
   </dialog>
 
-  <dialog id="settingsDialog" class="settings-dialog"><form method="dialog"><header><h2>总结设置</h2><button class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list"><label>分析模式<select id="settingsMode"><option value="summary">标准摘要</option><option value="tutorial">教程提取</option><option value="viral">爆款分析</option><option value="close-reading">深度精读</option></select><small id="settingsModeDescription">适合资讯、访谈、介绍和一般知识视频</small></label><label>字幕分组<select disabled><option>60秒</option></select></label><label class="switch-label"><input id="settingsFrames" type="checkbox" checked>生成关键帧</label><div class="runtime-info hidden" id="settingsRuntime">正在读取 Python 运行环境…</div></div><footer><button class="primary-button" value="close">完成</button></footer></form></dialog>
+  <dialog id="settingsDialog" class="settings-dialog"><form method="dialog"><header><h2>总结设置</h2><button class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="settings-list"><label>分析模式<select id="settingsMode"><option value="summary">标准摘要</option><option value="tutorial">教程提取</option><option value="viral">爆款分析</option><option value="close-reading">深度精读</option></select><small id="settingsModeDescription">适合资讯、访谈、介绍和一般知识视频</small></label><label>字幕分组<select disabled><option>30秒（默认）</option></select></label><label class="switch-label"><input id="settingsFrames" type="checkbox" checked>生成关键帧</label><div class="runtime-info hidden" id="settingsRuntime">正在读取 Python 运行环境…</div></div><footer><button class="primary-button" value="close">完成</button></footer></form></dialog>
   <dialog id="apiConfigDialog" class="settings-dialog api-config-dialog">
     <form method="dialog">
       <header><div><span class="dialog-kicker">LOCAL SESSION</span><h2>API 配置</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header>

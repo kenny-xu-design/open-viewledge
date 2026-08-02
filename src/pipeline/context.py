@@ -37,6 +37,7 @@ class PipelineContext:
     analysis: AnalysisResult | None = None
     manifest: ProcessingManifest | None = None
     previous_manifest: dict[str, Any] = field(default_factory=dict)
+    package_claim: Any | None = None
     cache_hits: set[str] = field(default_factory=set)
     skipped_stages: set[str] = field(default_factory=set)
     _last_asr_persist_at: float = 0.0

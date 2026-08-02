@@ -713,11 +713,16 @@ class StageMetric(BaseModel):
 class ProcessingManifest(BaseModel):
     schema_version: str = "1.0"
     task_id: str
+    identity_schema_version: str = ""
+    knowledge_id: str = ""
+    source_fingerprint: str = ""
+    request_fingerprint: str = ""
     source: SourceRecord | None = None
     status: str = "created"
     current_stage: str = ""
     privacy_mode: bool = False
     sample_seconds: int | None = None
+    transcript_group_seconds: int = Field(default=30, ge=15, le=300)
     created_at: str = Field(default_factory=utc_now)
     completed_at: str = ""
     asr_provider: str = ""

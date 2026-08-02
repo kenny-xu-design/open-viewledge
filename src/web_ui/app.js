@@ -75,6 +75,7 @@ let taskPoller = 0;
 let activeSourceType = "url";
 let lastSidebarTrigger = null;
 let lastInspectorTrigger = null;
+let pendingDuplicatePayload = null;
 
 class MediaController {
   load(source) { this.source = source; }
@@ -358,6 +359,7 @@ function bindEvents() {
   $$("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
   $$("[data-filter]").forEach((button) => button.addEventListener("click", () => setLibraryFilter(button.dataset.filter, button)));
   $$("[data-source-type]").forEach((button) => button.addEventListener("click", () => setTaskSourceType(button.dataset.sourceType)));
+  $("#taskDuplicateActions").addEventListener("click", handleDuplicateAction);
 
   $("#libraryList").addEventListener("click", (event) => {
     const item = event.target.closest("[data-knowledge-id]");
@@ -1713,6 +1715,10 @@ function knowledgeAssetUrl(knowledgeId, relativePath) {
 
 async function submitTask(event) {
   event.preventDefault();
+  await startTaskPayload(buildTaskPayload());
+}
+
+function buildTaskPayload(duplicateAction = "") {
   const transcriptOnly = $("#taskNoSummary").checked;
   const payload = {
     sourceType: activeSourceType,
@@ -1733,7 +1739,14 @@ async function submitTask(event) {
     analysis_enabled: !transcriptOnly,
     analysis_requested: !transcriptOnly,
     sampleSeconds: $("#taskSampleSeconds").value,
+    transcriptGroupSeconds: $("#taskTranscriptGroupSeconds").value,
   };
+  if (duplicateAction) payload.duplicateAction = duplicateAction;
+  return payload;
+}
+
+async function startTaskPayload(payload) {
+  hideDuplicateDecision();
   setTaskButtonLoading(true);
   try {
     const data = await api("/api/process", { method: "POST", body: JSON.stringify(payload) });
@@ -1741,9 +1754,60 @@ async function submitTask(event) {
     $("#taskProgress").classList.remove("hidden");
     pollTask(data.job.id);
   } catch (error) {
+    if (isDuplicateTaskError(error)) {
+      renderDuplicateDecision(payload, error.data.duplicate);
+      setTaskButtonLoading(false);
+      return;
+    }
     showToast(error.message);
     setTaskButtonLoading(false);
   }
+}
+
+function isDuplicateTaskError(error) {
+  return error?.status === 409 && error?.data?.duplicate;
+}
+
+function renderDuplicateDecision(payload, duplicate) {
+  pendingDuplicatePayload = { ...payload };
+  const panel = $("#taskDuplicateDecision");
+  const kind = duplicate?.kind || "unknown";
+  const labels = {
+    active_exact: "已有完全相同的任务正在处理。",
+    completed_exact: "已有完全相同的知识包处理完成。",
+    recoverable_exact: "已有完全相同的任务中断或失败，可以恢复。",
+    source_revision: "该来源已有知识包，但处理选项不同。",
+  };
+  $("#taskDuplicateTitle").textContent = "检测到重复任务";
+  $("#taskDuplicateMessage").textContent = labels[kind] || "检测到相同或相关来源，请选择处理方式。";
+  const actionLabels = {
+    reuse: "复用已有结果",
+    resume: "恢复上次任务",
+    refresh: "重新处理",
+    revision: "作为新版本处理",
+    reject: "取消",
+  };
+  $("#taskDuplicateActions").innerHTML = (duplicate?.allowedActions || [])
+    .map((action) => `<button type="button" data-duplicate-action="${escapeHtml(action)}">${escapeHtml(actionLabels[action] || action)}</button>`)
+    .join("");
+  panel.classList.remove("hidden");
+}
+
+function hideDuplicateDecision() {
+  pendingDuplicatePayload = null;
+  $("#taskDuplicateDecision")?.classList.add("hidden");
+  if ($("#taskDuplicateActions")) $("#taskDuplicateActions").innerHTML = "";
+}
+
+async function handleDuplicateAction(event) {
+  const button = event.target.closest("[data-duplicate-action]");
+  if (!button || !pendingDuplicatePayload) return;
+  const action = button.dataset.duplicateAction;
+  if (action === "reject") {
+    hideDuplicateDecision();
+    return;
+  }
+  await startTaskPayload({ ...pendingDuplicatePayload, duplicateAction: action });
 }
 
 function pollTask(jobId) {
@@ -1758,7 +1822,7 @@ function pollTask(jobId) {
         setTaskButtonLoading(false);
         if (data.job.status === "success") {
           await refreshLibrary();
-          const outputId = (data.job.outputDir || "").split("/").pop();
+          const outputId = data.job.knowledgeId || (data.job.outputDir || "").split("/").pop();
           if (outputId) await loadKnowledge(outputId, true);
           setTimeout(() => $("#newTaskDialog").close(), 700);
         }

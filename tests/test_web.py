@@ -14,11 +14,13 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from src import __version__
+from src.knowledge_identity import KnowledgeRequestDimensions, build_input_knowledge_identity
 from src.job_store import Job
 from src.utils import UserFacingError
 from src.web import (
     KnowledgeDeletionError,
     PROJECT_ROOT,
+    DuplicateTaskError,
     VideoSummaryHandler,
     VideoSummaryServer,
     _is_project_venv_python,
@@ -32,6 +34,7 @@ from src.web import (
     job_to_dict,
     resolve_library_file,
     runtime_status_payload,
+    start_job,
     _timestamp_seconds,
     _external_player_descriptor,
     _handle_cli_output_line,
@@ -347,6 +350,34 @@ class WebCommandTests(unittest.TestCase):
 
         self.assertEqual(command[-3:], ["--sample-seconds", "30", "--jsonl"])
 
+    def test_build_command_with_transcript_group_seconds(self) -> None:
+        command = build_cli_command(
+            {
+                "sourceType": "file",
+                "source": r"E:\Downloads_E\video.mp4",
+                "backend": "deepseek",
+                "mode": "summary",
+                "transcriptGroupSeconds": "15",
+            },
+            python_executable=r"C:\test\.venv\Scripts\python.exe",
+        )
+
+        group_index = command.index("--transcript-group-seconds")
+        self.assertEqual(command[group_index + 1], "15")
+
+    def test_build_command_rejects_too_small_transcript_group_seconds(self) -> None:
+        with self.assertRaisesRegex(ValueError, "transcriptGroupSeconds"):
+            build_cli_command(
+                {
+                    "sourceType": "file",
+                    "source": r"E:\Downloads_E\video.mp4",
+                    "backend": "deepseek",
+                    "mode": "summary",
+                    "transcriptGroupSeconds": "14",
+                },
+                python_executable=r"C:\test\.venv\Scripts\python.exe",
+            )
+
     def test_build_command_accepts_fast_processing_profile(self) -> None:
         command = build_cli_command(
             {
@@ -401,6 +432,167 @@ class WebCommandTests(unittest.TestCase):
 
         self.assertEqual(payload["analysisProfile"], "tutorial")
         self.assertEqual(payload["processingProfile"], "fast")
+
+    def test_cli_jsonl_identity_fields_update_web_job(self) -> None:
+        job = Job(id="job", command=[])
+        _handle_cli_output_line(
+            job,
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "event": "task_created",
+                    "task_id": "task",
+                    "knowledge_id": "k1-web-source",
+                    "identity_schema_version": "1.0",
+                    "request_fingerprint": "request-fp",
+                }
+            ),
+        )
+
+        self.assertEqual(job.knowledge_id, "k1-web-source")
+        self.assertEqual(job.identity_schema_version, "1.0")
+        self.assertEqual(job.request_fingerprint, "request-fp")
+
+    def test_start_job_rejects_active_exact_duplicate_before_thread_start(self) -> None:
+        payload = {
+            "sourceType": "url",
+            "source": "https://example.com/video",
+            "mode": "summary",
+            "noSummary": True,
+        }
+        identity = build_input_knowledge_identity(
+            payload["source"],
+            is_url=True,
+            dimensions=KnowledgeRequestDimensions(language="zh", transcript_only=True),
+        )
+        active = Job(
+            id="active",
+            command=[],
+            status="running",
+            knowledge_id=identity.knowledge_id,
+            request_fingerprint=identity.request_fingerprint,
+        )
+        with (
+            patch("src.web.JOBS", {"active": active}),
+            patch("src.web.ensure_data_directory_writable"),
+            patch("src.web.threading.Thread") as thread,
+        ):
+            with self.assertRaises(DuplicateTaskError):
+                start_job(payload)
+
+        thread.assert_not_called()
+
+    def test_start_job_reuses_completed_exact_duplicate_without_thread_start(self) -> None:
+        payload = {
+            "sourceType": "url",
+            "source": "https://example.com/video",
+            "mode": "summary",
+            "noSummary": True,
+            "duplicateAction": "reuse",
+        }
+        identity = build_input_knowledge_identity(
+            payload["source"],
+            is_url=True,
+            dimensions=KnowledgeRequestDimensions(language="zh", transcript_only=True),
+        )
+        completed = Job(
+            id="completed",
+            command=[],
+            status="success",
+            returncode=0,
+            cli_task_id="cli-completed",
+            knowledge_id=identity.knowledge_id,
+            request_fingerprint=identity.request_fingerprint,
+            identity_schema_version=identity.schema_version,
+            output_dir="output/existing-package",
+            analysis_status="skipped",
+            transcript_status="success",
+        )
+        with (
+            patch("src.web.JOBS", {"completed": completed}),
+            patch("src.web.ensure_data_directory_writable"),
+            patch("src.web._persist_job"),
+            patch("src.web.threading.Thread") as thread,
+        ):
+            job = start_job(payload)
+
+        self.assertEqual(job.status, "success")
+        self.assertEqual(job.returncode, 0)
+        self.assertEqual(job.output_dir, "output/existing-package")
+        self.assertEqual(job.cli_task_id, "cli-completed")
+        self.assertEqual(job.duplicate_kind, "completed_exact")
+        self.assertEqual(job.duplicate_matched_task_id, "completed")
+        self.assertIn("reuse", job.duplicate_allowed_actions)
+        thread.assert_not_called()
+
+    def test_start_job_resumes_recoverable_exact_duplicate_with_cli_resume_command(self) -> None:
+        payload = {
+            "sourceType": "url",
+            "source": "https://example.com/video",
+            "mode": "summary",
+            "noSummary": True,
+            "duplicateAction": "resume",
+        }
+        identity = build_input_knowledge_identity(
+            payload["source"],
+            is_url=True,
+            dimensions=KnowledgeRequestDimensions(language="zh", transcript_only=True),
+        )
+        recoverable = Job(
+            id="failed",
+            command=[],
+            status="failed",
+            cli_task_id="cli-failed",
+            knowledge_id=identity.knowledge_id,
+            request_fingerprint=identity.request_fingerprint,
+            identity_schema_version=identity.schema_version,
+        )
+        with (
+            patch("src.web.JOBS", {"failed": recoverable}),
+            patch("src.web.ensure_data_directory_writable"),
+            patch("src.web._persist_job"),
+            patch("src.web.threading.Thread") as thread,
+        ):
+            job = start_job(payload)
+
+        self.assertEqual(job.command[-4:], ["src.main", "resume", "cli-failed", "--jsonl"])
+        self.assertEqual(job.duplicate_kind, "recoverable_exact")
+        self.assertEqual(job.duplicate_matched_task_id, "failed")
+        self.assertIn("resume", job.duplicate_allowed_actions)
+        thread.assert_called_once()
+        thread.return_value.start.assert_called_once()
+
+    def test_start_job_rejects_invalid_duplicate_action_before_thread_start(self) -> None:
+        payload = {
+            "sourceType": "url",
+            "source": "https://example.com/video",
+            "mode": "summary",
+            "noSummary": True,
+            "duplicateAction": "resume",
+        }
+        identity = build_input_knowledge_identity(
+            payload["source"],
+            is_url=True,
+            dimensions=KnowledgeRequestDimensions(language="zh", transcript_only=True),
+        )
+        completed = Job(
+            id="completed",
+            command=[],
+            status="success",
+            knowledge_id=identity.knowledge_id,
+            request_fingerprint=identity.request_fingerprint,
+            identity_schema_version=identity.schema_version,
+            output_dir="output/existing-package",
+        )
+        with (
+            patch("src.web.JOBS", {"completed": completed}),
+            patch("src.web.ensure_data_directory_writable"),
+            patch("src.web.threading.Thread") as thread,
+        ):
+            with self.assertRaisesRegex(ValueError, "duplicateAction"):
+                start_job(payload)
+
+        thread.assert_not_called()
 
     def test_rejects_retired_backend(self) -> None:
         with self.assertRaisesRegex(ValueError, "只能是 deepseek"):

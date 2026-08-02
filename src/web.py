@@ -32,6 +32,14 @@ from .config import load_config, resolve_output_root
 from .domain.models import AnalysisResult
 from .exporters import export_directory_to_vault, refresh_compatible_export, render_directory_export, selection_for_request
 from .job_store import Job, JobStore
+from .knowledge_identity import (
+    DuplicateDecision,
+    DuplicateKind,
+    KnowledgeRequestDimensions,
+    TaskIdentityRecord,
+    build_input_knowledge_identity,
+    detect_duplicate,
+)
 from .knowledge_validation import inspect_knowledge_package, meaningful_analysis
 from .network import apply_network_proxy_env
 from .note_store import NoteConflictError, NoteStore
@@ -258,6 +266,106 @@ class KnowledgeDeletionError(RuntimeError):
         self.deleted = list(deleted or [])
 
 
+class DuplicateTaskError(ValueError):
+    def __init__(self, decision: DuplicateDecision, message: str = "duplicate active task") -> None:
+        super().__init__(message)
+        self.decision = decision
+
+
+def _payload_source(payload: dict[str, Any]) -> tuple[str, str]:
+    source_type = str(payload.get("sourceType") or "url")
+    source = _clean_source_value(str(payload.get("source") or ""))
+    if source_type not in {"url", "file"}:
+        raise ValueError("sourceType must be url or file.")
+    if not source:
+        raise ValueError("source is required.")
+    return source_type, source
+
+
+def _sample_seconds_from_payload(payload: dict[str, Any]) -> int | None:
+    sample_seconds = payload.get("sampleSeconds")
+    if sample_seconds in (None, ""):
+        return None
+    try:
+        sample_value = int(sample_seconds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("sampleSeconds must be a positive integer.") from exc
+    if sample_value <= 0:
+        raise ValueError("sampleSeconds must be a positive integer.")
+    return sample_value
+
+
+def _transcript_group_seconds_from_payload(
+    payload: dict[str, Any],
+    *,
+    default: int,
+) -> int:
+    raw = payload.get("transcriptGroupSeconds", payload.get("transcript_group_seconds"))
+    if raw in (None, ""):
+        return int(default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("transcriptGroupSeconds 必须是整数。") from exc
+    if value < 15:
+        raise ValueError("transcriptGroupSeconds 不能小于 15。")
+    if value > 300:
+        raise ValueError("transcriptGroupSeconds 不能大于 300。")
+    return value
+
+
+def _request_dimensions_from_payload(
+    payload: dict[str, Any],
+    *,
+    analysis_requested: bool,
+    processing_profile: str,
+    asr_route: str,
+) -> KnowledgeRequestDimensions:
+    return KnowledgeRequestDimensions(
+        language=str(payload.get("lang") or WEB_CONFIG.language or ""),
+        analysis_profile=str(payload.get("mode") or "summary"),
+        processing_profile=processing_profile,
+        transcript_only=not analysis_requested,
+        comments_enabled=bool(payload.get("comments")),
+        sample_seconds=_sample_seconds_from_payload(payload),
+        transcript_group_seconds=_transcript_group_seconds_from_payload(
+            payload,
+            default=WEB_CONFIG.transcript_group_seconds,
+        ),
+        asr_route=asr_route,
+        asr_fallback_enabled=_explicit_true(
+            payload.get("asr_fallback_enabled", payload.get("asrFallbackEnabled", True))
+        ),
+        generate_frames=not bool(payload.get("noFrames")),
+    )
+
+
+def _duplicate_payload(decision: DuplicateDecision) -> dict[str, Any]:
+    return {
+        "kind": decision.kind.value,
+        "matchedTaskId": decision.matched_task_id,
+        "matchedKnowledgeId": decision.matched_knowledge_id,
+        "allowedActions": list(decision.allowed_actions),
+    }
+
+
+def _duplicate_action_from_payload(payload: dict[str, Any]) -> str:
+    return str(payload.get("duplicateAction") or payload.get("duplicate_action") or "").strip().lower()
+
+
+def _matched_duplicate_job(decision: DuplicateDecision) -> Job | None:
+    if not decision.matched_task_id:
+        return None
+    return JOBS.get(decision.matched_task_id)
+
+
+def _build_resume_command(cli_task_id: str, python_executable: str | None = None) -> list[str]:
+    python_executable = python_executable or sys.executable
+    if not cli_task_id:
+        raise ValueError("可恢复任务缺少 CLI task_id。")
+    return [python_executable, "-m", "src.main", "resume", cli_task_id, "--jsonl"]
+
+
 def build_cli_command(payload: dict[str, Any], python_executable: str | None = None) -> list[str]:
     python_executable = python_executable or sys.executable
     source_type = str(payload.get("sourceType") or "url")
@@ -320,6 +428,12 @@ def build_cli_command(payload: dict[str, Any], python_executable: str | None = N
         if sample_value <= 0:
             raise ValueError("sampleSeconds 必须是正整数。")
         command.extend(["--sample-seconds", str(sample_value)])
+    group_seconds = _transcript_group_seconds_from_payload(
+        payload,
+        default=WEB_CONFIG.transcript_group_seconds,
+    )
+    if group_seconds != WEB_CONFIG.transcript_group_seconds or "transcriptGroupSeconds" in payload or "transcript_group_seconds" in payload:
+        command.extend(["--transcript-group-seconds", str(group_seconds)])
     command.append("--jsonl")
     return command
 
@@ -351,30 +465,172 @@ def _clean_source_value(value: str) -> str:
     return cleaned
 
 
+def _task_identity_records() -> list[TaskIdentityRecord]:
+    return [
+        TaskIdentityRecord(
+            task_id=job.id,
+            knowledge_id=job.knowledge_id,
+            request_fingerprint=job.request_fingerprint,
+            status=job.status,
+        )
+        for job in JOBS.values()
+        if job.knowledge_id and job.request_fingerprint
+    ]
+
+
+def _job_from_request(
+    *,
+    command: list[str],
+    payload: dict[str, Any],
+    analysis_requested: bool,
+    analysis_skip_reason: str,
+    processing_profile: str,
+    asr_route: str,
+    identity_schema_version: str,
+    knowledge_id: str,
+    request_fingerprint: str,
+    duplicate: DuplicateDecision,
+) -> Job:
+    return Job(
+        id=uuid.uuid4().hex[:12],
+        command=command,
+        analysis_profile=str(payload.get("mode") or "summary"),
+        processing_profile=processing_profile,
+        analysis_requested=analysis_requested,
+        analysis_status="pending" if analysis_requested else "skipped",
+        analysis_skip_reason=analysis_skip_reason,
+        transcript_only=not analysis_requested,
+        transcript_route_requested=asr_route,
+        identity_schema_version=identity_schema_version,
+        knowledge_id=knowledge_id,
+        request_fingerprint=request_fingerprint,
+        duplicate_kind=duplicate.kind.value,
+        duplicate_matched_task_id=duplicate.matched_task_id,
+        duplicate_matched_knowledge_id=duplicate.matched_knowledge_id,
+        duplicate_allowed_actions=list(duplicate.allowed_actions),
+    )
+
+
+def _reuse_completed_duplicate(
+    *,
+    payload: dict[str, Any],
+    matched_job: Job,
+    duplicate: DuplicateDecision,
+    analysis_requested: bool,
+    analysis_skip_reason: str,
+    processing_profile: str,
+    asr_route: str,
+    identity_schema_version: str,
+    knowledge_id: str,
+    request_fingerprint: str,
+) -> Job:
+    if not matched_job.output_dir:
+        raise ValueError("已完成任务缺少可复用的知识包路径。")
+    now = time.time()
+    job = _job_from_request(
+        command=[],
+        payload=payload,
+        analysis_requested=analysis_requested,
+        analysis_skip_reason=analysis_skip_reason,
+        processing_profile=processing_profile,
+        asr_route=asr_route,
+        identity_schema_version=identity_schema_version,
+        knowledge_id=knowledge_id,
+        request_fingerprint=request_fingerprint,
+        duplicate=duplicate,
+    )
+    job.status = "success"
+    job.returncode = 0
+    job.started_at = now
+    job.finished_at = now
+    job.output_dir = matched_job.output_dir
+    job.cli_task_id = matched_job.cli_task_id
+    job.analysis_status = matched_job.analysis_status
+    job.analysis_provider = matched_job.analysis_provider
+    job.analysis_model = matched_job.analysis_model
+    job.transcript_status = matched_job.transcript_status
+    job.transcript_provider = matched_job.transcript_provider
+    job.transcript_model = matched_job.transcript_model
+    job.transcript_actual_provider = matched_job.transcript_actual_provider
+    job.transcript_actual_device = matched_job.transcript_actual_device
+    job.logs.append(f"Reused completed task {matched_job.id}.")
+    with JOBS_LOCK:
+        JOBS[job.id] = job
+        try:
+            _persist_job(job, strict=True)
+        except OSError:
+            JOBS.pop(job.id, None)
+            raise
+    return job
+
+
 def start_job(payload: dict[str, Any]) -> Job:
     ensure_data_directory_writable()
     analysis_requested, analysis_skip_reason = _analysis_request_from_payload(payload)
+    command = build_cli_command(payload)
+    source_type, source = _payload_source(payload)
+    processing_profile = normalize_processing_profile(str(payload.get("processingProfile") or "complete"))
+    asr_route = str(payload.get("asr_route") or payload.get("asrRoute") or "cloud")
+    identity = build_input_knowledge_identity(
+        source,
+        is_url=source_type == "url",
+        dimensions=_request_dimensions_from_payload(
+            payload,
+            analysis_requested=analysis_requested,
+            processing_profile=processing_profile,
+            asr_route=asr_route,
+        ),
+    )
+    with JOBS_LOCK:
+        duplicate = detect_duplicate(identity, _task_identity_records())
+        duplicate_action = _duplicate_action_from_payload(payload)
+        matched_job = _matched_duplicate_job(duplicate)
+        if duplicate_action and not duplicate.detected:
+            raise ValueError("duplicateAction 只能用于已检测到的重复任务。")
+        if duplicate_action and duplicate_action not in duplicate.allowed_actions:
+            raise ValueError("duplicateAction 不适用于当前重复任务状态。")
+        if duplicate.kind is DuplicateKind.ACTIVE_EXACT:
+            raise DuplicateTaskError(duplicate)
+        if duplicate_action == "reject":
+            raise DuplicateTaskError(duplicate, "duplicate task rejected")
+        if duplicate_action == "reuse":
+            if not matched_job:
+                raise ValueError("未找到可复用的重复任务。")
+            return _reuse_completed_duplicate(
+                payload=payload,
+                matched_job=matched_job,
+                duplicate=duplicate,
+                analysis_requested=analysis_requested,
+                analysis_skip_reason=analysis_skip_reason,
+                processing_profile=processing_profile,
+                asr_route=asr_route,
+                identity_schema_version=identity.schema_version,
+                knowledge_id=identity.knowledge_id,
+                request_fingerprint=identity.request_fingerprint,
+            )
+        if duplicate_action == "resume":
+            if not matched_job:
+                raise ValueError("未找到可恢复的重复任务。")
+            command = _build_resume_command(matched_job.cli_task_id)
     if analysis_requested and not ProviderConfigResolver(
         WEB_PROVIDER_CONFIG
     ).resolve("deepseek").configured:
         raise ValueError(
             "DeepSeek 尚未配置（config_required）；请配置后运行分析，"
             "或明确选择“仅转写”。"
-        )
-    command = build_cli_command(payload)
+    )
     env_overrides = ProviderConfigResolver(WEB_PROVIDER_CONFIG).env_overrides()
-    job = Job(
-        id=uuid.uuid4().hex[:12],
+    job = _job_from_request(
         command=command,
-        analysis_profile=str(payload.get("mode") or "summary"),
-        processing_profile=normalize_processing_profile(str(payload.get("processingProfile") or "complete")),
+        payload=payload,
         analysis_requested=analysis_requested,
-        analysis_status="pending" if analysis_requested else "skipped",
         analysis_skip_reason=analysis_skip_reason,
-        transcript_only=not analysis_requested,
-        transcript_route_requested=str(
-            payload.get("asr_route") or payload.get("asrRoute") or "cloud"
-        ),
+        processing_profile=processing_profile,
+        asr_route=asr_route,
+        identity_schema_version=identity.schema_version,
+        knowledge_id=identity.knowledge_id,
+        request_fingerprint=identity.request_fingerprint,
+        duplicate=duplicate,
     )
     with JOBS_LOCK:
         JOBS[job.id] = job
@@ -418,7 +674,8 @@ def _run_job(job: Job) -> None:
         job.returncode = process.wait()
         if not job.output_dir:
             job.output_dir = _find_new_output_dir(before)
-        job.knowledge_id = Path(job.output_dir).name if job.output_dir else ""
+        if not job.knowledge_id and job.output_dir:
+            job.knowledge_id = Path(job.output_dir).name
         job.status = "success" if job.returncode == 0 else "failed"
         if job.returncode != 0 and not job.error:
             job.error = f"CLI 退出码：{job.returncode}"
@@ -445,6 +702,9 @@ def _handle_cli_output_line(job: Job, line: str) -> None:
     event = str(payload.get("event"))
     if event == "task_created":
         job.cli_task_id = str(payload.get("task_id") or "")
+        job.knowledge_id = str(payload.get("knowledge_id") or job.knowledge_id)
+        job.identity_schema_version = str(payload.get("identity_schema_version") or job.identity_schema_version)
+        job.request_fingerprint = str(payload.get("request_fingerprint") or job.request_fingerprint)
         job.analysis_profile = str(payload.get("analysis_profile") or job.analysis_profile)
         job.processing_profile = normalize_processing_profile(
             str(payload.get("processing_profile") or job.processing_profile)
@@ -453,6 +713,8 @@ def _handle_cli_output_line(job: Job, line: str) -> None:
         result = payload["result"]
         job.output_dir = str(result.get("output_dir") or "")
         job.knowledge_id = str(result.get("knowledge_id") or "")
+        job.identity_schema_version = str(result.get("identity_schema_version") or job.identity_schema_version)
+        job.request_fingerprint = str(result.get("request_fingerprint") or job.request_fingerprint)
         job.analysis_profile = str(result.get("analysis_profile") or job.analysis_profile)
         job.processing_profile = normalize_processing_profile(
             str(result.get("processing_profile") or job.processing_profile)
@@ -711,6 +973,12 @@ def _snapshot_job(job: Job) -> Job:
         logs=list(job.logs),
         cli_task_id=job.cli_task_id,
         knowledge_id=job.knowledge_id,
+        identity_schema_version=job.identity_schema_version,
+        request_fingerprint=job.request_fingerprint,
+        duplicate_kind=job.duplicate_kind,
+        duplicate_matched_task_id=job.duplicate_matched_task_id,
+        duplicate_matched_knowledge_id=job.duplicate_matched_knowledge_id,
+        duplicate_allowed_actions=list(job.duplicate_allowed_actions),
         output_dir=job.output_dir,
         error=job.error,
     )
@@ -763,12 +1031,13 @@ def clear_provider_config(provider: str) -> dict[str, Any]:
 
 def test_provider_config(payload: dict[str, Any]) -> dict[str, Any]:
     provider_name = str(payload.get("provider") or "")
+    current = ProviderConfigResolver(WEB_PROVIDER_CONFIG).resolve(provider_name)
     temporary_store = WebProviderConfigStore()
     temporary_store.set_config(
         provider_name,
-        api_key=str(payload.get("apiKey") or ""),
-        base_url=str(payload.get("baseUrl") or ""),
-        model=str(payload.get("model") or ""),
+        api_key=str(payload.get("apiKey") or "") or current.api_key,
+        base_url=str(payload.get("baseUrl") or "") or current.base_url,
+        model=str(payload.get("model") or "") or current.model,
     )
     resolver = ProviderConfigResolver(temporary_store)
     normalized_provider = resolver.resolve(provider_name).provider
@@ -839,7 +1108,13 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "lastSegmentEnd": job.last_segment_end,
         "transcriptProgress": job.transcript_progress,
         "logs": [],
-        "knowledgeId": job.knowledge_id if output_available else "",
+        "knowledgeId": job.knowledge_id if (output_available or not job.output_dir) else "",
+        "duplicateDecision": {
+            "kind": job.duplicate_kind,
+            "matchedTaskId": job.duplicate_matched_task_id,
+            "matchedKnowledgeId": job.duplicate_matched_knowledge_id,
+            "allowedActions": list(job.duplicate_allowed_actions),
+        },
         "outputFiles": output_files,
         "error": _product_message(job.error),
     }
@@ -974,7 +1249,8 @@ def list_library_items() -> list[dict[str, Any]]:
         )
         items.append(
             {
-                "id": directory.name,
+                "id": str(manifest.get("knowledge_id") or directory.name),
+                "legacy_id": directory.name if str(manifest.get("knowledge_id") or directory.name) != directory.name else "",
                 "title": source.get("title") or metadata.get("title") or directory.name,
                 "platform": source.get("platform") or metadata.get("source") or "unknown",
                 "sourceType": source.get("source_type") or "unknown",
@@ -1070,7 +1346,8 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
         inspection.analysis_status == "success"
         and meaningful_analysis(analysis)
     )
-    encoded_id = quote(knowledge_id, safe="")
+    public_knowledge_id = str(manifest.get("knowledge_id") or knowledge_id)
+    encoded_id = quote(public_knowledge_id, safe="")
     files = {
         name: f"/api/library/{encoded_id}/file/{quote(name, safe='')}"
         for name in sorted(LIBRARY_FILES)
@@ -1097,8 +1374,9 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
         normalized_platform = "generic" if external_url else "local"
     video_id = str((embed or {}).get("videoId") or source.get("video_id") or metadata.get("video_id") or "")
     payload = {
-        "id": knowledge_id,
-        "knowledge_id": knowledge_id,
+        "id": public_knowledge_id,
+        "knowledge_id": public_knowledge_id,
+        "legacy_id": directory.name if public_knowledge_id != directory.name else "",
         "source_type": "online_video" if external_url and not media_available else "local",
         "platform": normalized_platform,
         "source_url": external_url,
@@ -1440,9 +1718,17 @@ def resolve_library_dir(knowledge_id: str) -> Path:
     if not decoded or decoded in {".", ".."} or "/" in decoded or "\\" in decoded:
         raise ValueError("知识包 ID 不合法。")
     candidate = (OUTPUT_ROOT / decoded).resolve()
-    if candidate.parent != OUTPUT_ROOT.resolve() or not _is_knowledge_package(candidate):
-        raise FileNotFoundError(decoded)
-    return candidate
+    output_root = OUTPUT_ROOT.resolve()
+    if candidate.parent == output_root and _is_knowledge_package(candidate):
+        return candidate
+    if OUTPUT_ROOT.exists():
+        for directory in OUTPUT_ROOT.iterdir():
+            if not _is_knowledge_package(directory):
+                continue
+            manifest = _load_json_file(directory / "manifest.json")
+            if str(manifest.get("knowledge_id") or "") == decoded:
+                return directory.resolve()
+    raise FileNotFoundError(decoded)
 
 
 def delete_knowledge_packages(knowledge_ids: list[str]) -> list[str]:
@@ -1781,6 +2067,9 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
             job = start_job(payload)
+        except DuplicateTaskError as exc:
+            self._send_json({"error": str(exc), "duplicate": _duplicate_payload(exc.decision)}, HTTPStatus.CONFLICT)
+            return
         except ValueError as exc:
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return

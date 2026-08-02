@@ -18,6 +18,7 @@ from .config import load_config, resolve_output_root
 from .diagnostics import run_doctor
 from .exporters import export_directory_to_vault, render_directory_export, selection_for_request
 from .exporters.obsidian_exporter import safe_export_filename
+from .knowledge_identity import KnowledgeRequestDimensions, build_input_knowledge_identity
 from .knowledge_validation import inspect_knowledge_package
 from .network import apply_network_proxy_env
 from .pipeline import PipelineOrchestrator
@@ -69,6 +70,43 @@ def normalize_backend(backend: str | None) -> str:
     return normalized
 
 
+def _request_dimensions(
+    *,
+    language: str,
+    analysis_profile: str,
+    processing_profile: str,
+    no_summary: bool,
+    comments: bool,
+    sample_seconds: int | None,
+    transcript_group_seconds: int,
+    asr_route: str,
+    asr_fallback_enabled: bool,
+    generate_frames: bool,
+) -> KnowledgeRequestDimensions:
+    return KnowledgeRequestDimensions(
+        language=language,
+        analysis_profile=analysis_profile,
+        processing_profile=processing_profile,
+        transcript_only=no_summary,
+        comments_enabled=comments,
+        sample_seconds=sample_seconds,
+        transcript_group_seconds=transcript_group_seconds,
+        asr_route=asr_route,
+        asr_fallback_enabled=asr_fallback_enabled,
+        generate_frames=generate_frames,
+    )
+
+
+def _validate_transcript_group_seconds(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if value < 15:
+        raise UserFacingError("--transcript-group-seconds 不能小于 15。")
+    if value > 300:
+        raise UserFacingError("--transcript-group-seconds 不能大于 300。")
+    return int(value)
+
+
 def run_pipeline(
     url: Optional[str] = None,
     file: Optional[Path] = None,
@@ -84,6 +122,7 @@ def run_pipeline(
     config: Path = Path("config.example.json"),
     generate_frames: bool = True,
     sample_seconds: int | None = None,
+    transcript_group_seconds: int | None = None,
     *,
     task_id: str | None = None,
     emitter: CliEmitter | None = None,
@@ -107,10 +146,34 @@ def run_pipeline(
     if language != cfg.language:
         cfg = cfg.model_copy(update={"language": language})
     try:
+        resolved_transcript_group_seconds = _validate_transcript_group_seconds(
+            transcript_group_seconds
+        ) or cfg.transcript_group_seconds
+    except UserFacingError as exc:
+        raise ExitWithCode(ExitCode.USAGE_OR_CONFIG, str(exc)) from exc
+    if resolved_transcript_group_seconds != cfg.transcript_group_seconds:
+        cfg = cfg.model_copy(update={"transcript_group_seconds": resolved_transcript_group_seconds})
+    try:
         summary_backend = normalize_backend(backend or cfg.summary_backend)
         analysis_mode = normalize_mode(mode)
         resolved_processing_profile = normalize_processing_profile(processing_profile)
         export_mode = normalize_export(export)
+        identity = build_input_knowledge_identity(
+            str(url or file),
+            is_url=bool(url),
+            dimensions=_request_dimensions(
+                language=language,
+                analysis_profile=analysis_mode,
+                processing_profile=resolved_processing_profile,
+                no_summary=no_summary,
+                comments=comments,
+                sample_seconds=sample_seconds,
+                transcript_group_seconds=resolved_transcript_group_seconds,
+                asr_route=asr_route,
+                asr_fallback_enabled=asr_fallback_enabled,
+                generate_frames=generate_frames,
+            ),
+        )
     except (UserFacingError, ValueError) as exc:
         raise ExitWithCode(ExitCode.USAGE_OR_CONFIG, str(exc)) from exc
 
@@ -130,6 +193,7 @@ def run_pipeline(
             log_callback=emitter.diagnostic,
             event_callback=lambda event, **payload: emitter.event(event, **payload),
             task_id=task_id,
+            knowledge_identity=identity,
         ).run(str(url or file), is_url=bool(url))
     except UserFacingError as exc:
         message = str(exc)
@@ -140,7 +204,9 @@ def run_pipeline(
 
     return {
         "task_id": package.manifest.task_id,
-        "knowledge_id": package.output_dir.name,
+        "knowledge_id": package.manifest.knowledge_id or package.output_dir.name,
+        "identity_schema_version": package.manifest.identity_schema_version,
+        "request_fingerprint": package.manifest.request_fingerprint,
         "output_dir": str(package.output_dir),
         "status": package.manifest.status,
         "analysis_profile": package.manifest.analysis_profile,
@@ -198,6 +264,7 @@ def execute_analyze(
     config: Path = DEFAULT_CONFIG,
     generate_frames: bool = True,
     sample_seconds: int | None = None,
+    transcript_group_seconds: int | None = None,
     json_output: bool = False,
     jsonl_output: bool = False,
     task_id: str | None = None,
@@ -232,8 +299,31 @@ def execute_analyze(
         "config": str(config),
         "generate_frames": generate_frames,
         "sample_seconds": sample_seconds,
+        "transcript_group_seconds": transcript_group_seconds,
     }
     try:
+        cfg = load_config(config)
+        language = lang or cfg.language
+        resolved_transcript_group_seconds = _validate_transcript_group_seconds(
+            transcript_group_seconds
+        ) or cfg.transcript_group_seconds
+        analysis_mode = normalize_mode(mode)
+        identity = build_input_knowledge_identity(
+            source,
+            is_url=source_type == "url",
+            dimensions=_request_dimensions(
+                language=language,
+                analysis_profile=analysis_mode,
+                processing_profile=resolved_processing_profile,
+                no_summary=no_summary,
+                comments=comments,
+                sample_seconds=sample_seconds,
+                transcript_group_seconds=resolved_transcript_group_seconds,
+                asr_route=asr_route,
+                asr_fallback_enabled=asr_fallback_enabled,
+                generate_frames=generate_frames,
+            ),
+        )
         if resumed:
             record = store.load(resolved_task_id)
             record.status = "running"
@@ -249,6 +339,9 @@ def execute_analyze(
                 options=options,
                 status="running",
             )
+        record.identity_schema_version = identity.schema_version
+        record.knowledge_id = identity.knowledge_id
+        record.request_fingerprint = identity.request_fingerprint
         store.save(record)
     except (OSError, UserFacingError, ValueError) as exc:
         emitter.failure(ExitCode.USAGE_OR_CONFIG, str(exc), task_id=resolved_task_id)
@@ -261,6 +354,9 @@ def execute_analyze(
         source_type=source_type,
         analysis_profile=mode,
         processing_profile=resolved_processing_profile,
+        knowledge_id=record.knowledge_id,
+        identity_schema_version=record.identity_schema_version,
+        request_fingerprint=record.request_fingerprint,
     )
     try:
         data = run_pipeline(
@@ -278,6 +374,7 @@ def execute_analyze(
             config=config,
             generate_frames=generate_frames,
             sample_seconds=sample_seconds,
+            transcript_group_seconds=transcript_group_seconds,
             task_id=resolved_task_id,
             emitter=emitter,
         )
@@ -297,6 +394,8 @@ def execute_analyze(
     record.status = "completed"
     record.output_dir = str(data["output_dir"])
     record.knowledge_id = str(data["knowledge_id"])
+    record.identity_schema_version = str(data.get("identity_schema_version") or record.identity_schema_version)
+    record.request_fingerprint = str(data.get("request_fingerprint") or record.request_fingerprint)
     record.exit_code = int(ExitCode.SUCCESS)
     try:
         store.save(record)
@@ -344,6 +443,7 @@ def execute_resume(
         config=Path(str(options.get("config") or DEFAULT_CONFIG)),
         generate_frames=bool(options.get("generate_frames", True)),
         sample_seconds=_optional_int(options.get("sample_seconds")),
+        transcript_group_seconds=_optional_int(options.get("transcript_group_seconds")),
         json_output=json_output,
         jsonl_output=jsonl_output,
         task_id=task_id,
@@ -473,6 +573,7 @@ def _run_argparse() -> None:
     parser.add_argument("--no-asr-fallback", action="store_true")
     parser.add_argument("--no-frames", action="store_true", help="跳过关键帧生成。")
     parser.add_argument("--sample-seconds", type=int, help="仅处理开头指定秒数，用于快速链路验证。")
+    parser.add_argument("--transcript-group-seconds", type=int, help="字幕分组目标秒数，最低 15，默认读取配置。")
     parser.add_argument("--config", type=Path, default=Path("config.example.json"), help="配置文件路径。")
     args = parser.parse_args()
     try:
@@ -491,6 +592,7 @@ def _run_argparse() -> None:
             config=args.config,
             generate_frames=not args.no_frames,
             sample_seconds=args.sample_seconds,
+            transcript_group_seconds=args.transcript_group_seconds,
         )
     except ExitWithCode as exc:
         raise SystemExit(exc.code) from exc
@@ -521,6 +623,7 @@ if typer:
         config: Path = typer.Option(DEFAULT_CONFIG, "--config"),
         no_frames: bool = typer.Option(False, "--no-frames"),
         sample_seconds: Optional[int] = typer.Option(None, "--sample-seconds"),
+        transcript_group_seconds: Optional[int] = typer.Option(None, "--transcript-group-seconds"),
         json_output: bool = typer.Option(False, "--json", help="输出单个 JSON 结果。"),
         jsonl_output: bool = typer.Option(False, "--jsonl", help="逐行输出 JSON 事件。"),
     ) -> None:
@@ -539,6 +642,7 @@ if typer:
             config=config,
             generate_frames=not no_frames,
             sample_seconds=sample_seconds,
+            transcript_group_seconds=transcript_group_seconds,
             json_output=json_output,
             jsonl_output=jsonl_output,
         )
@@ -646,6 +750,7 @@ if typer:
         config: Path = typer.Option(DEFAULT_CONFIG, "--config"),
         no_frames: bool = typer.Option(False, "--no-frames"),
         sample_seconds: Optional[int] = typer.Option(None, "--sample-seconds"),
+        transcript_group_seconds: Optional[int] = typer.Option(None, "--transcript-group-seconds"),
         json_output: bool = typer.Option(False, "--json"),
         jsonl_output: bool = typer.Option(False, "--jsonl"),
     ) -> None:
@@ -668,6 +773,7 @@ if typer:
             config=config,
             generate_frames=not no_frames,
             sample_seconds=sample_seconds,
+            transcript_group_seconds=transcript_group_seconds,
             json_output=json_output,
             jsonl_output=jsonl_output,
         )

@@ -134,6 +134,24 @@ class ProviderConfigTests(unittest.TestCase):
             )["configured"]
         )
 
+    def test_web_test_reuses_saved_session_key_when_input_is_empty(self) -> None:
+        web.WEB_PROVIDER_CONFIG.set_config(
+            "deepseek",
+            api_key="unit-session-secret-9999",
+            base_url="https://example.test",
+            model="model-a",
+        )
+
+        with patch("src.web.test_provider_connection", return_value={"ok": True, "durationMs": 1}) as test:
+            result = web.test_provider_config(
+                {"provider": "deepseek", "apiKey": "", "baseUrl": "", "model": ""}
+            )
+
+        provider = test.call_args.args[0]
+        self.assertEqual(provider.api_key, "unit-session-secret-9999")
+        self.assertEqual(provider.model_name, "model-a")
+        self.assertTrue(result["test"]["ok"])
+
     def test_env_overrides_are_available_for_web_subprocess_without_job_record(self) -> None:
         store = WebProviderConfigStore()
         store.set_config("deepseek", api_key="session-secret", model="session-model")

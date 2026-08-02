@@ -1,22 +1,19 @@
 # Test Baseline
 
-Last verified: 2026-07-30
+Last verified: 2026-08-02
 
-This baseline applies to the uncommitted v1.4.5 candidate on
-`feat/v1.4.5-portable-release`. A future commit or rebuilt artifact must rerun
-the same matrix.
+This baseline applies to the uncommitted v1.4.6 identity, duplicate, API-config,
+package-claim, recovery, and task-level transcript grouping work on
+`feat/v1.4.6-knowledge-identity-recovery`.
 
 ## Environment
 
 - Project interpreter: Python 3.12.13 from `.venv`.
-- The current shell does not expose a system `python` command on `PATH`.
 - Node.js is available for JavaScript syntax validation.
 - Tests use repository fixtures and mocks; passing unit tests do not substitute
-  for a clean-Windows product smoke check or live third-party service tests.
+  for clean-Windows product smoke checks or live third-party service tests.
 
 ## Required command matrix
-
-Use the project interpreter when `python` is not on `PATH`:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover
@@ -27,71 +24,78 @@ node --check src/web_ui/app.js
 git diff --check
 ```
 
-Verified result:
+Latest verification:
 
 | Check | Result |
 |---|---|
-| Full unit suite | PASS — 345 tests |
-| `compileall src` | PASS |
+| Full unit suite | PASS, 382 tests |
+| v1.4.6 affected suite | PASS, 196 tests |
+| Default `compileall src` | PASS |
+| `compileall src` with `PYTHONPYCACHEPREFIX=.local/codex_pycache` | PASS |
 | CLI help | PASS |
 | Web help | PASS |
 | Frontend JavaScript syntax | PASS |
 | Git whitespace/error check | PASS |
 
-The current baseline is 345 tests. Older documentation mentioning 312 tests and
-the handoff clue mentioning 342 tests are superseded by this run.
+Focused v1.4.6 command:
 
-The CLI help command returned exit code 0, but the current PowerShell capture
-rendered its Chinese help text as mojibake. This is a console-encoding
-observation, not a unit-test failure; the clean-Windows launcher smoke test
-should confirm user-visible text independently.
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_knowledge_identity.py"
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_package_claim.py"
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_pipeline_claim.py"
+.\.venv\Scripts\python.exe -m unittest tests.test_cli_contract tests.test_job_store tests.test_main tests.test_web tests.test_provider_config
+```
+
+Equivalent focused-module command:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_knowledge_identity tests.test_package_claim tests.test_pipeline_claim tests.test_pipeline_repair tests.test_cli_contract tests.test_job_store tests.test_main tests.test_web tests.test_web_ui tests.test_provider_config tests.test_transcripts
+```
+
+Result: PASS, 196 tests.
+
+Coverage includes stable identity, request fingerprints, duplicate decisions,
+package claim/stale recovery, stale-owner overwrite prevention, Pipeline claim
+blocking/release, CLI/Web identity persistence, Web active duplicate rejection,
+explicit completed-duplicate reuse, recoverable-duplicate resume,
+stage-aware source/transcript repair for incomplete packages,
+stable/legacy knowledge-package lookup, Web duplicate decision controls,
+API-config session-key test reuse, and task-level transcript grouping with
+30-second default, 15-second minimum validation, Web selection, CLI propagation,
+and request-fingerprint differentiation.
+
+Runtime audit evidence on 2026-08-02:
+
+- CLI `resume` completed against a deliberately incomplete package while
+  reusing the existing source, metadata, and raw transcript artifacts; the
+  manifest recorded cache hits for `resolve_source`, `collect_metadata`, and
+  `acquire_transcript`.
+- In-app Web smoke showed the task-level grouping selector with default `30`
+  and options `15/30/60/120`; submitting `15` propagated
+  `--transcript-group-seconds 15` to the CLI command.
+- A second identical Web request during an active task rendered the duplicate
+  decision panel and its `取消` action hid the panel without creating a second
+  task.
+
+Full-suite command:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover
+```
+
+Result: PASS, 382 tests.
+
+The default and prefixed `compileall src` checks both pass in the latest run.
 
 ## Release artifact verification
 
-Command:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\verify_release.py
-```
-
-Result: PASS.
-
-The verifier confirms:
-
-- base ZIP SHA-256 matches its sidecar;
-- required base files are present;
-- forbidden release content scan passes;
-- product launcher tokens are present;
-- package version is 1.4.5;
-- bundled FFmpeg and FFprobe execute;
-- model extension SHA-256 matches its sidecar;
-- required local ASR model files are present;
-- model download cache metadata is absent.
-
-Additional read-only inspection confirms the base and model ZIPs contain no
-`.env`, `.git`, or `start_dev.bat` entries.
-
-## Freeze gates not covered by unit tests
-
-Before declaring `v1.4.5-beta.1` frozen:
-
-- user reviews and commits the intended stable baseline;
-- rebuild both applicable release artifacts from that exact commit;
-- verify artifact hashes and package-to-commit provenance;
-- run the complete matrix again from a clean checkout;
-- run a clean-Windows first-launch test with no pre-existing `.venv`;
-- verify the default product UI reveals no private paths, raw process logs,
-  Provider/model routing, or credentials;
-- verify local knowledge data is written only to the intended user-writable
-  directory;
-- verify base-only behavior and model-extension installation separately;
-- document any live Provider or platform checks as separate, credential-free
-  acceptance evidence.
+Release ZIPs belong to the v1.4.5 beta line. Rebuilding or redistributing them
+is a separate task and must be done only from the intended stable source state.
 
 ## Failure handling
 
 - Do not lower test counts by excluding failures.
 - Do not rewrite historical packages to make inspection pass.
 - Treat flaky, timeout, environment, and external-service failures separately.
-- A release verifier pass does not authorize public distribution of the current
+- A release verifier pass does not authorize public distribution of a
   source-containing ZIP.

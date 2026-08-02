@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from src.cli_contract import CLI_SCHEMA_VERSION, CliEmitter, ExitCode
+from src.cli_contract import CLI_SCHEMA_VERSION, CliEmitter, ExitCode, classify_error
 from src.cli_tasks import CliTaskRecord, CliTaskStore
 from src.config import AppConfig, VIEWLEDGE_OUTPUT_ROOT_ENV, load_config, resolve_output_root
 from src.domain.models import AnalysisResult, ProcessingManifest
@@ -81,6 +81,12 @@ class ExitCodeContractTests(unittest.TestCase):
         self.assertNotIn("secret-value", stderr.getvalue())
         self.assertIn("[REDACTED]", stdout.getvalue())
         self.assertEqual(json.loads(stdout.getvalue())["data"]["task_id"], "task")
+
+    def test_package_claim_conflict_is_retryable(self) -> None:
+        self.assertEqual(
+            classify_error("knowledge package claim locked"),
+            ExitCode.RETRYABLE_FAILURE,
+        )
 
 
 class SchemaCompatibilityTests(unittest.TestCase):
@@ -191,6 +197,7 @@ class PublicCommandTests(unittest.TestCase):
             result = self.runner.invoke(app, [command, "--help"])
             self.assertIn("--jsonl", result.stdout, command)
         self.assertIn("--processing-profile", self.runner.invoke(app, ["analyze", "--help"]).stdout)
+        self.assertIn("--transcript-group-seconds", self.runner.invoke(app, ["analyze", "--help"]).stdout)
 
     def test_analyze_rejects_invalid_processing_profile(self) -> None:
         result = self.runner.invoke(
@@ -255,6 +262,9 @@ class PublicCommandTests(unittest.TestCase):
         self.assertEqual([item["event"] for item in payloads], ["task_created", "task_completed"])
         self.assertEqual(payloads[0]["analysis_profile"], "summary")
         self.assertEqual(payloads[0]["processing_profile"], "complete")
+        self.assertTrue(payloads[0]["knowledge_id"].startswith("k1-web-"))
+        self.assertEqual(payloads[0]["identity_schema_version"], "1.0")
+        self.assertTrue(payloads[0]["request_fingerprint"])
         self.assertEqual(payloads[1]["result"]["processing_profile"], "complete")
         self.assertEqual(len(records), 1)
 

@@ -41,7 +41,7 @@
   "ffprobe_path": "",
   "keep_temp_files": false,
   "generate_frames": true,
-  "transcript_group_seconds": 60,
+  "transcript_group_seconds": 30,
   "transcript_group_max_segments": 12,
   "obsidian_vault_path": "",
   "obsidian_vault_name": "",

@@ -56,6 +56,12 @@ class Job:
     logs: list[str] = field(default_factory=list)
     cli_task_id: str = ""
     knowledge_id: str = ""
+    identity_schema_version: str = ""
+    request_fingerprint: str = ""
+    duplicate_kind: str = "none"
+    duplicate_matched_task_id: str = ""
+    duplicate_matched_knowledge_id: str = ""
+    duplicate_allowed_actions: list[str] = field(default_factory=lambda: ["create"])
     output_dir: str = ""
     error: str = ""
     error_code: str = ""
@@ -133,6 +139,17 @@ class Job:
             logs=[str(item) for item in value.get("logs", []) if isinstance(item, str)][-MAX_LOG_LINES:],
             cli_task_id=str(value.get("cli_task_id") or ""),
             knowledge_id=str(value.get("knowledge_id") or ""),
+            identity_schema_version=str(value.get("identity_schema_version") or ""),
+            request_fingerprint=str(value.get("request_fingerprint") or ""),
+            duplicate_kind=str(value.get("duplicate_kind") or "none"),
+            duplicate_matched_task_id=str(value.get("duplicate_matched_task_id") or ""),
+            duplicate_matched_knowledge_id=str(value.get("duplicate_matched_knowledge_id") or ""),
+            duplicate_allowed_actions=[
+                str(item)
+                for item in value.get("duplicate_allowed_actions", ["create"])
+                if isinstance(item, (str, int, float))
+            ]
+            or ["create"],
             output_dir=str(value.get("output_dir") or ""),
             error=str(value.get("error") or ""),
             error_code=str(value.get("error_code") or ""),

@@ -397,6 +397,7 @@ Obsidian 兼容 Markdown 副本：
 - `--asr-route`：无平台字幕时选择 `cloud`、`local_gpu` 或 `local_cpu`；旧请求默认 `cloud`。
 - `--no-asr-fallback`：关闭云端到本地 GPU/CPU，或本地 GPU 到 CPU 的安全回退。
 - `--sample-seconds`：只处理媒体开头指定秒数。
+- `--transcript-group-seconds`：设置字幕分组目标秒数，最低 15 秒；默认 30 秒，Web 可在新任务面板选择 15、30、60 或 120 秒。
 - `--no-frames`：跳过关键帧生成。
 - `--export obsidian`：生成 Obsidian 兼容 Markdown 副本。
 - `--comments`：同步公开评论并生成独立评论区洞察。该功能只读取公开评论；失败会记录为警告，不会让主摘要任务失败。

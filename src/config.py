@@ -61,8 +61,8 @@ class AppConfig(BaseModel):
     ffprobe_path: str = ""
     keep_temp_files: bool = False
     generate_frames: bool = True
-    transcript_group_seconds: int = 60
-    transcript_group_max_segments: int = 12
+    transcript_group_seconds: int = Field(default=30, ge=15, le=300)
+    transcript_group_max_segments: int = Field(default=12, ge=1, le=100)
     obsidian_vault_path: str = ""
     obsidian_vault_name: str = ""
     obsidian_export_subdir: str = "外源/视频"
