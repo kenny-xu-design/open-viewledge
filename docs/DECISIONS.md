@@ -290,3 +290,26 @@ analysis context, retrieval granularity, and exported grouped transcripts.
 
 Different grouping choices for the same source are therefore same-source
 revisions, not exact duplicates. Historical packages are not silently regrouped.
+
+## D034: Public Publication Is Explicitly Allowlisted
+
+v1.4.7 public output starts from a private, reviewed source-to-destination
+allowlist. The generator copies no implicit directories, refuses staging inside
+the private repository, and refuses a non-empty destination. A denylist scan is
+required as a second gate, but it never replaces the allowlist. This keeps the
+publication decision reviewable and prevents accidental inclusion of private
+history or source files.
+
+## D035: Public Schemas Have Independent Versioning
+
+Public Bridge Schemas use their own compatibility version (`1.0`) and live as
+implementation-independent fixtures. The private package version may change
+without changing the public Schema, and public clients must not import private
+modules or reproduce identity, Provider, prompt, Worker, or filesystem logic.
+
+## D036: Fresh History Is A Release Gate
+
+Future public repositories are created with fresh Git histories after boundary
+and licensing review. The v1.4.7 staging manifest records the private source
+revision for auditability only; it is not a permission to publish that history
+or to merge private commits into a public repository.

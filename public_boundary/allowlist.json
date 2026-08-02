@@ -1,0 +1,20 @@
+{
+  "manifest_version": "1",
+  "public_repository": "viewledge-clipper",
+  "schema_versions": {
+    "bridge_api": "1.0"
+  },
+  "fresh_history_required": true,
+  "private_history_reuse_forbidden": true,
+  "sensitive_scan_required": true,
+  "entries": [
+    {
+      "source": "public_boundary/schemas/bridge_api_v1.schema.json",
+      "destination": "schemas/bridge_api_v1.schema.json"
+    },
+    {
+      "source": "public_boundary/schemas/README.md",
+      "destination": "schemas/README.md"
+    }
+  ]
+}

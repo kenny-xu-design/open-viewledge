@@ -8,9 +8,9 @@ reproducible commands take precedence over older notes.
 ## Repository baseline
 
 - Repository role: private Viewledge core.
-- Current branch: `feat/v1.4.6-knowledge-identity-recovery`.
-- Branch point/current HEAD: `02b864b v1.4.5final`.
-- The branch currently has no upstream.
+- Current branch: `feat/v1.4.7-private-public-boundary`.
+- Branch point/current HEAD: `bae85c6 v1.4.6`.
+- The branch currently has no upstream and has no new commit yet.
 - Package version: `1.4.5`, defined by `src/__init__.py`.
 - No release tag was created during this audit.
 - The working tree is intentionally uncommitted. No staging, commit, push,
@@ -74,6 +74,24 @@ The current v1.4.6 working tree adds:
 Historical package directories remain `<title>_<source-id>/`. Stable
 `knowledge_id` is the manifest/API identifier, not the physical directory name.
 
+## v1.4.7 boundary milestone
+
+The branch is based exactly on the committed v1.4.6 baseline. The initial
+boundary tranche adds:
+
+- `public_boundary/allowlist.json` with explicit source-to-destination entries;
+- an implementation-independent Bridge API 1.0 Schema fixture and public note;
+- `scripts/public_boundary.py build`, which stages only allowlisted files into a
+  clean directory outside this repository and emits deterministic hashes;
+- `scripts/public_boundary.py scan`, which blocks sensitive values, private path
+  components, and private implementation references.
+- `scripts/public_boundary.py verify`, which checks the generated file set and
+  SHA-256 hashes before any handoff.
+
+The generator is private release tooling. No public repository, code split,
+public release artifact, or history transfer exists. Human boundary/licensing
+review and fresh-history publication remain future gates.
+
 ## Local-only development launcher
 
 `start_dev.bat` exists locally and is excluded by the repository-local
@@ -98,10 +116,10 @@ The v1.4.5 base ZIP and model extension:
 
 An earlier normalized comparison found 112 packaged files identical to the
 working tree at that time and one mismatch: `README.md` had changed after the
-ZIP was built. The current ZIP predates the uncommitted v1.4.6 changes and is
-not a v1.4.6 artifact. Tests are not shipped in the base ZIP. A frozen beta
-artifact must therefore be rebuilt from the user-approved stable commit and
-verified again.
+ZIP was built. The current ZIP predates the committed v1.4.6 changes and the
+current v1.4.7 boundary tranche, so it is not a v1.4.6 or v1.4.7 artifact.
+Tests are not shipped in the base ZIP. A frozen beta artifact must therefore be
+rebuilt from the user-approved stable commit and verified again.
 
 ## Test baseline
 
@@ -109,7 +127,7 @@ The current project interpreter is Python 3.12.13. The latest full suite
 reports:
 
 ```text
-Ran 382 tests
+Ran 386 tests
 OK
 ```
 

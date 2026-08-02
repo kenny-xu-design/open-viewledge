@@ -1,6 +1,6 @@
 # Repository Boundary
 
-Last updated: 2026-07-30
+Last updated: 2026-08-02
 
 This document defines the long-term private/public ownership boundary. It is a
 design and governance contract; it does not authorize repository creation or
@@ -67,6 +67,28 @@ Anything outside the publication allowlist is denied by default.
 7. Public repository commits never merge from private histories.
 8. A release manifest records source revision, public Schema versions, artifact
    hashes, dependency notices, and approval without exposing private history.
+
+## v1.4.7 boundary tooling
+
+The first v1.4.7 boundary milestone is represented by the private
+`public_boundary/allowlist.json` and `scripts/public_boundary.py` tooling. The
+allowlist is default-deny: every source file needs an explicit destination, and
+missing entries fail the build. The generator refuses an output directory inside
+the private repository or a non-empty output directory, then writes a
+deterministic `publication-manifest.json` containing the source revision,
+independent public Schema versions, and SHA-256 hashes.
+
+The generator runs a secondary sensitive-data scan over the clean staging
+directory. The scan rejects private path components, source archives, machine
+absolute paths, credentials, authorization/cookie headers, key-shaped values,
+and private module/prompt/Provider/Worker references. A passing scan is a gate,
+not publication approval: licensing review, human boundary review, fresh Git
+history, private build/signing, and release approval remain mandatory.
+
+The current allowlist contains only the implementation-independent Bridge API
+Schema fixture and its public usage note. It intentionally creates no public
+repository and does not copy private source, tests, prompts, models, or build
+outputs.
 
 ## Contract direction
 
@@ -140,6 +162,19 @@ must not directly ship:
 No packaging approach is assumed to make reverse engineering impossible.
 Packaging, signing, licensing, attribution, antivirus behavior, update and
 rollback must be reviewed before a public release.
+
+### No-source packaging comparison
+
+| Approach | Boundary result | Decision for v1.4.7 |
+|---|---|---|
+| Internal source ZIP | Ships private implementation, tests, prompts, and operational detail | Rejected for public release; remains private/trusted-user only |
+| Bundled desktop executable | Can reduce casual source exposure, but still embeds core behavior and requires private signing, dependency, and update review | Deferred; not a public boundary deliverable in v1.4.7 |
+| Thin public clipper + private Bridge/cloud | Public history contains only the reviewed browser client and public Schemas; processing and credentials remain private | Preferred public architecture for v1.4.7/v1.5.x |
+| Remote-only private service | Strongest core isolation, but requires account, quota, privacy, outage, and abuse controls | Deferred until private cloud/account milestones |
+
+The v1.4.7 decision is therefore to publish only the thin public client and
+implementation-independent Schemas after review. The private core remains a
+separate implementation and is not made public by packaging.
 
 ## Current audit limit
 

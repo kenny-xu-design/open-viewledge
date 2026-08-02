@@ -17,6 +17,11 @@ contracts. A documented future contract is not an implemented endpoint.
 Public consumers must never depend on the local Web API or private Python
 imports. The local Web API may evolve with the bundled UI.
 
+The reviewed public Schema fixture is maintained independently at
+`public_boundary/schemas/bridge_api_v1.schema.json`. It is copied only through
+the v1.4.7 allowlist generator; the fixture is not an import path into `src/`
+and does not define Provider, model, prompt, filesystem, or billing details.
+
 ## Implemented CLI contract
 
 Entry point:
@@ -187,7 +192,7 @@ future Bridge contract below.
 
 ## Public Bridge API design
 
-Target contract version: `1.0`.
+Target contract version: `1.0` (independent of the private core package version).
 
 ### Common rules
 

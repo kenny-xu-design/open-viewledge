@@ -81,7 +81,14 @@ Exit criteria:
 
 ## v1.4.7 — Private/public architecture boundary
 
-Status: design after v1.4.6.
+Status: implementation in progress on `feat/v1.4.7-private-public-boundary`.
+
+The first boundary milestone now has a reviewed allowlist, independent public
+Bridge Schema fixture, deterministic staging manifest, and secondary sensitive
+data scan. No public repository or public artifact has been created.
+
+The next gate is an independently reviewed clean staging run with `verify`,
+followed by the documented no-source packaging decision and licensing review.
 
 Scope:
 

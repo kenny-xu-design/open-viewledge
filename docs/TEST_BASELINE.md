@@ -2,9 +2,10 @@
 
 Last verified: 2026-08-02
 
-This baseline applies to the uncommitted v1.4.6 identity, duplicate, API-config,
-package-claim, recovery, and task-level transcript grouping work on
-`feat/v1.4.6-knowledge-identity-recovery`.
+This baseline applies to committed v1.4.6 identity, duplicate, API-config,
+package-claim, recovery, and task-level transcript grouping work plus the
+uncommitted v1.4.7 public-boundary tranche on
+`feat/v1.4.7-private-public-boundary`.
 
 ## Environment
 
@@ -28,8 +29,9 @@ Latest verification:
 
 | Check | Result |
 |---|---|
-| Full unit suite | PASS, 382 tests |
+| Full unit suite | PASS, 389 tests |
 | v1.4.6 affected suite | PASS, 196 tests |
+| v1.4.7 boundary suite | PASS, 7 tests |
 | Default `compileall src` | PASS |
 | `compileall src` with `PYTHONPYCACHEPREFIX=.local/codex_pycache` | PASS |
 | CLI help | PASS |
@@ -53,6 +55,16 @@ Equivalent focused-module command:
 ```
 
 Result: PASS, 196 tests.
+
+v1.4.7 boundary command:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_public_boundary
+```
+
+Result: PASS, 7 tests. The generator and `verify` command were exercised with a
+temporary staging directory at source revision `bae85c6`; they copied the two
+allowlisted Schema files, verified both hashes, and passed the secondary scan.
 
 Coverage includes stable identity, request fingerprints, duplicate decisions,
 package claim/stale recovery, stale-owner overwrite prevention, Pipeline claim
@@ -83,7 +95,7 @@ Full-suite command:
 .\.venv\Scripts\python.exe -m unittest discover
 ```
 
-Result: PASS, 382 tests.
+Result: PASS, 389 tests.
 
 The default and prefixed `compileall src` checks both pass in the latest run.
 
