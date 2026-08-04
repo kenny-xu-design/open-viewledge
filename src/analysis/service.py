@@ -9,6 +9,9 @@ from .schemas import AnalysisParseError, parse_analysis_response
 from .segmentation import AnalysisWindow, attach_segmentation, build_analysis_windows, reduce_window_results, route_segmentation_policy
 
 
+_STRUCTURED_ANALYSIS_MAX_TOKENS = 8192
+
+
 class AnalysisService:
     def __init__(self, provider: object) -> None:
         self.provider = provider
@@ -59,11 +62,19 @@ class AnalysisService:
         messages = [
             {
                 "role": "system",
-                "content": "你是视频内容分析助手。只基于提供的字幕，严格返回一个 JSON 对象，不得编造。",
+                "content": (
+                    "你是视频内容分析助手。只基于提供的字幕，严格返回一个完整、可解析且尽量紧凑的 JSON 对象；"
+                    "不要输出思考过程、Markdown code fence 或任何 JSON 之外的文本，不得编造。"
+                ),
             },
             {"role": "user", "content": request},
         ]
-        response = self.provider.complete(messages, json_mode=True, temperature=0.2, max_tokens=4096)
+        response = self.provider.complete(
+            messages,
+            json_mode=True,
+            temperature=0.2,
+            max_tokens=_STRUCTURED_ANALYSIS_MAX_TOKENS,
+        )
         max_duration = max((item.end for item in window.groups), default=0.0)
         try:
             return parse_analysis_response(
@@ -78,14 +89,27 @@ class AnalysisService:
                 coerce_timestamps=True,
             )
         except AnalysisParseError as first_error:
+            repair_reason = (
+                "上一个 JSON 在生成时达到输出上限，内容可能被截断。"
+                if response.finish_reason == "length"
+                else f"上一个 JSON 未通过校验：{first_error}。"
+            )
             repair_messages = messages + [
                 {"role": "assistant", "content": response.content},
                 {
                     "role": "user",
-                    "content": f"上一个 JSON 未通过校验：{first_error}。请修复并只返回完整 JSON 对象。",
+                    "content": (
+                        f"{repair_reason}请忽略上一次不完整内容，从头重新生成一个完整、可解析且尽量紧凑的 JSON 对象。"
+                        "只返回 JSON，不要输出 Markdown、解释或思考过程。"
+                    ),
                 },
             ]
-            repaired = self.provider.complete(repair_messages, json_mode=True, temperature=0.0, max_tokens=4096)
+            repaired = self.provider.complete(
+                repair_messages,
+                json_mode=True,
+                temperature=0.0,
+                max_tokens=_STRUCTURED_ANALYSIS_MAX_TOKENS,
+            )
             try:
                 return parse_analysis_response(
                     repaired.content,

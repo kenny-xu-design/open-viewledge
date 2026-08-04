@@ -29,9 +29,10 @@ Latest verification:
 
 | Check | Result |
 |---|---|
-| Full unit suite | PASS, 389 tests |
+| Full unit suite | PASS, 393 tests |
 | v1.4.6 affected suite | PASS, 196 tests |
 | v1.4.7 boundary suite | PASS, 7 tests |
+| Web UI contract suite | PASS, 48 tests |
 | Default `compileall src` | PASS |
 | `compileall src` with `PYTHONPYCACHEPREFIX=.local/codex_pycache` | PASS |
 | CLI help | PASS |
@@ -95,7 +96,7 @@ Full-suite command:
 .\.venv\Scripts\python.exe -m unittest discover
 ```
 
-Result: PASS, 389 tests.
+Result: PASS, 393 tests.
 
 The default and prefixed `compileall src` checks both pass in the latest run.
 

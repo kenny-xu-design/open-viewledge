@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from src.analysis.service import AnalysisService
 from src.analysis.schemas import AnalysisParseError, parse_analysis_response
 from src.domain.models import TranscriptGroup
-from src.defaults import DEFAULT_DEEPSEEK_MODEL
+from src.defaults import DEFAULT_DEEPSEEK_MODEL, normalize_deepseek_model
 from src.providers.llm import DeepSeekProvider, LLMResponse
 from src.utils import UserFacingError
 
@@ -102,6 +102,18 @@ class DeepSeekProviderTests(unittest.TestCase):
         provider = DeepSeekProvider(api_key="test-key", client=_client([]))
         self.assertEqual(provider.model_name, DEFAULT_DEEPSEEK_MODEL)
 
+    def test_console_version_label_is_normalized_to_api_model_id(self) -> None:
+        self.assertEqual(normalize_deepseek_model("DeepSeek-V4-Flash-0731"), "deepseek-v4-flash")
+        client = _client([_response('{"summary":"ok"}')])
+        provider = DeepSeekProvider(
+            api_key="test-key",
+            model_name="DeepSeek-V4-Flash-0731",
+            client=client,
+            prefer_env=False,
+        )
+        provider.complete([{"role": "user", "content": "ping"}])
+        self.assertEqual(client.chat.completions.calls[0]["model"], "deepseek-v4-flash")
+
     def test_json_completion_records_model_usage_and_format(self) -> None:
         client = _client([_response('{"summary":"ok"}', model="resolved-model")])
         provider = DeepSeekProvider(api_key="test-key", client=client)
@@ -113,6 +125,7 @@ class DeepSeekProviderTests(unittest.TestCase):
         self.assertEqual(result.usage["total_tokens"], 15)
         call = client.chat.completions.calls[0]
         self.assertEqual(call["response_format"], {"type": "json_object"})
+        self.assertEqual(call["extra_body"], {"thinking": {"type": "disabled"}})
         self.assertEqual(call["max_tokens"], 100)
 
     def test_empty_response_retries_then_succeeds(self) -> None:
@@ -209,6 +222,33 @@ class AnalysisServiceTests(unittest.TestCase):
 
         self.assertEqual(result.summary, "repaired")
         self.assertEqual(provider.calls, 2)
+
+    def test_truncated_json_is_repaired_with_fresh_compact_request(self) -> None:
+        class Provider:
+            name = "deepseek"
+            model_name = "deepseek-v4-flash"
+
+            def __init__(self) -> None:
+                self.calls = []
+
+            def complete(self, messages, **kwargs):
+                self.calls.append((messages, kwargs))
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        '{"summary":"截断',
+                        self.name,
+                        self.model_name,
+                        finish_reason="length",
+                    )
+                return LLMResponse('{"summary":"repaired"}', self.name, self.model_name)
+
+        provider = Provider()
+        group = TranscriptGroup(index=0, start=0, end=30, title="开场", text="字幕", segment_indexes=[0])
+        result = AnalysisService(provider).analyze([group], "summary", SimpleNamespace())
+
+        self.assertEqual(result.summary, "repaired")
+        self.assertEqual(provider.calls[0][1]["max_tokens"], 8192)
+        self.assertIn("达到输出上限", provider.calls[1][0][-1]["content"])
 
     def test_analysis_service_coerces_out_of_range_timestamps(self) -> None:
         class Provider:

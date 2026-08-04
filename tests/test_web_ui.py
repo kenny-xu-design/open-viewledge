@@ -58,6 +58,20 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("lastSidebarTrigger", self.js)
         self.assertIn("lastInspectorTrigger", self.js)
 
+    def test_sidebar_overlays_workspace_without_reserving_summary_column(self) -> None:
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", self.css)
+        self.assertIn("position: fixed;", self.css)
+        self.assertIn("--ui-sidebar-overlay: rgba(246, 246, 248, .60);", self.css)
+        self.assertIn("background: var(--ui-sidebar-overlay);", self.css)
+        self.assertIn("transform: translateX(-103%);", self.css)
+        self.assertIn(".app-shell.sidebar-hidden > .sidebar { transform: translateX(-103%); }", self.css)
+        self.assertNotIn("grid-template-columns: var(--sidebar-width) minmax(0, 1fr);", self.css)
+
+    def test_deepseek_model_field_explains_api_id_and_console_label(self) -> None:
+        self.assertIn('id="deepseekModel"', self.html)
+        self.assertIn('placeholder="deepseek-v4-flash"', self.html)
+        self.assertIn("DeepSeek-V4-Flash-0731", self.html)
+
     def test_sidebar_navigation_exposes_current_and_expanded_state(self) -> None:
         self.assertIn('data-filter="all" aria-current="page"', self.html)
         self.assertIn('<summary aria-expanded="true">', self.html)

@@ -313,3 +313,11 @@ Future public repositories are created with fresh Git histories after boundary
 and licensing review. The v1.4.7 staging manifest records the private source
 revision for auditability only; it is not a permission to publish that history
 or to merge private commits into a public repository.
+
+## D037: Structured DeepSeek JSON Uses Non-Thinking Mode
+
+DeepSeek V4 thinking is enabled by default and shares the `max_tokens` budget
+with the final answer. For deterministic structured analysis, the private
+provider sends `extra_body.thinking.type=disabled`, uses an 8,192-token output
+budget, and retries malformed or length-truncated JSON from scratch. This is
+limited to JSON analysis; normal chat retains the provider's default behavior.

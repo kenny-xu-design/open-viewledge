@@ -87,6 +87,17 @@ boundary tranche adds:
   components, and private implementation references.
 - `scripts/public_boundary.py verify`, which checks the generated file set and
   SHA-256 hashes before any handoff.
+- The desktop sidebar now uses a fixed, translucent overlay layer instead of
+  reserving a grid column that narrows the summary reading surface; narrow
+  screens retain the same drawer interaction and accessibility state.
+- DeepSeek model configuration accepts the console label pattern
+  `DeepSeek-V4-Flash-####` and normalizes it to the official API model ID
+  `deepseek-v4-flash` before a request is sent. The default remains the stable
+  API ID, so no provider key or internal route is exposed by this compatibility
+  rule.
+- Structured DeepSeek analysis requests disable V4 thinking mode, reserve an
+  8,192-token JSON budget, and retry malformed/truncated output from scratch;
+  the provider keeps its existing empty-content retry and sanitized errors.
 
 The generator is private release tooling. No public repository, code split,
 public release artifact, or history transfer exists. Human boundary/licensing

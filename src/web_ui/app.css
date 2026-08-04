@@ -9,6 +9,7 @@
   --ui-material-fallback: #f7f7f9;
   --ui-material: rgba(246, 246, 248, .78);
   --ui-material-strong: rgba(255, 255, 255, .90);
+  --ui-sidebar-overlay: rgba(246, 246, 248, .60);
   --ui-text-primary: #1d1d1f;
   --ui-text-secondary: #5f5f64;
   --ui-text-tertiary: #76767c;
@@ -148,6 +149,7 @@
     --ui-material-fallback: #2c2c2e;
     --ui-material: rgba(38, 38, 41, .78);
     --ui-material-strong: rgba(44, 44, 47, .90);
+    --ui-sidebar-overlay: rgba(38, 38, 41, .68);
     --ui-text-primary: #f5f5f7;
     --ui-text-secondary: #c2c2c7;
     --ui-text-tertiary: #a1a1a7;
@@ -716,7 +718,7 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
   width: 100vw;
   height: 100vh;
   display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--workspace-header-height) minmax(0, 1fr);
   overflow: hidden;
   background: var(--ui-canvas);
@@ -761,7 +763,7 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
 
 .workspace-grid {
   grid-row: 2;
-  grid-column: 2;
+  grid-column: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -776,16 +778,22 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
 .pane-resizer { flex: 0 0 7px; }
 
 .sidebar {
-  grid-row: 2;
-  grid-column: 1;
+  position: fixed;
+  top: var(--workspace-header-height);
+  bottom: 0;
+  left: 0;
+  width: min(var(--sidebar-width), 88vw);
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   border-right: 1px solid var(--line);
-  background: var(--ui-material-strong);
-  z-index: var(--z-content);
+  background: var(--ui-sidebar-overlay);
+  box-shadow: var(--shadow-overlay);
+  transform: translateX(-103%);
+  transition: transform var(--motion-standard) var(--ease-out-ui);
+  z-index: var(--z-drawer);
 }
 .sidebar-top { justify-content: space-between; padding-inline: 14px 10px; }
 
@@ -868,12 +876,21 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
 .pane-resizer:focus-visible::after { width: 2px; background: var(--ui-focus-ring); }
 
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .sidebar, .inspector-toolbar { background: var(--ui-material); }
+  .sidebar, .inspector-toolbar {
+    -webkit-backdrop-filter: saturate(var(--material-saturation)) blur(var(--material-blur));
+    backdrop-filter: saturate(var(--material-saturation)) blur(var(--material-blur));
+  }
+  .sidebar {
+    background: var(--ui-sidebar-overlay);
+    -webkit-backdrop-filter: saturate(var(--material-saturation)) blur(10px);
+    backdrop-filter: saturate(var(--material-saturation)) blur(10px);
+  }
+  .inspector-toolbar { background: var(--ui-material); }
 }
 
 @media (min-width: 1280px) {
-  .app-shell.sidebar-hidden { grid-template-columns: 0 minmax(0, 1fr); }
-  .app-shell.sidebar-hidden > .sidebar { display: none; }
+  .sidebar { transform: translateX(0); }
+  .app-shell.sidebar-hidden > .sidebar { transform: translateX(-103%); }
   .app-shell.inspector-hidden #collaborationPane,
   .app-shell.inspector-hidden #rightPaneResizer { display: none; }
 }
@@ -887,7 +904,6 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
 }
 
 @media (max-width: 1279px) {
-  .app-shell { grid-template-columns: minmax(0, 1fr); }
   .workspace-header { padding-inline: 8px; }
   .workspace-title { max-width: 30vw; }
   .header-actions .model-badge { display: none; }
@@ -896,7 +912,6 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
   #resultPane, #centerPane { min-width: 0; flex: 1 1 50%; }
   #rightPaneResizer { display: none; }
 
-  .sidebar,
   #collaborationPane {
     position: fixed;
     top: var(--workspace-header-height);
@@ -904,11 +919,6 @@ dialog footer { min-height: 58px; display: flex; align-items: center; justify-co
     z-index: var(--z-drawer);
     box-shadow: var(--shadow-overlay);
     transition: transform var(--motion-standard) var(--ease-out-ui);
-  }
-  .sidebar {
-    left: 0;
-    width: min(310px, 88vw);
-    transform: translateX(-103%);
   }
   #collaborationPane {
     right: 0;

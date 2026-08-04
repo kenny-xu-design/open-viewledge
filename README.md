@@ -582,7 +582,11 @@ $env:FFPROBE_PATH = "C:\tools\ffmpeg\bin\ffprobe.exe"
 
 在被 Git 忽略的项目根目录 `.env` 中设置 `DEEPSEEK_API_KEY`。不要把 Key 粘贴到命令、聊天记录或仓库文件中。
 
-如果 DeepSeek 返回 HTTP 400，优先检查 `.env` 中的 `DEEPSEEK_MODEL` 是否为当前账号支持的模型名。程序会在错误信息中保留经过脱敏的上游原因，例如模型名不受支持，但不会输出 API Key。
+如果 DeepSeek 返回 HTTP 400，优先检查 `.env` 中的 `DEEPSEEK_MODEL` 是否为当前账号支持的模型名。DeepSeek 控制台显示的 `DeepSeek-V4-Flash-0731` 是版本标签，OpenAI 兼容接口仍应使用 `deepseek-v4-flash`；程序也会在发送请求前自动兼容这类带日期后缀的 Flash 标签。程序会在错误信息中保留经过脱敏的上游原因，例如模型名不受支持，但不会输出 API Key。
+
+如果出现“DeepSeek 返回了空内容”或 `Unterminated string`，通常是 DeepSeek JSON 输出偶发为空或达到输出上限导致中途截断。结构化分析请求会自动关闭 V4 思考模式、使用更大的 JSON 输出预算，并在检测到截断或非法 JSON 时重新生成一次；请确认服务已重启并加载最新代码后再重试。
+
+如果出现“DeepSeek 返回了空内容”或 `Unterminated string`，通常是 DeepSeek JSON 输出偶发为空或达到输出上限导致中途截断。结构化分析请求会自动关闭 V4 思考模式、使用更大的 JSON 输出预算，并在检测到截断或非法 JSON 时重新生成一次；请确认服务已重启并加载最新代码后再重试。
 
 Web 端也可以打开“API 配置”检查 DeepSeek/OpenAI-compatible 的 API Key、Base URL 和 Model。测试连接只发送最小请求，不启动完整视频分析。
 

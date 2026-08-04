@@ -12,7 +12,11 @@ except ImportError:
         return False
 
 from ...utils import UserFacingError
-from ...defaults import DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL
+from ...defaults import (
+    DEFAULT_DEEPSEEK_BASE_URL,
+    DEFAULT_DEEPSEEK_MODEL,
+    normalize_deepseek_model,
+)
 from .base import LLMProvider, LLMResponse
 
 
@@ -35,7 +39,7 @@ class DeepSeekProvider(LLMProvider):
         env_base_url = os.getenv("DEEPSEEK_BASE_URL") if prefer_env else ""
         env_model = os.getenv("DEEPSEEK_MODEL") if prefer_env else ""
         self.base_url = (env_base_url or base_url or DEFAULT_DEEPSEEK_BASE_URL).rstrip("/")
-        self.model_name = env_model or model_name or DEFAULT_DEEPSEEK_MODEL
+        self.model_name = normalize_deepseek_model(env_model or model_name or DEFAULT_DEEPSEEK_MODEL)
         self._client = client
         self._sleep = sleep
 
@@ -60,6 +64,13 @@ class DeepSeekProvider(LLMProvider):
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+            # DeepSeek V4 enables thinking by default.  Its reasoning tokens
+            # share the max_tokens budget with the JSON answer, which can leave
+            # structured output empty or truncated.  JSON analysis does not
+            # need a separate reasoning channel, so keep the request focused
+            # on one compact answer.
+            if self.model_name in {"deepseek-v4-flash", "deepseek-v4-pro"}:
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
 

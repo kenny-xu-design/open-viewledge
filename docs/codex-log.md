@@ -25,3 +25,17 @@ This file stores concise summaries of Codex work for this project.
   `bae85c6` copied only the two reviewed Schema files and passed `verify`.
 - Added a regression test proving `.git` metadata cannot enter allowlisted
   staging output; the full suite now passes 389 tests.
+- Fixed the v1.4.7 desktop sidebar regression: it no longer reserves a 264px
+  grid column, and now overlays the summary with the existing translucent
+  material surface and drawer transition. Added a UI contract test for this
+  invariant; the full suite now passes 390 tests.
+- Added DeepSeek V4 Flash model-label compatibility: console labels such as
+  `DeepSeek-V4-Flash-0731` normalize to the official API ID
+  `deepseek-v4-flash` before requests, while the configuration UI explains the
+  distinction. The full suite now passes 392 tests.
+- Hardened DeepSeek V4 structured analysis after observing empty JSON content
+  and `Unterminated string` truncation: JSON requests disable thinking mode,
+  use an 8,192-token budget, and retry a truncated response from scratch. The
+  sidebar overlay now uses a dedicated 60% light / 68% dark material surface
+  with a 10px blur so the summary remains visible beneath it. The full suite
+  now passes 393 tests.
