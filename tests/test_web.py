@@ -14,6 +14,8 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from src import __version__
+from src.intake_store import IntakeStore
+from src.knowledge_sets import KnowledgeSetStore
 from src.knowledge_identity import KnowledgeRequestDimensions, build_input_knowledge_identity
 from src.job_store import Job
 from src.utils import UserFacingError
@@ -1202,6 +1204,251 @@ class WebApiTests(unittest.TestCase):
         self.assertNotIn("providers", payload)
         self.assertNotIn("inProjectVenv", payload)
         self.assertIn("dataDirectory", payload)
+
+    def test_bridge_intake_is_idempotent_and_exposes_inbox_state(self) -> None:
+        payload = {
+            "schema_version": "1.0",
+            "client_request_id": "browser-1",
+            "source": {"kind": "video", "url": "https://youtu.be/abc123"},
+            "capture": {"title": "Captured", "selected_text": "must not be returned"},
+            "preferences": {"analysis_profile": "summary", "processing_profile": "fast", "output_languages": ["source"]},
+            "consent": {"user_initiated": True, "content_upload_allowed": False},
+        }
+        with TemporaryDirectory() as temp_dir, patch("src.web.INTAKE_STORE", IntakeStore(Path(temp_dir) / "intakes.json")):
+            request = Request(
+                f"{self.base_url}/v1/intakes",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Idempotency-Key": "browser-idem-1"},
+                method="POST",
+            )
+            with urlopen(request, timeout=3) as response:
+                created = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(created["schema_version"], "1.0")
+            self.assertIn("data", created)
+            intake_id = created["data"]["intake_id"]
+            self.assertFalse(created["data"]["idempotency_replayed"])
+
+            with urlopen(request, timeout=3) as response:
+                replayed = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(replayed["data"]["idempotency_replayed"])
+            self.assertEqual(replayed["data"]["intake_id"], intake_id)
+
+            with urlopen(f"{self.base_url}/v1/intakes/{intake_id}", timeout=3) as response:
+                detail = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(detail["data"]["state"], "queued")
+            self.assertNotIn("must not be returned", json.dumps(detail, ensure_ascii=False))
+
+            with urlopen(f"{self.base_url}/v1/inbox?limit=10", timeout=3) as response:
+                inbox = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(inbox["data"]["items"][0]["intake_id"], intake_id)
+
+    def test_bridge_intake_requires_idempotency_key(self) -> None:
+        with TemporaryDirectory() as temp_dir, patch("src.web.INTAKE_STORE", IntakeStore(Path(temp_dir) / "intakes.json")):
+            request = Request(
+                f"{self.base_url}/v1/intakes",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(request, timeout=3)
+            self.assertEqual(caught.exception.code, HTTPStatus.BAD_REQUEST)
+            payload = json.loads(caught.exception.read().decode("utf-8"))
+            self.assertEqual(payload["error"]["code"], "invalid_request")
+
+    def test_bridge_intake_action_hands_off_to_local_job_once(self) -> None:
+        intake_payload = {
+            "schema_version": "1.0",
+            "client_request_id": "browser-action-1",
+            "source": {"kind": "video", "url": "https://youtu.be/abc123"},
+            "capture": {"title": "Captured"},
+            "preferences": {"analysis_profile": "summary", "processing_profile": "fast", "output_languages": ["source"]},
+            "consent": {"user_initiated": True, "content_upload_allowed": False},
+        }
+        fake_job = Job(id="local-job-1", command=["python", "-m", "src.main"], status="queued", knowledge_id="k1-youtube-demo")
+        with TemporaryDirectory() as temp_dir, patch("src.web.INTAKE_STORE", IntakeStore(Path(temp_dir) / "intakes.json")), patch("src.web.start_job", return_value=fake_job) as start:
+            create_request = Request(
+                f"{self.base_url}/v1/intakes",
+                data=json.dumps(intake_payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Idempotency-Key": "browser-create-action-1"},
+                method="POST",
+            )
+            with urlopen(create_request, timeout=3) as response:
+                intake_id = json.loads(response.read().decode("utf-8"))["data"]["intake_id"]
+
+            action_request = Request(
+                f"{self.base_url}/v1/intakes/{intake_id}/actions",
+                data=b'{"action":"start"}',
+                headers={"Content-Type": "application/json", "Idempotency-Key": "browser-action-1"},
+                method="POST",
+            )
+            with urlopen(action_request, timeout=3) as response:
+                started = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(started["data"]["state"], "processing")
+            self.assertFalse(started["data"]["idempotency_replayed"])
+            self.assertEqual(start.call_count, 1)
+            self.assertEqual(start.call_args.args[0]["source"], "https://youtu.be/abc123")
+
+            with urlopen(action_request, timeout=3) as response:
+                replayed = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(replayed["data"]["idempotency_replayed"])
+            self.assertEqual(start.call_count, 1)
+
+    def test_bridge_intake_action_failure_enters_attention_and_retry_can_recover(self) -> None:
+        intake_payload = {
+            "schema_version": "1.0",
+            "client_request_id": "browser-retry-1",
+            "source": {"kind": "video", "url": "https://youtu.be/retry123"},
+            "capture": {"title": "Retry"},
+            "preferences": {"analysis_profile": "summary", "processing_profile": "fast", "output_languages": ["source"]},
+            "consent": {"user_initiated": True},
+        }
+        fake_job = Job(id="local-job-retry", command=[], status="queued")
+        with TemporaryDirectory() as temp_dir, patch("src.web.INTAKE_STORE", IntakeStore(Path(temp_dir) / "intakes.json")), patch("src.web.start_job", side_effect=[ValueError("private provider detail"), fake_job]) as start:
+            create_request = Request(
+                f"{self.base_url}/v1/intakes",
+                data=json.dumps(intake_payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Idempotency-Key": "browser-create-retry-1"},
+                method="POST",
+            )
+            with urlopen(create_request, timeout=3) as response:
+                intake_id = json.loads(response.read().decode("utf-8"))["data"]["intake_id"]
+            first_action = Request(
+                f"{self.base_url}/v1/intakes/{intake_id}/actions",
+                data=b'{"action":"start"}',
+                headers={"Content-Type": "application/json", "Idempotency-Key": "browser-start-retry-1"},
+                method="POST",
+            )
+            with urlopen(first_action, timeout=3) as response:
+                attention = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(attention["data"]["state"], "needs_attention")
+            self.assertNotIn("private provider detail", json.dumps(attention, ensure_ascii=False))
+
+            retry_action = Request(
+                f"{self.base_url}/v1/intakes/{intake_id}/actions",
+                data=b'{"action":"retry"}',
+                headers={"Content-Type": "application/json", "Idempotency-Key": "browser-retry-action-1"},
+                method="POST",
+            )
+            with urlopen(retry_action, timeout=3) as response:
+                recovered = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(recovered["data"]["state"], "processing")
+            self.assertEqual(start.call_count, 2)
+
+    def test_bridge_intake_action_rejects_duplicate_intake(self) -> None:
+        base = {
+            "schema_version": "1.0",
+            "source": {"kind": "video", "url": "https://youtu.be/duplicate123"},
+            "capture": {"title": "Duplicate"},
+            "preferences": {"analysis_profile": "summary", "processing_profile": "fast", "output_languages": ["source"]},
+            "consent": {"user_initiated": True},
+        }
+        with TemporaryDirectory() as temp_dir, patch("src.web.INTAKE_STORE", IntakeStore(Path(temp_dir) / "intakes.json")), patch("src.web.start_job") as start:
+            for client_id, idem in (("first", "create-dup-1"), ("second", "create-dup-2")):
+                create = dict(base)
+                create["client_request_id"] = client_id
+                request = Request(
+                    f"{self.base_url}/v1/intakes",
+                    data=json.dumps(create).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "Idempotency-Key": idem},
+                    method="POST",
+                )
+                with urlopen(request, timeout=3) as response:
+                    last = json.loads(response.read().decode("utf-8"))
+            duplicate_id = last["data"]["intake_id"]
+            action = Request(
+                f"{self.base_url}/v1/intakes/{duplicate_id}/actions",
+                data=b'{"action":"start"}',
+                headers={"Content-Type": "application/json", "Idempotency-Key": "action-dup-1"},
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(action, timeout=3)
+            self.assertEqual(caught.exception.code, HTTPStatus.CONFLICT)
+            result = json.loads(caught.exception.read().decode("utf-8"))
+            self.assertEqual(result["error"]["code"], "duplicate_intake")
+            start.assert_not_called()
+
+    def test_bridge_intake_can_be_cancelled_before_handoff(self) -> None:
+        intake_payload = {
+            "schema_version": "1.0",
+            "client_request_id": "browser-cancel-1",
+            "source": {"kind": "video", "url": "https://youtu.be/cancel123"},
+            "capture": {"title": "Cancel"},
+            "preferences": {"analysis_profile": "summary", "processing_profile": "fast", "output_languages": ["source"]},
+            "consent": {"user_initiated": True},
+        }
+        with TemporaryDirectory() as temp_dir, patch("src.web.INTAKE_STORE", IntakeStore(Path(temp_dir) / "intakes.json")), patch("src.web.start_job") as start:
+            create = Request(
+                f"{self.base_url}/v1/intakes",
+                data=json.dumps(intake_payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Idempotency-Key": "browser-create-cancel-1"},
+                method="POST",
+            )
+            with urlopen(create, timeout=3) as response:
+                intake_id = json.loads(response.read().decode("utf-8"))["data"]["intake_id"]
+            cancel = Request(
+                f"{self.base_url}/v1/intakes/{intake_id}/actions",
+                data=b'{"action":"cancel"}',
+                headers={"Content-Type": "application/json", "Idempotency-Key": "browser-cancel-action-1"},
+                method="POST",
+            )
+            with urlopen(cancel, timeout=3) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(result["data"]["state"], "cancelled")
+            start.assert_not_called()
+
+    def test_bilibili_collection_inspect_create_set_and_analyze_item(self) -> None:
+        inspection = {
+            "kind": "bilibili_parts",
+            "isCollection": True,
+            "title": "B站教程合集",
+            "sourceUrl": "https://www.bilibili.com/video/BV1234567890",
+            "uploader": "作者",
+            "items": [
+                {"sequence": 1, "title": "第一节", "sourceUrl": "https://www.bilibili.com/video/BV1234567890?p=1", "partition": "分P"},
+                {"sequence": 2, "title": "第二节", "sourceUrl": "https://www.bilibili.com/video/BV1234567890?p=2", "partition": "分P"},
+            ],
+        }
+        fake_job = Job(id="set-job-1", command=[], status="queued", knowledge_id="k1-part-1")
+        with TemporaryDirectory() as temp_dir, patch("src.web.KNOWLEDGE_SET_STORE", KnowledgeSetStore(Path(temp_dir) / "sets.json")), patch("src.web.inspect_bilibili_input", return_value=inspection), patch("src.web.start_job", return_value=fake_job) as start:
+            inspect_request = Request(
+                f"{self.base_url}/api/source/inspect",
+                data=b'{"sourceType":"url","source":"https://www.bilibili.com/video/BV1234567890"}',
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(inspect_request, timeout=3) as response:
+                inspected = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(inspected["isCollection"])
+            self.assertEqual(len(inspected["items"]), 2)
+
+            create_request = Request(
+                f"{self.base_url}/api/knowledge-sets",
+                data=json.dumps({"inspection": inspection}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Idempotency-Key": "set-create-1"},
+                method="POST",
+            )
+            with urlopen(create_request, timeout=3) as response:
+                created = json.loads(response.read().decode("utf-8"))
+            set_id = created["set"]["setId"]
+            item_id = created["set"]["items"][0]["itemId"]
+            self.assertEqual(created["set"]["itemCount"], 2)
+
+            analyze_request = Request(
+                f"{self.base_url}/api/knowledge-sets/{set_id}/items/{item_id}/analyze",
+                data=b'{"mode":"tutorial","processingProfile":"complete"}',
+                headers={"Content-Type": "application/json", "Idempotency-Key": "set-item-1"},
+                method="POST",
+            )
+            with urlopen(analyze_request, timeout=3) as response:
+                analyzed = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(analyzed["set"]["items"][0]["state"], "processing")
+            self.assertEqual(start.call_args.args[0]["source"], inspection["items"][0]["sourceUrl"])
+
+            with urlopen(f"{self.base_url}/api/knowledge-sets/{set_id}", timeout=3) as response:
+                detail = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(detail["set"]["items"][0]["itemId"], item_id)
 
     @patch("src.web.load_knowledge_package")
     @patch("src.web.reanalyze_knowledge_package")

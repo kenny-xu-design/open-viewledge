@@ -549,6 +549,18 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('<option value="fast">fast（优先文本）</option>', self.html)
         self.assertIn('processingProfile: $("#taskProcessingProfile").value', self.js)
 
+    def test_bilibili_series_detection_offers_knowledge_set_or_current_video(self) -> None:
+        self.assertIn('id="seriesDecision"', self.html)
+        self.assertIn('id="seriesCreateSet"', self.html)
+        self.assertIn('id="seriesAnalyzeCurrent"', self.html)
+        self.assertIn('/api/source/inspect', self.js)
+        self.assertIn('/api/knowledge-sets', self.js)
+        self.assertIn("pendingSeriesInspection", self.js)
+        self.assertIn("seriesCreateSet", self.js)
+        self.assertIn("function analyzeKnowledgeSetItem", self.js)
+        self.assertIn("function isBilibiliUrl", self.js)
+        self.assertNotIn("(set.items || []).slice(0, 6)", self.js)
+
     def test_bilibili_timestamp_seek_reloads_the_embedded_player(self) -> None:
         self.assertIn("function syncMediaControls()", self.js)
         self.assertIn("mediaController instanceof BilibiliEmbedController", self.js)

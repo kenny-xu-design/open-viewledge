@@ -1,9 +1,11 @@
 # Viewledge API Contracts
 
-Last updated: 2026-08-02
+Last updated: 2026-08-07
 
 This document separates implemented local contracts from future public Bridge
-contracts. A documented future contract is not an implemented endpoint.
+contracts. The v1.5.0 first slice implements the local loopback Bridge Intake
+and inbox endpoints below; the public browser client remains a separate
+allowlisted repository concern.
 
 ## Contract levels
 
@@ -11,7 +13,7 @@ contracts. A documented future contract is not an implemented endpoint.
 |---|---|---|
 | CLI contract 1.x | Implemented and compatibility-sensitive | Local CLI, Web subprocess, Agent/automation |
 | Local Web API | Implemented, private and product-internal | Bundled Web UI on the local loopback service |
-| Public Bridge API 1.x | Design for v1.4.7/v1.5.x | Browser clipper and approved product clients |
+| Public Bridge API 1.x | Contract fixture plus local v1.5.0 Intake slice | Browser clipper and approved product clients |
 | Cloud account/usage API | Design for v1.5.2 | Approved clients through authenticated sessions |
 
 Public consumers must never depend on the local Web API or private Python
@@ -182,6 +184,28 @@ Endpoint groups:
 - Markdown/Obsidian-ready export preview and generation;
 - confirmed knowledge-package deletion.
 
+The current private Web UI also uses these local-only Bilibili knowledge-set
+routes:
+
+- `POST /api/source/inspect` accepts a public Bilibili URL and performs a
+  metadata-only `yt-dlp` inspection. A multi-P or playlist result returns
+  `kind`, `isCollection`, `totalCount`, and ordered `items`; it never downloads
+  media.
+- `GET /api/knowledge-sets` and `GET /api/knowledge-sets/{set_id}` return the
+  local ordered set registry. Each item carries its sequence, partition, title,
+  source URL, and state (`queued`, `processing`, `ready`, `failed`, or
+  `needs_attention`).
+- `POST /api/knowledge-sets` creates an ordered set from an inspection payload;
+  it requires `Idempotency-Key` and does not start analysis.
+- `POST /api/knowledge-sets/{set_id}/items/{item_id}/analyze` starts the
+  existing local task pipeline for exactly one selected item and reconciles its
+  state. Duplicate-task decisions remain private and are returned only as
+  sanitized conflict data.
+
+These endpoints are intentionally not part of the public Bridge contract. They
+are implementation details of the local product and may change with the
+bundled UI.
+
 Product mode removes sensitive implementation fields in backend responses.
 Diagnostic mode may expose sanitized technical details locally but must still
 never expose credentials, authorization headers, cookies, prompt bodies, or
@@ -293,6 +317,33 @@ Duplicate handling must use the v1.4.6 identity contract. When a duplicate is
 detected, `allowed_actions` may include `reuse`, `refresh`, `revision`, or
 `reject`; the public client must not infer the private identity algorithm.
 
+The current private-core implementation supports this contract on the local
+loopback Bridge at `/v1/intakes`. It records the capture as `queued` or
+`duplicate`, persists an idempotency-safe intake registry, and does not start a
+processing subprocess yet. Captured text and implementation diagnostics are
+not returned in the Bridge envelope.
+
+### Start or retry an Intake handoff
+
+```text
+POST /v1/intakes/{intake_id}/actions
+Idempotency-Key: opaque-action-key
+```
+
+Request:
+
+```json
+{"action": "start"}
+```
+
+`start` is allowed for a queued video Intake. `retry` is allowed after a
+failed or needs-attention handoff. `cancel` is allowed before a task is
+started. The local core converts the Intake into the existing task request,
+stores only an opaque local association, and returns the sanitized Intake
+state. Repeating the same action key returns the same result without creating
+a second task. Page captures remain queued until a page ingestion adapter is
+implemented.
+
 ### Read Intake and inbox
 
 ```text
@@ -303,6 +354,12 @@ GET /v1/inbox?cursor=<opaque>&limit=<bounded>
 An inbox item exposes stable product state, source provenance, user-facing
 progress, timestamps, and retry/attention actions. It does not expose internal
 stage names, subprocess logs, Provider/model routes, or local paths.
+
+The current local slice implements `GET /v1/intakes/{intake_id}` and
+`GET /v1/inbox` with cursor pagination. Items currently expose queued or
+duplicate state, plus processing/ready/failed/needs-attention after an explicit
+action. Internal job IDs, subprocess logs, Provider/model routes, and local
+paths remain private.
 
 ### Create clip
 

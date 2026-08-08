@@ -321,3 +321,27 @@ with the final answer. For deterministic structured analysis, the private
 provider sends `extra_body.thinking.type=disabled`, uses an 8,192-token output
 budget, and retries malformed or length-truncated JSON from scratch. This is
 limited to JSON analysis; normal chat retains the provider's default behavior.
+
+## D038: v1.5.0 Starts With A Durable Local Intake Registry
+
+The first Browser Intake slice is implemented in the private core as a small
+loopback Bridge surface. It requires a client idempotency key, normalizes the
+source URL server-side, reuses the opaque v1.4.6 identity contract, and records
+`queued` or `duplicate` state without starting analysis in the capture request.
+This keeps browser capture responsive and prevents the public client from
+depending on private subprocess or Provider details. A later slice will add a
+controlled handoff to the existing local task API and reconcile state through
+the same public envelope.
+
+## D039: Bilibili Series Creation Is Metadata-First And Item-Scoped
+
+When a Bilibili URL resolves to multiple P-parts or playlist entries, the local
+product must inspect metadata first and ask the user whether to analyze the
+current video or create an ordered knowledge set. Creating the set persists
+only sanitized source/title/partition/order metadata and never starts media
+download, ASR, or Provider analysis. Later analysis is explicitly item-scoped
+and reuses the existing task, identity, duplicate, and recovery contracts.
+
+The knowledge-set registry is a private local Web implementation. It is not a
+public Bridge schema and must not expose Provider routes, prompts, local paths,
+job internals, or credentials.

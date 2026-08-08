@@ -39,3 +39,29 @@ This file stores concise summaries of Codex work for this project.
   sidebar overlay now uses a dedicated 60% light / 68% dark material surface
   with a 10px blur so the summary remains visible beneath it. The full suite
   now passes 393 tests.
+
+## 2026-08-05
+
+- Started the v1.5.0 Browser Intake and knowledge inbox milestone without
+  changing the stable processing pipeline.
+- Added the private local Bridge Intake/inbox slice with idempotency,
+  URL-normalized identity, duplicate/source-revision states, cursor paging, and
+  captured-text redaction.
+- Added seven focused tests; the full suite now passes 400 tests. No Git
+  staging, commit, push, merge, rebase, or tag action was performed.
+- Added the queued video Intake handoff action with opaque task association,
+  `start`/`retry`/pre-handoff `cancel`, sanitized needs-attention handling, and
+  processing/ready/failed reconciliation. The full suite now passes 404 tests;
+  no Git staging, commit, push, merge, rebase, or tag action was performed.
+
+## 2026-08-07
+
+- Added metadata-only Bilibili multi-P/series inspection through the private
+  local Web API. The UI now asks whether to analyze the current video or first
+  create an ordered knowledge set.
+- Added durable ordered knowledge-set persistence with partition/title/source
+  metadata, idempotent creation, per-item state reconciliation, and an
+  item-scoped handoff to the existing analysis task pipeline.
+- Added focused Bilibili model/store/Web/UI coverage; the full suite now passes
+  409 tests. No Git staging, commit, push, merge, rebase, or tag action was
+  performed.

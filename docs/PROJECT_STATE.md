@@ -1,6 +1,6 @@
 # Viewledge Project State
 
-Last verified: 2026-08-02
+Last verified: 2026-08-07
 
 This is the canonical current-state document. Git state, current code, and
 reproducible commands take precedence over older notes.
@@ -9,8 +9,9 @@ reproducible commands take precedence over older notes.
 
 - Repository role: private Viewledge core.
 - Current branch: `feat/v1.4.7-private-public-boundary`.
-- Branch point/current HEAD: `bae85c6 v1.4.6`.
-- The branch currently has no upstream and has no new commit yet.
+- Current HEAD: `3386fcb feat(v1.4.7)`.
+- The branch tracks `origin/feat/v1.4.7-private-public-boundary`; the current
+  v1.5.0 slice is intentionally uncommitted for user review.
 - Package version: `1.4.5`, defined by `src/__init__.py`.
 - No release tag was created during this audit.
 - The working tree is intentionally uncommitted. No staging, commit, push,
@@ -103,6 +104,42 @@ The generator is private release tooling. No public repository, code split,
 public release artifact, or history transfer exists. Human boundary/licensing
 review and fresh-history publication remain future gates.
 
+## v1.5.0 Browser Intake and knowledge inbox — first slice
+
+The first private-core slice is now implemented on top of the v1.4.7 boundary
+milestone:
+
+- local Bridge endpoints `POST /v1/intakes`, `GET /v1/intakes/{intake_id}`,
+  and `GET /v1/inbox`;
+- required `Idempotency-Key` handling with replay-safe responses;
+- URL normalization and source-kind validation for video/page captures;
+- stable opaque `knowledge_id` and request fingerprint generation through the
+  v1.4.6 identity contract;
+- active-exact and same-source revision duplicate states in the inbox;
+- durable local intake registry under private local state, with captured text
+  excluded from public response payloads;
+- explicit `start`, `retry`, and pre-handoff `cancel` actions;
+- queued video Intake handoff to the existing local task API, with
+  `processing`/`ready`/`failed` reconciliation and sanitized
+  `needs_attention` recovery;
+- Bilibili series/P-part metadata inspection without media download;
+- a private local knowledge-set registry that preserves ordered items,
+  partitions, source URLs, and per-item state;
+- a Web decision panel that asks whether to analyze the current video or first
+  create the set, followed by on-demand analysis for individual items;
+- Bridge responses use the independent public `1.0` envelope and sanitized
+  product data.
+
+The Bilibili set slice is intentionally local and metadata-first: creating a
+set does not start analysis or ASR. A user can later choose one item from the
+sidebar and hand only that item to the existing task pipeline. Playlist/P-part
+inspection is capped at 200 items and keeps the extractor behind the private
+core boundary.
+
+Page captures remain queued until a page ingestion adapter is implemented. The
+public client never receives local job IDs, subprocess logs, Provider routes,
+or local paths.
+
 ## Local-only development launcher
 
 `start_dev.bat` exists locally and is excluded by the repository-local
@@ -138,7 +175,7 @@ The current project interpreter is Python 3.12.13. The latest full suite
 reports:
 
 ```text
-Ran 386 tests
+Ran 409 tests
 OK
 ```
 

@@ -1,6 +1,6 @@
 # Viewledge Master Roadmap
 
-Last updated: 2026-08-02
+Last updated: 2026-08-07
 
 This is the canonical forward roadmap. Version scopes are ordered dependencies,
 not promises of public release dates.
@@ -108,7 +108,7 @@ Exit criteria:
 
 ## v1.5.0 — Browser Intake and knowledge inbox
 
-Status: planned.
+Status: in progress; first local Bridge slice implemented in the private core.
 
 Repository ownership:
 
@@ -126,6 +126,31 @@ Scope:
 - source provenance, capture time, canonical URL, and user intent;
 - local Bridge first, with cloud transport remaining an interchangeable
   contract implementation.
+
+Implemented first slice:
+
+- `POST /v1/intakes` accepts only explicit user-triggered captures and requires
+  `Idempotency-Key`;
+- `GET /v1/intakes/{intake_id}` and `GET /v1/inbox` expose sanitized queued or
+  duplicate state;
+- URL normalization and opaque identity/request-fingerprint generation reuse
+  the v1.4.6 contract;
+- repeated exact captures are marked duplicate without starting analysis;
+- local intake records persist under private local state and never return
+  captured text by default.
+- explicit `start`, `retry`, and pre-handoff `cancel` actions;
+- queued video handoff to the existing local task API with sanitized
+  processing-state reconciliation.
+- Bilibili multi-part/series inspection with a user choice between analyzing
+  the current video and creating an ordered knowledge set first;
+- private local knowledge-set persistence with per-item, on-demand analysis;
+- ordered partition/title/source metadata retained without downloading media
+  during set creation.
+
+Page captures remain queued pending a page ingestion adapter. The remaining
+1.5.0 work is browser-client capture integration, Bilibili acceptance, and
+recovery/duplicate UX against the public contract; no private Provider or
+pipeline detail may cross that boundary.
 
 Exit criteria:
 

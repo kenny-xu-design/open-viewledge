@@ -40,6 +40,7 @@ function uiScrollBehavior() {
 const state = {
   selectedKnowledgeId: "",
   libraryItems: [],
+  knowledgeSets: [],
   activeResultTab: localStorage.getItem(SETTINGS.activeResultTab) || "summary",
   activeInsightTab: localStorage.getItem(SETTINGS.activeInsightTab) || "comments",
   activeSource: null,
@@ -76,6 +77,8 @@ let activeSourceType = "url";
 let lastSidebarTrigger = null;
 let lastInspectorTrigger = null;
 let pendingDuplicatePayload = null;
+let pendingSeriesInspection = null;
+let pendingSeriesSource = "";
 
 class MediaController {
   load(source) { this.source = source; }
@@ -246,6 +249,7 @@ async function init() {
   $("#followPlayback").checked = state.transcriptFollowMode;
   $("#footerFollow").checked = state.transcriptFollowMode;
   await refreshLibrary();
+  await refreshKnowledgeSets();
 }
 
 async function loadRuntimeInfo() {
@@ -300,6 +304,8 @@ function bindEvents() {
   $("#focusSearch").addEventListener("click", focusSidebarSearch);
   $("#librarySearch").addEventListener("input", renderLibrary);
   $("#refreshLibrary").addEventListener("click", refreshLibrary);
+  $("#refreshKnowledgeSets").addEventListener("click", refreshKnowledgeSets);
+  $("#knowledgeSetList").addEventListener("click", handleKnowledgeSetClick);
   $("#toggleDeleteMode").addEventListener("click", handleDeleteAction);
   $("#confirmDeleteKnowledge").addEventListener("click", confirmDeleteKnowledge);
   $("#reloadKnowledge").addEventListener("click", () => state.selectedKnowledgeId && loadKnowledge(state.selectedKnowledgeId, true));
@@ -360,6 +366,8 @@ function bindEvents() {
   $$("[data-filter]").forEach((button) => button.addEventListener("click", () => setLibraryFilter(button.dataset.filter, button)));
   $$("[data-source-type]").forEach((button) => button.addEventListener("click", () => setTaskSourceType(button.dataset.sourceType)));
   $("#taskDuplicateActions").addEventListener("click", handleDuplicateAction);
+  $("#seriesAnalyzeCurrent").addEventListener("click", analyzeCurrentSeriesVideo);
+  $("#seriesCreateSet").addEventListener("click", createKnowledgeSetFromInspection);
 
   $("#libraryList").addEventListener("click", (event) => {
     const item = event.target.closest("[data-knowledge-id]");
@@ -671,6 +679,72 @@ async function refreshLibrary() {
     }
   } catch (error) {
     list.innerHTML = `<div class="library-empty">记录加载失败<br>${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function refreshKnowledgeSets() {
+  const list = $("#knowledgeSetList");
+  if (!list) return;
+  try {
+    const data = await api("/api/knowledge-sets");
+    state.knowledgeSets = data.sets || [];
+    renderKnowledgeSets();
+  } catch (error) {
+    list.innerHTML = `<div class="knowledge-set-empty">知识集读取失败</div>`;
+  }
+}
+
+function renderKnowledgeSets() {
+  const list = $("#knowledgeSetList");
+  if (!list) return;
+  if (!state.knowledgeSets.length) {
+    list.innerHTML = '<div class="knowledge-set-empty">暂无 B站知识集</div>';
+    return;
+  }
+  list.innerHTML = state.knowledgeSets.map((set) => {
+    const items = (set.items || []).map((item) => {
+      const label = knowledgeSetItemStateLabel(item.state);
+      return `<button type="button" class="knowledge-set-item" data-set-id="${escapeAttr(set.setId)}" data-set-item-id="${escapeAttr(item.itemId)}" title="${escapeAttr(item.title)}"><span>${Number(item.sequence) || "·"}</span><strong>${escapeHtml(item.title)}</strong><em>${escapeHtml(label)}</em></button>`;
+    }).join("");
+    return `<article class="knowledge-set-card"><strong title="${escapeAttr(set.title)}">${escapeHtml(set.title)}</strong><small>${Number(set.itemCount) || 0} 个视频 · ${escapeHtml(set.kind === "bilibili_parts" ? "分P" : "系列")}</small><div class="knowledge-set-items">${items}</div></article>`;
+  }).join("");
+}
+
+function knowledgeSetItemStateLabel(stateValue) {
+  return ({ queued: "待分析", processing: "处理中", ready: "已完成", failed: "失败", needs_attention: "需处理", duplicate: "重复", cancelled: "已取消" })[stateValue] || "待分析";
+}
+
+async function handleKnowledgeSetClick(event) {
+  const button = event.target.closest("[data-set-id][data-set-item-id]");
+  if (!button) return;
+  const set = state.knowledgeSets.find((value) => value.setId === button.dataset.setId);
+  const item = set?.items?.find((value) => value.itemId === button.dataset.setItemId);
+  if (!set || !item) return;
+  if (item.state === "ready" && item.knowledgeId) {
+    await loadKnowledge(item.knowledgeId);
+    return;
+  }
+  if (!["queued", "failed", "needs_attention"].includes(item.state)) {
+    showToast(`该条目当前状态：${knowledgeSetItemStateLabel(item.state)}`);
+    return;
+  }
+  await analyzeKnowledgeSetItem(set.setId, item.itemId);
+}
+
+async function analyzeKnowledgeSetItem(setId, itemId) {
+  try {
+    const data = await api(`/api/knowledge-sets/${encodeURIComponent(setId)}/items/${encodeURIComponent(itemId)}/analyze`, {
+      method: "POST",
+      headers: { "Idempotency-Key": `ui-set-${newOpaqueId()}` },
+      body: JSON.stringify({ mode: "tutorial", processingProfile: "complete" }),
+    });
+    const updated = data.set;
+    state.knowledgeSets = state.knowledgeSets.map((set) => set.setId === updated.setId ? updated : set);
+    renderKnowledgeSets();
+    showToast("已将系列教程条目转入分析");
+  } catch (error) {
+    showToast(`知识集条目分析失败：${error.message}`);
+    await refreshKnowledgeSets();
   }
 }
 
@@ -1611,6 +1685,7 @@ function focusChatQuestion(question) {
 }
 
 function openNewTask() {
+  hideSeriesDecision();
   $("#taskProgress").classList.add("hidden");
   $("#newTaskForm").reset();
   $("#taskFrames").checked = true;
@@ -1625,6 +1700,7 @@ function openNewTask() {
   $("#newTaskDialog").showModal();
   refreshTaskCapabilities();
   loadJobHistory();
+  refreshKnowledgeSets();
 }
 
 async function refreshTaskCapabilities() {
@@ -1715,7 +1791,77 @@ function knowledgeAssetUrl(knowledgeId, relativePath) {
 
 async function submitTask(event) {
   event.preventDefault();
+  const payload = buildTaskPayload();
+  if (activeSourceType === "url" && isBilibiliUrl(payload.source)) {
+    if (!pendingSeriesInspection || pendingSeriesSource !== payload.source) {
+      setTaskButtonLoading(true);
+      try {
+        const inspection = await api("/api/source/inspect", {
+          method: "POST",
+          body: JSON.stringify({ sourceType: "url", source: payload.source }),
+        });
+        if (inspection.isCollection) {
+          pendingSeriesInspection = inspection;
+          pendingSeriesSource = payload.source;
+          renderSeriesDecision(inspection);
+          setTaskButtonLoading(false);
+          return;
+        }
+      } catch (error) {
+        showToast(`B站来源识别失败：${error.message}`);
+        setTaskButtonLoading(false);
+        return;
+      }
+    }
+  }
+  hideSeriesDecision();
+  await startTaskPayload(payload);
+}
+
+function isBilibiliUrl(value) {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "bilibili.com" || host.endsWith(".bilibili.com") || host === "b23.tv";
+  } catch {
+    return false;
+  }
+}
+
+function renderSeriesDecision(inspection) {
+  const items = Array.isArray(inspection.items) ? inspection.items : [];
+  $("#seriesDecisionTitle").textContent = inspection.kind === "bilibili_parts" ? "检测到 B站分P教程" : "检测到 B站系列教程";
+  $("#seriesDecisionMessage").textContent = `共 ${Number(inspection.totalCount || items.length)} 个视频，可先建立知识集，之后按顺序选择单个视频分析。`;
+  $("#seriesDecisionItems").innerHTML = items.slice(0, 12).map((item) => `<li>${escapeHtml(item.title || "未命名视频")}${item.partition ? ` · ${escapeHtml(item.partition)}` : ""}</li>`).join("");
+  $("#seriesDecision").classList.remove("hidden");
+}
+
+function hideSeriesDecision() {
+  pendingSeriesInspection = null;
+  pendingSeriesSource = "";
+  $("#seriesDecision")?.classList.add("hidden");
+}
+
+async function analyzeCurrentSeriesVideo() {
+  hideSeriesDecision();
   await startTaskPayload(buildTaskPayload());
+}
+
+async function createKnowledgeSetFromInspection() {
+  if (!pendingSeriesInspection) return;
+  const inspection = pendingSeriesInspection;
+  try {
+    const data = await api("/api/knowledge-sets", {
+      method: "POST",
+      headers: { "Idempotency-Key": `ui-set-create-${newOpaqueId()}` },
+      body: JSON.stringify({ inspection }),
+    });
+    hideSeriesDecision();
+    await refreshKnowledgeSets();
+    showToast(`已建立知识集：${data.set.title}，可在左侧按顺序选择视频分析`);
+    $("#newTaskDialog").close();
+  } catch (error) {
+    showToast(`知识集建立失败：${error.message}`);
+  }
 }
 
 function buildTaskPayload(duplicateAction = "") {
@@ -2535,6 +2681,10 @@ function showToast(message) {
   toast.classList.add("visible");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.remove("visible"), 2600);
+}
+
+function newOpaqueId() {
+  return typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function escapeHtml(value) {

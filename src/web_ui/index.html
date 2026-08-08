@@ -94,6 +94,10 @@
           </div>
         </details>
       </nav>
+      <section class="knowledge-set-region sidebar-only-expanded" aria-labelledby="knowledgeSetHeading">
+        <div class="record-heading"><span id="knowledgeSetHeading">知识集</span><button class="icon-button small" id="refreshKnowledgeSets" type="button" aria-label="刷新知识集"><svg><use href="#i-refresh"/></svg></button></div>
+        <div class="knowledge-set-list" id="knowledgeSetList" aria-live="polite"></div>
+      </section>
       <div class="record-heading sidebar-only-expanded">
         <span id="recordHeadingLabel">知识记录</span>
         <div class="record-heading-actions">
@@ -233,6 +237,15 @@
         <input class="ui-text-field" id="taskSource" name="source" required aria-describedby="taskSourceDescription" aria-errormessage="taskSourceError" aria-invalid="false" placeholder="https://www.bilibili.com/video/BV…">
         <p class="ui-field__error" id="taskSourceError" role="alert" hidden>请输入视频链接。</p>
       </div>
+      <section class="series-decision hidden" id="seriesDecision" aria-live="polite">
+        <strong id="seriesDecisionTitle">检测到 B站分批教程</strong>
+        <p id="seriesDecisionMessage">可以先建立知识集，之后按顺序选择单个视频分析。</p>
+        <ol id="seriesDecisionItems"></ol>
+        <div class="series-decision-actions">
+          <button type="button" class="secondary-button" id="seriesAnalyzeCurrent">只分析当前视频</button>
+          <button type="button" class="primary-button" id="seriesCreateSet">建立知识集，稍后分析</button>
+        </div>
+      </section>
       <div class="form-grid">
         <label class="field"><span>分析模式</span><select class="ui-select" id="taskMode"><option value="summary">标准摘要</option><option value="tutorial">教程提取</option><option value="viral">爆款分析</option><option value="close-reading">深度精读</option></select><small id="taskModeDescription">适合资讯、访谈、介绍和一般知识视频</small></label>
         <label class="field"><span>处理模式</span><select class="ui-select" id="taskProcessingProfile"><option value="complete">complete（完整兼容）</option><option value="fast">fast（优先文本）</option></select></label>

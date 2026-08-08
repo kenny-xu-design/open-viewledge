@@ -20,7 +20,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import __version__
 from .cli_contract import sanitize_message
@@ -40,6 +40,10 @@ from .knowledge_identity import (
     build_input_knowledge_identity,
     detect_duplicate,
 )
+from .intake_store import IntakeStore
+from .bilibili_series import inspect_bilibili_input
+from .knowledge_sets import KnowledgeSetStore
+from .sources.ytdlp_source import is_bilibili_input
 from .knowledge_validation import inspect_knowledge_package, meaningful_analysis
 from .network import apply_network_proxy_env
 from .note_store import NoteConflictError, NoteStore
@@ -91,6 +95,8 @@ JOBS: dict[str, Job] = {job.id: job for job in JOB_STORE.load_jobs()}
 JOBS_LOCK = threading.RLock()
 JOB_ENV_OVERRIDES: dict[str, dict[str, str]] = {}
 JOB_ASR_PERSIST_STATE: dict[str, dict[str, Any]] = {}
+INTAKE_STORE = IntakeStore(LOCAL_STATE_ROOT / "intakes.json")
+KNOWLEDGE_SET_STORE = KnowledgeSetStore(LOCAL_STATE_ROOT / "knowledge_sets.json")
 LOGGER = logging.getLogger(__name__)
 WEB_PROVIDER_CONFIG = WebProviderConfigStore()
 CAPABILITY_CACHE: dict[str, Any] = {}
@@ -1910,11 +1916,152 @@ def resolve_media_path(knowledge_id: str) -> Path:
     return path
 
 
+def _bridge_request_id() -> str:
+    return f"req_{uuid.uuid4().hex}"
+
+
+def _bridge_data(data: dict[str, Any]) -> dict[str, Any]:
+    return {"schema_version": "1.0", "request_id": _bridge_request_id(), "data": data}
+
+
+def _bridge_error(code: str, message: str, *, retryable: bool, details: dict[str, Any] | None = None) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message, "retryable": retryable}
+    if details:
+        error["details"] = details
+    return {"schema_version": "1.0", "request_id": _bridge_request_id(), "error": error}
+
+
+def _intake_state_from_job(job: Job) -> str:
+    status = str(job.status or "").strip().lower()
+    if status in {"success", "completed"}:
+        return "ready"
+    if status in {"failed", "interrupted", "timeout"}:
+        return "failed"
+    return "processing"
+
+
+def _reconcile_intake(item: Any) -> Any:
+    local_job_id = str(getattr(item, "local_job_id", "") or "")
+    if not local_job_id:
+        return item
+    with JOBS_LOCK:
+        job = JOBS.get(local_job_id)
+        snapshot = _snapshot_job(job) if job else None
+    if snapshot is None:
+        return item
+    error = "任务处理失败，请检查配置后重试。" if _intake_state_from_job(snapshot) == "failed" else ""
+    return INTAKE_STORE.reconcile_job(
+        item.intake_id,
+        state=_intake_state_from_job(snapshot),
+        knowledge_id=str(snapshot.knowledge_id or ""),
+        error=error,
+    ) or item
+
+
+def _intake_task_payload(item: Any) -> dict[str, Any]:
+    if item.source_kind != "video":
+        raise ValueError("当前 Intake 类型尚未接入本地视频处理。")
+    return {
+        "sourceType": "url",
+        "source": item.canonical_url,
+        "backend": "deepseek",
+        "mode": item.analysis_profile,
+        "processingProfile": item.processing_profile,
+        "asr_route": "cloud",
+        "asr_fallback_enabled": True,
+        "transcriptGroupSeconds": 30,
+    }
+
+
+def _knowledge_set_item_state_from_job(job: Job) -> str:
+    status = str(job.status or "").strip().lower()
+    if status in {"success", "completed"}:
+        return "ready"
+    if status in {"failed", "interrupted", "timeout"}:
+        return "failed"
+    return "processing"
+
+
+def _reconcile_knowledge_set(record: Any) -> Any:
+    if record is None:
+        return None
+    changed = record
+    for item in list(record.items):
+        if not item.local_job_id:
+            continue
+        with JOBS_LOCK:
+            job = JOBS.get(item.local_job_id)
+            snapshot = _snapshot_job(job) if job else None
+        if snapshot is None:
+            continue
+        error = "单个视频处理失败，请检查配置后重试。" if _knowledge_set_item_state_from_job(snapshot) == "failed" else ""
+        changed = KNOWLEDGE_SET_STORE.reconcile_item(
+            record.set_id,
+            item.item_id,
+            state=_knowledge_set_item_state_from_job(snapshot),
+            knowledge_id=str(snapshot.knowledge_id or ""),
+            error=error,
+        ) or changed
+    return changed
+
+
+def _knowledge_set_task_payload(item: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sourceType": "url",
+        "source": item.source_url,
+        "backend": "deepseek",
+        "mode": str(payload.get("mode") or "tutorial"),
+        "processingProfile": str(payload.get("processingProfile") or "complete"),
+        "lang": str(payload.get("lang") or ""),
+        "export": str(payload.get("export") or "none"),
+        "asr_route": str(payload.get("asr_route") or "cloud"),
+        "asr_fallback_enabled": bool(payload.get("asr_fallback_enabled", True)),
+        "transcriptGroupSeconds": int(payload.get("transcriptGroupSeconds") or 30),
+        "comments": bool(payload.get("comments", False)),
+        "noFrames": bool(payload.get("noFrames", False)),
+    }
+
+
 class VideoSummaryHandler(BaseHTTPRequestHandler):
     server_version = f"VideoSummaryWeb/{__version__}"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/source/inspect":
+            self._send_json({"error": "该接口只接受 POST。"}, HTTPStatus.METHOD_NOT_ALLOWED)
+            return
+        if parsed.path == "/api/knowledge-sets":
+            records = [_reconcile_knowledge_set(record) for record in KNOWLEDGE_SET_STORE.list()]
+            self._send_json({"sets": [record.to_public() for record in records]})
+            return
+        if parsed.path.startswith("/api/knowledge-sets/"):
+            set_id = unquote(parsed.path[len("/api/knowledge-sets/") :].strip("/"))
+            record = _reconcile_knowledge_set(KNOWLEDGE_SET_STORE.get(set_id))
+            if record is None:
+                self._send_json({"error": "知识集不存在。"}, HTTPStatus.NOT_FOUND)
+            else:
+                self._send_json({"set": record.to_public()})
+            return
+        if parsed.path == "/v1/inbox":
+            try:
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                cursor = str((query.get("cursor") or [""])[0])
+                limit = int((query.get("limit") or ["50"])[0])
+                items, next_cursor = INTAKE_STORE.list_inbox(cursor, limit)
+                items = [_reconcile_intake(item) for item in items]
+                self._send_json(_bridge_data({"items": [item.to_public() for item in items], "next_cursor": next_cursor}))
+            except ValueError as exc:
+                self._send_json(_bridge_error("invalid_request", str(exc), retryable=False), HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path.startswith("/v1/intakes/"):
+            intake_id = unquote(parsed.path[len("/v1/intakes/") :].strip("/"))
+            item = INTAKE_STORE.get(intake_id)
+            item = _reconcile_intake(item) if item else None
+            if item is None:
+                self._send_json(_bridge_error("intake_not_found", "Intake 不存在。", retryable=False), HTTPStatus.NOT_FOUND)
+            else:
+                self._send_json(_bridge_data(item.to_public()))
+            return
         if parsed.path.startswith("/api/knowledge/") and parsed.path.endswith("/export/preview"):
             knowledge_id = unquote(parsed.path[len("/api/knowledge/") : -len("/export/preview")].strip("/"))
             try:
@@ -1966,6 +2113,176 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/source/inspect":
+            try:
+                payload = self._read_json_body()
+                source_type = str(payload.get("sourceType") or "url")
+                source = str(payload.get("source") or "").strip()
+                if source_type != "url" or not source:
+                    raise ValueError("系列识别只支持公开视频链接。")
+                if not is_bilibili_input(source):
+                    self._send_json({"kind": "single", "isCollection": False, "title": "", "sourceUrl": source, "items": []})
+                else:
+                    self._send_json(inspect_bilibili_input(source))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except UserFacingError as exc:
+                self._send_json({"error": _product_message(str(exc))}, HTTPStatus.BAD_GATEWAY)
+            except Exception:
+                self._send_json({"error": "B站来源识别失败，请稍后重试。"}, HTTPStatus.BAD_GATEWAY)
+            return
+        if parsed.path == "/api/knowledge-sets":
+            try:
+                payload = self._read_json_body()
+                inspection = payload.get("inspection") if isinstance(payload.get("inspection"), dict) else payload
+                record, replayed = KNOWLEDGE_SET_STORE.create(
+                    inspection,
+                    self.headers.get("Idempotency-Key", ""),
+                )
+                self._send_json({"set": record.to_public(), "idempotencyReplayed": replayed}, HTTPStatus.OK if replayed else HTTPStatus.CREATED)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except OSError:
+                self._send_json({"error": "知识集保存失败，请检查本地状态目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path.startswith("/api/knowledge-sets/") and parsed.path.endswith("/analyze"):
+            relative = parsed.path[len("/api/knowledge-sets/") : -len("/analyze")].strip("/")
+            parts = relative.split("/")
+            if len(parts) != 3 or parts[1] != "items" or not parts[2]:
+                self._send_json({"error": "知识集条目路径不合法。"}, HTTPStatus.BAD_REQUEST)
+                return
+            set_id, item_id = parts[0], parts[2]
+            try:
+                payload = self._read_json_body()
+                record = _reconcile_knowledge_set(KNOWLEDGE_SET_STORE.get(set_id))
+                if record is None:
+                    self._send_json({"error": "知识集不存在。"}, HTTPStatus.NOT_FOUND)
+                    return
+                record, item, replayed = KNOWLEDGE_SET_STORE.begin_item_action(
+                    set_id,
+                    item_id,
+                    self.headers.get("Idempotency-Key", ""),
+                )
+                if not replayed:
+                    try:
+                        job = start_job(_knowledge_set_task_payload(item, payload))
+                        record = KNOWLEDGE_SET_STORE.attach_job(set_id, item_id, job.id, job.knowledge_id)
+                    except DuplicateTaskError as exc:
+                        KNOWLEDGE_SET_STORE.mark_duplicate(set_id, item_id, "该视频已有重复任务，请先处理重复任务。")
+                        self._send_json({"error": "该视频已有重复任务。", "duplicate": _duplicate_payload(exc.decision)}, HTTPStatus.CONFLICT)
+                        return
+                    except ValueError:
+                        record = KNOWLEDGE_SET_STORE.fail_item(set_id, item_id, "处理服务尚未准备好，请完成本地 API 配置后重试。")
+                        self._send_json({"set": record.to_public(), "idempotencyReplayed": False}, HTTPStatus.ACCEPTED)
+                        return
+                    except Exception:
+                        record = KNOWLEDGE_SET_STORE.fail_item(set_id, item_id, "单个视频任务创建失败，请稍后重试。")
+                        self._send_json({"set": record.to_public(), "idempotencyReplayed": False}, HTTPStatus.ACCEPTED)
+                        return
+                record = _reconcile_knowledge_set(record)
+                self._send_json({"set": record.to_public(), "idempotencyReplayed": replayed}, HTTPStatus.OK if replayed else HTTPStatus.ACCEPTED)
+            except KeyError:
+                self._send_json({"error": "知识集或条目不存在。"}, HTTPStatus.NOT_FOUND)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/v1/intakes":
+            try:
+                payload = self._read_json_body()
+                item, replayed = INTAKE_STORE.create(payload, self.headers.get("Idempotency-Key", ""))
+                response = _bridge_data({
+                    **item.to_public(),
+                    "idempotency_replayed": replayed,
+                })
+                self._send_json(response, HTTPStatus.OK if replayed else HTTPStatus.CREATED)
+            except ValueError as exc:
+                self._send_json(_bridge_error("invalid_request", str(exc), retryable=False), HTTPStatus.BAD_REQUEST)
+            except OSError:
+                self._send_json(_bridge_error("storage_unavailable", "收件箱暂时不可用，请稍后重试。", retryable=True), HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        if parsed.path.startswith("/v1/intakes/") and parsed.path.endswith("/actions"):
+            intake_id = unquote(parsed.path[len("/v1/intakes/") : -len("/actions")].strip("/"))
+            try:
+                payload = self._read_json_body()
+                action = str(payload.get("action") or "").strip().lower()
+                if action not in {"start", "retry", "cancel"}:
+                    raise ValueError("action 只能是 start、retry 或 cancel。")
+                item = INTAKE_STORE.get(intake_id)
+                if item is None:
+                    self._send_json(_bridge_error("intake_not_found", "Intake 不存在。", retryable=False), HTTPStatus.NOT_FOUND)
+                    return
+                item = _reconcile_intake(item)
+                if item.state == "duplicate":
+                    self._send_json(
+                        _bridge_error(
+                            "duplicate_intake",
+                            "该 Intake 已存在重复任务。",
+                            retryable=False,
+                            details={
+                                "knowledge_id": item.duplicate_knowledge_id,
+                                "allowed_actions": list(item.duplicate_allowed_actions),
+                            },
+                        ),
+                        HTTPStatus.CONFLICT,
+                    )
+                    return
+                if action == "cancel":
+                    item, replayed = INTAKE_STORE.begin_action(
+                        intake_id,
+                        action,
+                        self.headers.get("Idempotency-Key", ""),
+                    )
+                    self._send_json(_bridge_data({**item.to_public(), "action": action, "idempotency_replayed": replayed}))
+                    return
+                if item.source_kind != "video":
+                    self._send_json(_bridge_error("unsupported_source", "当前只支持视频 Intake 交接。", retryable=False), HTTPStatus.BAD_REQUEST)
+                    return
+                item, replayed = INTAKE_STORE.begin_action(
+                    intake_id,
+                    action,
+                    self.headers.get("Idempotency-Key", ""),
+                )
+                if not replayed:
+                    try:
+                        job = start_job(_intake_task_payload(item))
+                        INTAKE_STORE.attach_job(intake_id, job.id, job.knowledge_id)
+                    except DuplicateTaskError as exc:
+                        INTAKE_STORE.mark_duplicate(
+                            intake_id,
+                            kind=exc.decision.kind.value,
+                            knowledge_id=exc.decision.matched_knowledge_id,
+                            actions=list(exc.decision.allowed_actions),
+                        )
+                        self._send_json(
+                            _bridge_error(
+                                "duplicate_intake",
+                                "该 Intake 已存在重复任务。",
+                                retryable=False,
+                                details={"allowed_actions": list(exc.decision.allowed_actions)},
+                            ),
+                            HTTPStatus.CONFLICT,
+                        )
+                        return
+                    except ValueError:
+                        item = INTAKE_STORE.fail_action(
+                            intake_id,
+                            "处理服务尚未准备好，请完成本地 API 配置后重试。",
+                        )
+                        self._send_json(_bridge_data({**item.to_public(), "action": action, "idempotency_replayed": False}), HTTPStatus.ACCEPTED)
+                        return
+                    except Exception:
+                        item = INTAKE_STORE.fail_action(intake_id, "本地处理任务创建失败，请稍后重试。")
+                        self._send_json(_bridge_data({**item.to_public(), "action": action, "idempotency_replayed": False}), HTTPStatus.ACCEPTED)
+                        return
+                item = _reconcile_intake(item)
+                self._send_json(_bridge_data({**item.to_public(), "action": action, "idempotency_replayed": replayed}), HTTPStatus.OK if replayed else HTTPStatus.ACCEPTED)
+            except KeyError:
+                self._send_json(_bridge_error("intake_not_found", "Intake 不存在。", retryable=False), HTTPStatus.NOT_FOUND)
+            except ValueError as exc:
+                message = str(exc)
+                code = "invalid_request" if "Idempotency-Key" in message or "action" in message else "invalid_state"
+                self._send_json(_bridge_error(code, message, retryable=False), HTTPStatus.BAD_REQUEST)
+            return
         if parsed.path.startswith("/api/knowledge/") and parsed.path.endswith("/export"):
             knowledge_id = unquote(parsed.path[len("/api/knowledge/") : -len("/export")].strip("/"))
             try:
