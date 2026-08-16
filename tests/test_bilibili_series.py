@@ -72,11 +72,14 @@ class BilibiliSeriesTests(unittest.TestCase):
         }
         with TemporaryDirectory() as temp:
             store = KnowledgeSetStore(Path(temp) / "sets.json")
-            record, replayed = store.create(inspection, "set-idem")
+            record, replayed = store.create(inspection, "set-idem", analysis_profile="close-reading", processing_profile="fast", transcript_group_seconds=60)
             replay, replayed_again = store.create(inspection, "set-idem")
             self.assertFalse(replayed)
             self.assertTrue(replayed_again)
             self.assertEqual(record.set_id, replay.set_id)
+            self.assertEqual(record.analysis_profile, "close-reading")
+            self.assertEqual(record.processing_profile, "fast")
+            self.assertEqual(record.transcript_group_seconds, 60)
             set_id = record.set_id
             item_id = record.items[0].item_id
             _, item, action_replayed = store.begin_item_action(set_id, item_id, "item-idem")
@@ -86,6 +89,10 @@ class BilibiliSeriesTests(unittest.TestCase):
             refreshed = store.get(set_id)
             self.assertEqual(refreshed.items[0].state, "ready")
             self.assertEqual(refreshed.items[0].knowledge_id, "k1-demo")
+            store.fail_item(set_id, refreshed.items[1].item_id, "provider timeout")
+            _, retry_item, retry_replayed = store.begin_item_action(set_id, refreshed.items[1].item_id, "item-idem-retry")
+            self.assertFalse(retry_replayed)
+            self.assertEqual(retry_item.state, "processing")
             store.mark_duplicate(set_id, refreshed.items[1].item_id, "duplicate")
             self.assertEqual(store.get(set_id).items[1].state, "duplicate")
 

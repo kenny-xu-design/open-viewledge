@@ -1,0 +1,29 @@
+:root { color-scheme: light dark; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: Canvas; color: CanvasText; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 280px; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+.panel-header, .settings, main { padding: 16px; }
+.panel-header { display: flex; align-items: start; justify-content: space-between; border-bottom: 1px solid color-mix(in srgb, CanvasText 18%, transparent); }
+.eyebrow { margin: 0 0 4px; color: #1683e8; font-size: 11px; font-weight: 700; letter-spacing: .12em; }
+h1, h2, p { margin-top: 0; } h1 { margin-bottom: 0; font-size: 22px; } h2 { margin-bottom: 8px; font-size: 14px; }
+.settings { border-bottom: 1px solid color-mix(in srgb, CanvasText 18%, transparent); }
+.setting-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+input, textarea { width: 100%; min-height: 34px; padding: 7px 9px; border: 1px solid color-mix(in srgb, CanvasText 28%, transparent); border-radius: 8px; background: Canvas; color: CanvasText; }
+button { min-height: 34px; padding: 6px 10px; border: 1px solid color-mix(in srgb, CanvasText 28%, transparent); border-radius: 8px; background: color-mix(in srgb, CanvasText 8%, Canvas); color: CanvasText; }
+button:hover { background: color-mix(in srgb, #1683e8 18%, Canvas); }
+.hint, .source-url { margin: 8px 0 0; color: color-mix(in srgb, CanvasText 65%, transparent); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.status { margin-bottom: 6px; padding: 10px; border-radius: 8px; background: color-mix(in srgb, #1683e8 12%, Canvas); font-size: 13px; line-height: 1.45; }
+.status.error { background: color-mix(in srgb, #d33 15%, Canvas); } .hidden { display: none; }
+.status-actions { min-height: 34px; margin-bottom: 12px; }
+.source-card { margin-bottom: 12px; } .search-label { display: block; margin: 12px 0 6px; font-size: 12px; }
+.reader-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.groups { display: grid; gap: 10px; } .group { padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 10px; }
+.group-header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; } .group-position { flex: 1; color: color-mix(in srgb, CanvasText 65%, transparent); font-size: 12px; }
+.group-header .seek { color: #1683e8; }
+.group-text { margin: 0; white-space: pre-wrap; line-height: 1.55; user-select: text; } .empty { color: color-mix(in srgb, CanvasText 65%, transparent); font-size: 13px; }
+body.focus-reading .settings { display: none; }
+body.focus-reading .panel-header { padding-block: 10px; }
+body.focus-reading .group { padding: 16px; background: color-mix(in srgb, #1683e8 7%, Canvas); }
+body.focus-reading .group-text { font-size: 19px; line-height: 1.75; }
+body.focus-reading .group-position { font-size: 13px; }

@@ -22,6 +22,7 @@ def render_knowledge_markdown(
     highlight_image_prefix: str = "",
 ) -> str:
     source, analysis = package.source, package.analysis
+    is_page = source.source_type == "web_page"
     profile = (analysis.analysis_profile if analysis else source.analysis_profile) or "summary"
     sections = set(selection.normalized_sections())
     summary_embeds_core = False
@@ -34,12 +35,12 @@ def render_knowledge_markdown(
         "knowledge_id": selection.knowledge_id,
         "analysis_profile": profile,
         "created": date.today().isoformat(),
-        "type": "video-note",
+        "type": "page-note" if is_page else "video-note",
         "status": "processed",
     }
     for key, value in frontmatter.items():
         lines.append(f"{key}: {json.dumps(str(value or ''), ensure_ascii=False)}")
-    lines.extend(["tags:", "  - 外源/视频", "  - AI摘要", f"  - {_clean_tag(profile)}", "---", "", f"# {source.title or selection.knowledge_id}", ""])
+    lines.extend(["tags:", f"  - {'外源/网页' if is_page else '外源/视频'}", "  - AI摘要", f"  - {_clean_tag(profile)}", "---", "", f"# {source.title or selection.knowledge_id}", ""])
 
     for section in selection.normalized_sections():
         if section == "metadata":
@@ -64,8 +65,8 @@ def render_knowledge_markdown(
             for item in analysis.highlights:
                 timestamp = item.timestamp if item.timestamp is not None else item.start
                 summary = item.summary or item.explanation
-                target = _time_link(package, selection.knowledge_id, timestamp)
-                time = f" [{format_timestamp(timestamp)}]({target})" if target else (f" {format_timestamp(timestamp)}" if timestamp is not None else "")
+                target = "" if is_page else _time_link(package, selection.knowledge_id, timestamp)
+                time = "" if is_page else (f" [{format_timestamp(timestamp)}]({target})" if target else (f" {format_timestamp(timestamp)}" if timestamp is not None else ""))
                 lines.append(f"- **{item.title}**：{summary}{time}")
                 tags = [f"`#{_clean_tag(tag)}`" for tag in item.tags if _clean_tag(tag)]
                 if tags:
@@ -77,8 +78,8 @@ def render_knowledge_markdown(
             lines.extend(["## 操作步骤", ""])
             for index, item in enumerate(analysis.steps, 1):
                 lines.extend([f"### {index}. {item.title}", "", item.description.strip(), ""])
-                target = _time_link(package, selection.knowledge_id, item.timestamp)
-                if item.timestamp is not None:
+                target = "" if is_page else _time_link(package, selection.knowledge_id, item.timestamp)
+                if item.timestamp is not None and not is_page:
                     label = format_timestamp(item.timestamp)
                     lines.append(f"- 时间：[{label}]({target})" if target else f"- 时间：{label}")
                 if item.expected_result.strip():
@@ -93,7 +94,7 @@ def render_knowledge_markdown(
                 lines.append("")
         elif section == "glossary" and not summary_embeds_core and analysis and analysis.glossary:
             lines.extend(["## 关键术语", ""])
-            lines.extend(f"- **{item.term}**：{item.definition or '视频中未展开说明'}" for item in analysis.glossary)
+            lines.extend(f"- **{item.term}**：{item.definition or ('网页中未展开说明' if is_page else '视频中未展开说明')}" for item in analysis.glossary)
             lines.append("")
         elif section == "thoughts" and not summary_embeds_core and analysis and analysis.thoughts:
             lines.extend(["## 思考", ""] + [f"{i}. {item.question}" for i, item in enumerate(analysis.thoughts, 1)] + [""])
@@ -102,12 +103,12 @@ def render_knowledge_markdown(
         elif section == "warnings" and analysis and analysis.warnings:
             _timed_items(lines, "注意事项", analysis.warnings, package, selection.knowledge_id)
         elif section == "chapters" and not summary_embeds_core and ((analysis and analysis.chapters) or package.timeline):
-            lines.extend(["## 视频章节总结", ""])
+            lines.extend([f"## {'页面结构' if is_page else '视频章节总结'}", ""])
             chapters = analysis.chapters if analysis and analysis.chapters else package.timeline
             for item in chapters:
-                target = _time_link(package, selection.knowledge_id, item.start)
-                label = format_timestamp(item.start)
-                lines.append(f"### [{label}]({target}) {item.title}" if target else f"### {label} {item.title}")
+                target = "" if is_page else _time_link(package, selection.knowledge_id, item.start)
+                label = "" if is_page else format_timestamp(item.start)
+                lines.append(f"### {item.title}" if is_page else (f"### [{label}]({target}) {item.title}" if target else f"### {label} {item.title}"))
                 summary = getattr(item, "summary", "")
                 frame_path = getattr(item, "frame_path", "")
                 if frame_path and analysis.analysis_profile == "tutorial":
@@ -122,15 +123,21 @@ def render_knowledge_markdown(
         elif section == "user_notes" and user_notes.strip():
             lines.extend(["## 我的笔记", "", user_notes.strip(), ""])
         elif section == "source_materials":
-            lines.extend(["## 原文资料", "", "- [分组字幕](transcript.grouped.md)", "- `transcript.raw.jsonl`", "- `timeline.json`", ""])
+            if is_page:
+                lines.extend(["## 原文资料", "", "- [页面正文](page.md)", "- `page_content.json`", ""])
+            else:
+                lines.extend(["## 原文资料", "", "- [分组字幕](transcript.grouped.md)", "- `transcript.raw.jsonl`", "- `timeline.json`", ""])
     return "\n".join(lines).rstrip() + "\n"
 
 
 def _metadata(lines: list[str], package: KnowledgePackage, profile: str) -> None:
     source = package.source
-    lines.extend(["> [!info] 视频来源", f"> - 平台：{source.platform or '未知'}", f"> - 作者：{source.author or '未知'}"])
+    is_page = source.source_type == "web_page"
+    lines.extend([f"> [!info] {'网页来源' if is_page else '视频来源'}", f"> - 平台：{source.platform or '未知'}", f"> - 作者：{source.author or '未知'}"])
     if source.canonical_url or source.source_url:
-        lines.append(f"> - 原视频：[打开视频]({source.canonical_url or source.source_url})")
+        lines.append(f"> - {'原网页：[打开网页]' if is_page else '原视频：[打开视频]'}({source.canonical_url or source.source_url})")
+    if is_page and source.captured_at:
+        lines.append(f"> - 捕获时间：{source.captured_at}")
     lines.extend([f"> - 分析类型：{profile}", ""])
 
 
@@ -162,9 +169,10 @@ def _timed_items(lines: list[str], heading: str, items: list[Any], package: Know
     lines.extend([f"## {heading}", ""])
     for item in items:
         prefix = "- [ ]" if checkbox else "-"
-        target = _time_link(package, knowledge_id, item.timestamp)
+        is_page = package.source.source_type == "web_page"
+        target = "" if is_page else _time_link(package, knowledge_id, item.timestamp)
         suffix = ""
-        if item.timestamp is not None:
+        if item.timestamp is not None and not is_page:
             label = format_timestamp(item.timestamp)
             suffix = f"（[{label}]({target})）" if target else f"（{label}）"
         lines.append(f"{prefix} {item.text}{suffix}")
@@ -187,6 +195,10 @@ def _chat(lines: list[str], payload: dict[str, Any], package: KnowledgePackage, 
             if citations:
                 lines.extend(["#### 引用", ""])
                 for citation in citations:
+                    if package.source.source_type == "web_page":
+                        excerpt = str(citation.get("excerpt") or citation.get("title") or "正文引用")
+                        lines.append(f"- {excerpt}")
+                        continue
                     seconds = citation.get("start")
                     target = _time_link(package, knowledge_id, seconds)
                     label = format_timestamp(seconds)

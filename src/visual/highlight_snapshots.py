@@ -30,6 +30,7 @@ def generate_highlight_snapshots(
     output_dir: Path,
     *,
     ffmpeg_path: str | Path | None = None,
+    ffmpeg_threads: int = 1,
 ) -> HighlightSnapshotResult:
     if not analysis.highlights:
         return HighlightSnapshotResult(analysis, 0, 0, [])
@@ -74,6 +75,8 @@ def generate_highlight_snapshots(
                 command = [
                     ffmpeg,
                     "-y",
+                    "-threads",
+                    str(max(1, ffmpeg_threads)),
                     "-i",
                     str(source_frame),
                     "-frames:v",
@@ -91,6 +94,8 @@ def generate_highlight_snapshots(
                 command = [
                     ffmpeg,
                     "-y",
+                    "-threads",
+                    str(max(1, ffmpeg_threads)),
                     "-ss",
                     str(timestamp),
                     "-i",
@@ -158,6 +163,7 @@ def generate_tutorial_step_snapshots(
     output_dir: Path,
     *,
     ffmpeg_path: str | Path | None = None,
+    ffmpeg_threads: int = 1,
 ) -> HighlightSnapshotResult:
     if analysis.analysis_profile != "tutorial" or not analysis.steps:
         return HighlightSnapshotResult(analysis, 0, 0, [])
@@ -202,6 +208,8 @@ def generate_tutorial_step_snapshots(
                 command = [
                     ffmpeg,
                     "-y",
+                    "-threads",
+                    str(max(1, ffmpeg_threads)),
                     "-i",
                     str(source_frame),
                     "-frames:v",
@@ -219,6 +227,8 @@ def generate_tutorial_step_snapshots(
                 command = [
                     ffmpeg,
                     "-y",
+                    "-threads",
+                    str(max(1, ffmpeg_threads)),
                     "-ss",
                     str(timestamp),
                     "-i",

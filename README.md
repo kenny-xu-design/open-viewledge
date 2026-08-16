@@ -42,6 +42,12 @@ Web 默认地址：
 http://127.0.0.1:5188/
 ```
 
+Windows 启动脚本会把可变任务状态默认保存到
+`%LOCALAPPDATA%\Viewledge\state`，把知识包默认保存到
+`%LOCALAPPDATA%\Viewledge\knowledge`，因此解压目录可以保持为便携代码目录。
+如需指定其他可写位置，可在启动前设置 `VIEWLEDGE_STATE_ROOT` 和
+`VIEWLEDGE_OUTPUT_ROOT`；不要把 API Key 或个人媒体放入仓库目录。
+
 关闭启动脚本的命令窗口会停止本地 Web 服务。
 
 ## API 配置
@@ -72,6 +78,13 @@ DeepSeek、Gemini 和 Groq 均为可选第三方服务，其免费额度、价�
 5. 点击“开始处理”，等待字幕、分析和知识包生成完成。
 
 平台没有字幕时，默认使用 Groq 云端快速转写，也可为当前任务选择本地 GPU 或本地 CPU。处理本地媒体或无字幕视频通常需要 FFmpeg；评论关闭、平台限制或无法读取评论时，评论同步会跳过，但不影响主摘要。
+
+### 计算资源与流畅模式
+
+Web 默认使用 `responsive` 计算档位：本地 GPU ASR 只允许一个 GPU 任务，
+本地 CPU ASR 和 FFmpeg 会限制线程并排队，计算子进程使用较低系统优先级。
+任务窗口中的“计算资源”可切换为“平衡”或“全速”。也可通过
+`COMPUTE_PROFILE`、`CPU_THREAD_LIMIT` 和 `FFMPEG_THREADS` 环境变量覆盖默认值。
 
 ## 分析模式
 
@@ -633,7 +646,7 @@ git diff --check
 - Gemini 视频和视觉路径已经形成可操作流程并完成 mock 验证；当前环境未配置 Gemini，因此仍需真实 API、额度、长视频和 URL 拒绝场景验收。
 - 评论同步依赖公开平台和 `yt-dlp` 当前能力；关闭评论、平台限制或提取器不返回评论时会跳过评论产物，主知识包仍可用。
 - Obsidian 仅为兼容 Markdown 导出，不是 Vault 数据层。
-- 通用网页正文采集尚未实现；当前 URL 输入面向 `yt-dlp` 支持的视频平台。
+- 浏览器插件尚未发布；当前私有核心已支持由浏览器显式提交正文后的本地页面 Intake，未来 `viewledge-clipper` 负责网页侧栏字幕阅读和剪藏。当前 URL 视频输入仍面向 `yt-dlp` 支持的平台。
 
 ## 授权状态
 

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Viewledge &#23383;&#24149;&#20391;&#26639;</title>
+    <link rel="stylesheet" href="side_panel.css">
+  </head>
+  <body>
+    <header class="panel-header">
+      <div><p class="eyebrow">VIEWLEDGE</p><h1>&#23383;&#24149;&#20391;&#26639;</h1></div>
+      <button id="refresh" type="button">&#21047;&#26032;</button>
+    </header>
+    <section class="settings" aria-labelledby="settings-title">
+      <h2 id="settings-title">&#26412;&#22320; Bridge</h2>
+      <div class="setting-row"><label for="bridgeBase">&#22320;&#22336;</label><input id="bridgeBase" type="url" inputmode="url" autocomplete="off" spellcheck="false"><button id="saveBridge" type="button">&#20445;&#23384;</button></div>
+      <p class="hint">&#21482;&#21457;&#36865;&#24403;&#21069;&#39029;&#38754; URL &#21644;&#20320;&#20027;&#21160;&#28857;&#20987;&#30340;&#21098;&#34255;&#20869;&#23481;&#65292;&#19981;&#21457;&#36865; Cookie&#12290;</p>
+    </section>
+    <main>
+      <div id="status" class="status" role="status" aria-live="polite">&#27491;&#22312;&#35835;&#21462;&#24403;&#21069;&#39029;&#38754;&#8230;</div>
+      <div class="status-actions"><button id="retry" class="hidden" type="button">Retry</button></div>
+      <section id="source" class="source-card hidden" aria-labelledby="source-title"><h2 id="source-title"></h2><p id="source-url" class="source-url"></p><div class="reader-actions"><button id="readingMode" type="button" aria-pressed="false">&#19987;&#27880;&#38405;&#35835;</button></div><label class="search-label" id="search-label" for="search">Search subtitles</label><input id="search" type="search" placeholder="Search current subtitles" autocomplete="off"><label class="search-label" id="note-label" for="note">Note for clip/highlight</label><textarea id="note" maxlength="500" rows="2" placeholder="Optional bounded note" autocomplete="off"></textarea></section>
+      <section id="groups" class="groups" aria-live="polite"></section>
+    </main>
+    <template id="group-template"><article class="group"><header class="group-header"><span class="group-position"></span><button class="seek" type="button">&#36339;&#36716;</button><button class="copy" type="button">&#22797;&#21046;</button><button class="clip" type="button">&#21098;&#34255;</button><button class="highlight" type="button">&#39640;&#20142;</button><button class="intake" type="button">&#25910;&#20214;</button></header><p class="group-text"></p></article></template>
+    <script type="module" src="side_panel.js"></script>
+  </body>
+</html>

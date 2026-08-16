@@ -214,6 +214,21 @@ def normalize_source_url(value: str) -> str:
     return urlunsplit((scheme, host, path, query, ""))
 
 
+def source_urls_equivalent(left: str, right: str) -> bool:
+    """Compare source URLs using the same default-part semantics as identity."""
+    left_normalized = normalize_source_url(str(left or ""))
+    right_normalized = normalize_source_url(str(right or ""))
+    if left_normalized == right_normalized:
+        return True
+    left_bvid = _bilibili_video_id(left_normalized)
+    right_bvid = _bilibili_video_id(right_normalized)
+    if not left_bvid or left_bvid != right_bvid:
+        return False
+    left_part = _query_value(left_normalized, "p") or "1"
+    right_part = _query_value(right_normalized, "p") or "1"
+    return left_part == right_part
+
+
 def _source_identity_material(source: SourceRecord, input_value: str) -> tuple[str, str]:
     source_type = source.source_type.strip().lower()
     platform = source.platform.strip().lower() or "unknown"

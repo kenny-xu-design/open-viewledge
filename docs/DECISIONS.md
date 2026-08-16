@@ -345,3 +345,73 @@ and reuses the existing task, identity, duplicate, and recovery contracts.
 The knowledge-set registry is a private local Web implementation. It is not a
 public Bridge schema and must not expose Provider routes, prompts, local paths,
 job internals, or credentials.
+
+## D040: Knowledge Sets Are Collapsible Navigation Indexes
+
+A knowledge set represents discovered ordered source items; a knowledge record
+represents an item that has actually produced a knowledge package. The sidebar
+therefore keeps the set and record lists separate: queued items remain visible
+in the set but do not become phantom records, while completed items resolve by
+the same stable `knowledge_id` in both views. Set cards may collapse to protect
+the reading surface, and completed items may show duration and analysis date
+from the linked package without changing the public Bridge contract.
+
+## D041: Side Panel State And URL Hygiene Are Record-Scoped
+
+The public Side Panel never sends an active-page URL containing embedded
+credentials and removes URL fragments before local source resolution. Search
+text, bounded notes, selections, and idempotency memory belong to the currently
+matched opaque knowledge record and are cleared when that record changes. Only
+the explicit focus-reading boolean may persist in extension-local storage;
+subtitle text, page content, notes, and resolved records are not persisted by
+the client.
+
+## D042: Responsive Compute Is The Default Runtime Policy
+
+The private core defaults to a responsive compute profile. GPU ASR uses one
+cross-process slot; CPU ASR and FFmpeg use separate single slots with bounded
+threads. Web jobs enter a persisted FIFO scheduler and expose queue/resource
+state. Runtime locks live under the local machine state root, never inside the
+shared knowledge-package directory.
+
+## D043: Collections, Resources, And Projects Are Separate Navigation Contexts
+
+Video-series knowledge sets and local-folder sets are output collections. Their
+ready members remain owned by the original collection and are excluded from
+the Resource Library filters. The former sidebar knowledge-set region is a
+user-managed Project index instead: one knowledge record may belong to at most
+one Project while simultaneously remaining in its original output collection.
+
+Project membership is stored in a dedicated shared-output registry and never
+inside a knowledge package, knowledge-set registry, or folder-set registry.
+Deleting a Project only unlinks its members. On desktop, a collapsed sidebar
+retains an icon rail and non-modal flyout; mobile keeps the existing modal
+drawer behavior.
+
+## D044: Navigation Chooses Context; The Main Workspace Manages Resources
+
+The Sidebar identifies product contexts such as Resources, Outputs, and
+Projects. Status, source, sort, Inbox, and bulk-management controls belong in
+the Resource Overview rather than nested navigation. The overview lists only
+independent Resource records and reuses the existing library, Inbox, and
+Project contracts; knowledge detail links remain `#/knowledge/{id}`.
+
+At desktop widths the expanded Sidebar and collapsed rail reserve 264px and
+56px grid columns respectively. A rail flyout is transient and may overlay the
+workspace without changing its width. Compact widths retain the modal drawer.
+This layout decision does not authorize writes to knowledge packages or
+collection registries.
+
+## D045: Global Search Is Local, Unified, And Explicitly Deep
+
+The bundled Web UI keeps the sidebar text field as a fast current-list filter.
+The moved sidebar search button and `Ctrl+Shift+K` open a separate global search
+dialog covering knowledge records, collections, and projects. Results use one
+relevance-ranked list with a compact preview instead of separate result panes.
+
+Fast search reads local metadata, analysis summary/highlights, tags, and user
+notes. Subtitle and captured-page body search is opt-in through the deep-search
+toggle, is debounced and cached by package file modification signatures, and
+never calls a Provider. Search responses contain bounded sanitized snippets and
+never expose complete content, credentials, prompts, or absolute paths. `Ctrl+K`
+continues to focus the local sidebar filter for compatibility.

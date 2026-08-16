@@ -16,13 +16,13 @@ from .asr_runtime import (
     CudaProbe,
     LocalASREngine,
     _audio_duration,
-    _cross_process_asr_lock,
     _model_reference,
     build_asr_candidates,
     probe_cuda,
 )
 from .config import AppConfig
 from .domain.models import TranscriptSegment
+from .resource_governor import resource_guard, set_process_below_normal
 from .utils import UserFacingError
 
 
@@ -83,6 +83,8 @@ def _worker_main(
     engine = LocalASREngine(project_root=Path(project_root))
     messages_closed = False
     try:
+        if device == "cpu":
+            set_process_below_normal()
         config = AppConfig.model_validate(config_data).model_copy(
             update={
                 "asr_device": device,
@@ -138,9 +140,11 @@ def _worker_main(
             send(event, **payload)
 
         phase["value"] = "waiting"
-        with _cross_process_asr_lock(
-            Path(project_root),
+        with resource_guard(
+            "gpu" if device == "cuda" else "cpu",
             timeout_seconds=settings.resource_wait_timeout_seconds,
+            profile=settings.compute_profile,
+            configured_threads=settings.cpu_thread_limit,
         ):
             phase["value"] = "model_loading"
             send("model_loading", device=device)

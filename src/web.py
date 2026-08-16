@@ -39,10 +39,16 @@ from .knowledge_identity import (
     TaskIdentityRecord,
     build_input_knowledge_identity,
     detect_duplicate,
+    normalize_source_url,
+    source_urls_equivalent,
 )
 from .intake_store import IntakeStore
+from .page_ingestion import ingest_page_capture
 from .bilibili_series import inspect_bilibili_input
-from .knowledge_sets import KnowledgeSetStore
+from .knowledge_sets import KnowledgeSetStore, knowledge_set_registry_path
+from .folder_sets import FolderSetStore, inspect_folder, normalize_local_path, VIDEO_EXTENSIONS as FOLDER_VIDEO_EXTENSIONS
+from .clip_store import ClipStore
+from .project_groups import ProjectGroupStore, project_registry_path
 from .sources.ytdlp_source import is_bilibili_input
 from .knowledge_validation import inspect_knowledge_package, meaningful_analysis
 from .network import apply_network_proxy_env
@@ -65,7 +71,13 @@ NETWORK_PROXY_STATUS = apply_network_proxy_env()
 WEB_CONFIG = load_config(PROJECT_ROOT / "config.example.json")
 OUTPUT_ROOT = resolve_output_root(WEB_CONFIG, PROJECT_ROOT)
 WEB_UI_ROOT = Path(__file__).resolve().parent / "web_ui"
-LOCAL_STATE_ROOT = PROJECT_ROOT / ".local"
+_configured_state_root = str(os.environ.get("VIEWLEDGE_STATE_ROOT") or "").strip()
+LOCAL_STATE_ROOT = (
+    Path(_configured_state_root).expanduser().resolve()
+    if _configured_state_root
+    else PROJECT_ROOT / ".local"
+)
+LOCAL_STATE_ROOT.mkdir(parents=True, exist_ok=True)
 SUPPORTED_MODES = {"summary", "tutorial", "viral", "close-reading"}
 SUPPORTED_BACKENDS = {"deepseek"}
 SUPPORTED_EXPORTS = {"none", "obsidian"}
@@ -79,6 +91,8 @@ LIBRARY_FILES = {
     "transcript.raw.jsonl",
     "transcript.md",
     "source.md",
+    "page.md",
+    "page_content.json",
     "export_note.md",
     "user_notes.md",
     "visual_insights.json",
@@ -88,19 +102,34 @@ LIBRARY_FILES = {
     "comment_insights.json",
     "comment_insights.md",
 }
-MEDIA_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"}
+MEDIA_EXTENSIONS = set(FOLDER_VIDEO_EXTENSIONS) | {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"}
 
 JOB_STORE = JobStore(LOCAL_STATE_ROOT / "web_jobs.json")
 JOBS: dict[str, Job] = {job.id: job for job in JOB_STORE.load_jobs()}
 JOBS_LOCK = threading.RLock()
 JOB_ENV_OVERRIDES: dict[str, dict[str, str]] = {}
 JOB_ASR_PERSIST_STATE: dict[str, dict[str, Any]] = {}
+JOB_SCHEDULER_CONDITION = threading.Condition(JOBS_LOCK)
+ACTIVE_PIPELINES = 0
+MAX_ACTIVE_PIPELINES = 2
 INTAKE_STORE = IntakeStore(LOCAL_STATE_ROOT / "intakes.json")
-KNOWLEDGE_SET_STORE = KnowledgeSetStore(LOCAL_STATE_ROOT / "knowledge_sets.json")
+KNOWLEDGE_SET_STORE = KnowledgeSetStore(
+    knowledge_set_registry_path(OUTPUT_ROOT),
+    legacy_paths=(
+        PROJECT_ROOT / ".local" / "knowledge_sets.json",
+        LOCAL_STATE_ROOT / "knowledge_sets.json",
+    ),
+)
+FOLDER_SET_STORE = FolderSetStore(LOCAL_STATE_ROOT / "folder_sets.json")
+CLIP_STORE = ClipStore(LOCAL_STATE_ROOT / "clips.json")
+PROJECT_GROUP_STORE = ProjectGroupStore(project_registry_path(OUTPUT_ROOT))
 LOGGER = logging.getLogger(__name__)
 WEB_PROVIDER_CONFIG = WebProviderConfigStore()
 CAPABILITY_CACHE: dict[str, Any] = {}
 CAPABILITY_LOCK = threading.RLock()
+SEARCH_DOCUMENT_CACHE: dict[str, dict[str, Any]] = {}
+SEARCH_DOCUMENT_CACHE_LOCK = threading.RLock()
+SEARCH_FILE_LIMIT = 2_000_000
 PRODUCT_SENSITIVE_KEYS = {
     "analysis_model",
     "analysis_provider",
@@ -545,6 +574,13 @@ def _reuse_completed_duplicate(
         request_fingerprint=request_fingerprint,
         duplicate=duplicate,
     )
+    job.compute_profile = str(
+        payload.get("computeProfile")
+        or payload.get("compute_profile")
+        or WEB_CONFIG.compute_profile
+    )
+    if job.compute_profile not in {"responsive", "balanced", "performance"}:
+        raise ValueError("computeProfile 只能是 responsive、balanced 或 performance。")
     job.status = "success"
     job.returncode = 0
     job.started_at = now
@@ -647,9 +683,46 @@ def start_job(payload: dict[str, Any]) -> Job:
             raise
         if env_overrides:
             JOB_ENV_OVERRIDES[job.id] = env_overrides
-    thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
+        JOB_ENV_OVERRIDES.setdefault(job.id, {})["COMPUTE_PROFILE"] = job.compute_profile
+    thread = threading.Thread(target=_run_scheduled_job, args=(job,), daemon=True)
     thread.start()
     return job
+
+
+def _run_scheduled_job(job: Job) -> None:
+    global ACTIVE_PIPELINES
+    with JOB_SCHEDULER_CONDITION:
+        while True:
+            if job.status != "queued":
+                return
+            queued = sorted(
+                (item for item in JOBS.values() if item.status == "queued"),
+                key=lambda item: (item.created_at, item.id),
+            )
+            if (
+                ACTIVE_PIPELINES < MAX_ACTIVE_PIPELINES
+                and queued
+                and queued[0].id == job.id
+            ):
+                ACTIVE_PIPELINES += 1
+                job.queue_reason = ""
+                job.active_resource = "pipeline"
+                _persist_job(job)
+                break
+            position = next(
+                (index + 1 for index, item in enumerate(queued) if item.id == job.id),
+                1,
+            )
+            job.queue_reason = f"等待处理队列（第 {position} 位）"
+            _persist_job(job)
+            JOB_SCHEDULER_CONDITION.wait(timeout=0.5)
+    try:
+        _run_job(job)
+    finally:
+        with JOB_SCHEDULER_CONDITION:
+            ACTIVE_PIPELINES = max(0, ACTIVE_PIPELINES - 1)
+            job.active_resource = ""
+            JOB_SCHEDULER_CONDITION.notify_all()
 
 
 def _run_job(job: Job) -> None:
@@ -673,6 +746,7 @@ def _run_job(job: Job) -> None:
             errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            creationflags=(0x00004000 if os.name == "nt" and job.compute_profile == "responsive" else 0),
         )
         assert process.stdout is not None
         for line in process.stdout:
@@ -692,6 +766,24 @@ def _run_job(job: Job) -> None:
     finally:
         job.finished_at = time.time()
         _persist_job(job)
+
+
+def _restore_scheduler_jobs() -> None:
+    """Requeue persisted jobs after a clean Web process start."""
+    with JOB_SCHEDULER_CONDITION:
+        for job in JOBS.values():
+            if job.status == "running":
+                job.status = "interrupted"
+                job.error = "Web 服务重启，任务未自动恢复。"
+                job.finished_at = time.time()
+                _persist_job(job)
+            if job.status == "queued":
+                threading.Thread(
+                    target=_run_scheduled_job,
+                    args=(job,),
+                    daemon=True,
+                    name=f"job-scheduler-{job.id[-8:]}",
+                ).start()
 
 
 def _handle_cli_output_line(job: Job, line: str) -> None:
@@ -1101,6 +1193,9 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "startedAt": job.started_at,
         "finishedAt": job.finished_at,
         "status": job.status,
+        "computeProfile": job.compute_profile,
+        "queueReason": job.queue_reason,
+        "activeResource": job.active_resource,
         "analysisProfile": job.analysis_profile,
         "processingProfile": job.processing_profile,
         "analysisRequested": job.analysis_requested,
@@ -1253,6 +1348,9 @@ def list_library_items() -> list[dict[str, Any]]:
         processing_duration_ms, processing_started_at, processing_timing_live = (
             _processing_timing(manifest)
         )
+        source_duration = source.get("duration") if isinstance(source, dict) else None
+        if not isinstance(source_duration, (int, float)):
+            source_duration = metadata.get("duration")
         items.append(
             {
                 "id": str(manifest.get("knowledge_id") or directory.name),
@@ -1262,6 +1360,8 @@ def list_library_items() -> list[dict[str, Any]]:
                 "sourceType": source.get("source_type") or "unknown",
                 "author": source.get("author") or metadata.get("author") or "",
                 "thumbnail": source.get("thumbnail") or "",
+                "duration": source_duration if isinstance(source_duration, (int, float)) else None,
+                "analysisAt": manifest.get("completed_at") or "",
                 "status": display_status,
                 "currentStage": manifest.get("current_stage") or "",
                 "updatedAt": directory.stat().st_mtime,
@@ -1282,6 +1382,366 @@ def list_library_items() -> list[dict[str, Any]]:
             }
         )
     return sorted(items, key=lambda item: item["updatedAt"], reverse=True)
+
+
+def _collection_memberships() -> dict[str, list[dict[str, str]]]:
+    memberships: dict[str, list[dict[str, str]]] = {}
+    for record in KNOWLEDGE_SET_STORE.list():
+        for item in record.items:
+            knowledge_id = str(item.knowledge_id or "").strip()
+            if knowledge_id:
+                memberships.setdefault(knowledge_id, []).append(
+                    {"kind": "series", "collectionId": record.set_id, "title": record.title}
+                )
+    for record in FOLDER_SET_STORE.list():
+        for item in record.items:
+            knowledge_id = str(item.knowledge_id or "").strip()
+            if knowledge_id:
+                memberships.setdefault(knowledge_id, []).append(
+                    {"kind": "folder", "collectionId": record.set_id, "title": record.title}
+                )
+    return memberships
+
+
+def library_items_with_membership() -> list[dict[str, Any]]:
+    items = list_library_items()
+    collection_memberships = _collection_memberships()
+    project_memberships = PROJECT_GROUP_STORE.memberships()
+    for item in items:
+        knowledge_id = str(item.get("id") or "")
+        collections = collection_memberships.get(knowledge_id, [])
+        item["collectionMemberships"] = collections
+        item["inCollection"] = bool(collections)
+        item["projectId"] = project_memberships.get(knowledge_id, "")
+    return items
+
+
+def _search_cache_signature(directory: Path) -> tuple[tuple[str, int, int], ...]:
+    names = (
+        "metadata.json",
+        "manifest.json",
+        "analysis.json",
+        "user_notes.md",
+        "transcript.grouped.md",
+        "transcript.raw.jsonl",
+        "page_content.json",
+    )
+    signature: list[tuple[str, int, int]] = []
+    for name in names:
+        path = directory / name
+        try:
+            status = path.stat()
+        except OSError:
+            continue
+        signature.append((name, status.st_mtime_ns, status.st_size))
+    return tuple(signature)
+
+
+def _read_search_text(path: Path, limit: int = SEARCH_FILE_LIMIT) -> str:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            return handle.read(limit)
+    except OSError:
+        return ""
+
+
+def _flatten_search_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (int, float, bool)):
+        return [str(value)]
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(_flatten_search_values(item))
+        return result
+    if isinstance(value, dict):
+        result = []
+        for key, item in value.items():
+            if str(key).lower() in {"raw_response", "provider", "model", "prompt"}:
+                continue
+            result.extend(_flatten_search_values(item))
+        return result
+    return []
+
+
+def _normalized_search_text(*values: Any) -> str:
+    flattened: list[str] = []
+    for value in values:
+        flattened.extend(_flatten_search_values(value))
+    return " ".join(" ".join(flattened).split())
+
+
+def _search_document(item: dict[str, Any], *, include_deep: bool = False) -> dict[str, Any]:
+    knowledge_id = str(item.get("id") or "").strip()
+    directory = resolve_library_dir(knowledge_id)
+    cache_key = str(directory.resolve())
+    signature = _search_cache_signature(directory)
+    with SEARCH_DOCUMENT_CACHE_LOCK:
+        cached = SEARCH_DOCUMENT_CACHE.get(cache_key)
+        if cached and cached.get("signature") == signature and (not include_deep or cached["document"].get("deepLoaded")):
+            return cached["document"]
+    if cached and cached.get("signature") == signature:
+        document = dict(cached["document"])
+    else:
+        analysis = _load_json_file(directory / "analysis.json")
+        summary = _normalized_search_text(analysis.get("summary"))
+        document = {
+            "fast": _normalized_search_text(
+                summary,
+                analysis.get("highlights"),
+                analysis.get("tags"),
+                analysis.get("keywords"),
+                _read_search_text(directory / "user_notes.md", 250_000),
+            ),
+            "deep": "",
+            "deepLabel": "",
+            "deepLoaded": False,
+            "summary": summary[:1200],
+        }
+    if include_deep and not document.get("deepLoaded"):
+        if (directory / "page_content.json").is_file():
+            page = _load_json_file(directory / "page_content.json")
+            blocks = page.get("blocks") if isinstance(page.get("blocks"), list) else []
+            document["deep"] = _normalized_search_text(
+                [
+                    {"heading": block.get("heading"), "text": block.get("text")}
+                    for block in blocks
+                    if isinstance(block, dict)
+                ]
+            )
+            document["deepLabel"] = "网页正文"
+        else:
+            deep_text = _read_search_text(directory / "transcript.grouped.md")
+            if not deep_text:
+                deep_text = _read_search_text(directory / "transcript.raw.jsonl")
+            document["deep"] = _normalized_search_text(deep_text)
+            document["deepLabel"] = "字幕正文"
+        document["deepLoaded"] = True
+    with SEARCH_DOCUMENT_CACHE_LOCK:
+        SEARCH_DOCUMENT_CACHE[cache_key] = {"signature": signature, "document": document}
+    return document
+
+
+def _search_match_score(query: str, title: str, subtitle: str, fast_text: str, deep_text: str) -> tuple[int, str, str]:
+    if not query:
+        return 0, "recent", ""
+    normalized_query = query.casefold()
+    title_folded = title.casefold()
+    subtitle_folded = subtitle.casefold()
+    if title_folded == normalized_query:
+        return 140, "title", title
+    if title_folded.startswith(normalized_query):
+        return 120, "title", title
+    if normalized_query in title_folded:
+        return 100, "title", title
+    if normalized_query in subtitle_folded:
+        return 70, "metadata", subtitle
+    if normalized_query in fast_text.casefold():
+        return 45, "knowledge", fast_text
+    if deep_text and normalized_query in deep_text.casefold():
+        return 25, "deep", deep_text
+    return -1, "", ""
+
+
+def _search_snippet(text: str, query: str, *, limit: int = 260) -> str:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return ""
+    index = normalized.casefold().find(query.casefold()) if query else 0
+    if index < 0:
+        index = 0
+    start = max(0, index - limit // 3)
+    end = min(len(normalized), start + limit)
+    snippet = normalized[start:end]
+    if start:
+        snippet = f"…{snippet}"
+    if end < len(normalized):
+        snippet = f"{snippet}…"
+    snippet = sanitize_message(snippet)
+    snippet = re.sub(r"(?i)file:///[^\s]+", "[本地路径]", snippet)
+    snippet = re.sub(r"(?i)\b[A-Z]:[\\/](?:[^\s<>|]+[\\/]?)+", "[本地路径]", snippet)
+    return snippet
+
+
+def _sanitize_search_public_text(value: Any, *, limit: int = 500) -> str:
+    return _search_snippet(str(value or ""), "", limit=limit)
+
+
+def search_local_knowledge(query: str, *, kind: str = "all", deep: bool = False, limit: int = 50) -> dict[str, Any]:
+    query = str(query or "").strip()
+    if len(query) > 200:
+        raise ValueError("搜索内容不能超过 200 个字符。")
+    if kind not in {"all", "knowledge", "collection", "project"}:
+        raise ValueError("kind 只能是 all、knowledge、collection 或 project。")
+    if not 1 <= limit <= 50:
+        raise ValueError("limit 必须在 1 到 50 之间。")
+
+    results: list[dict[str, Any]] = []
+    if kind in {"all", "knowledge"}:
+        for item in library_items_with_membership():
+            if query:
+                try:
+                    document = _search_document(item, include_deep=deep)
+                except (FileNotFoundError, ValueError, OSError):
+                    continue
+            else:
+                document = {"fast": "", "deep": "", "deepLabel": "", "summary": ""}
+            title = str(item.get("title") or item.get("id") or "未命名记录")
+            subtitle = " · ".join(
+                value for value in (str(item.get("author") or ""), str(item.get("platform") or "")) if value
+            )
+            deep_text = document["deep"] if deep and query else ""
+            score, match_field, matched_text = _search_match_score(query, title, subtitle, document["fast"], deep_text)
+            if score < 0:
+                continue
+            if match_field == "deep":
+                match_field = document["deepLabel"]
+            results.append({
+                "kind": "knowledge",
+                "id": str(item.get("id") or ""),
+                "title": _sanitize_search_public_text(title, limit=300),
+                "subtitle": _sanitize_search_public_text(subtitle, limit=300),
+                "status": str(item.get("status") or ""),
+                "updatedAt": item.get("updatedAt"),
+                "duration": item.get("duration"),
+                "itemCount": None,
+                "collectionKind": None,
+                "matchField": match_field,
+                "snippet": _search_snippet(matched_text or document["summary"] or title, query),
+                "preview": _search_snippet(document["summary"] or document["fast"], query, limit=600),
+                "score": score,
+            })
+
+    if kind in {"all", "collection"}:
+        collections = [(record, "series") for record in KNOWLEDGE_SET_STORE.list()] + [
+            (record, "folder") for record in FOLDER_SET_STORE.list()
+        ]
+        for record, collection_kind in collections:
+            public = record.to_public()
+            title = str(public.get("title") or "未命名合集")
+            subtitle = "视频系列" if collection_kind == "series" else "本地文件夹集"
+            score, match_field, matched_text = _search_match_score(query, title, subtitle, "", "")
+            if score < 0:
+                continue
+            item_count = int(public.get("itemCount") or 0)
+            results.append({
+                "kind": "collection",
+                "id": str(public.get("setId") or ""),
+                "title": _sanitize_search_public_text(title, limit=300),
+                "subtitle": _sanitize_search_public_text(subtitle, limit=300),
+                "status": "",
+                "updatedAt": public.get("updatedAt"),
+                "duration": None,
+                "itemCount": item_count,
+                "collectionKind": collection_kind,
+                "matchField": match_field,
+                "snippet": _search_snippet(matched_text or title, query),
+                "preview": f"{item_count} 个视频",
+                "score": score,
+            })
+
+    if kind in {"all", "project"}:
+        for public in _public_projects():
+            title = str(public.get("title") or "未命名项目")
+            score, match_field, matched_text = _search_match_score(query, title, "项目", "", "")
+            if score < 0:
+                continue
+            item_count = int(public.get("itemCount") or 0)
+            results.append({
+                "kind": "project",
+                "id": str(public.get("projectId") or ""),
+                "title": _sanitize_search_public_text(title, limit=300),
+                "subtitle": "项目",
+                "status": "",
+                "updatedAt": public.get("updatedAt"),
+                "duration": None,
+                "itemCount": item_count,
+                "collectionKind": None,
+                "matchField": match_field,
+                "snippet": _search_snippet(matched_text or title, query),
+                "preview": f"{item_count} 条知识记录",
+                "score": score,
+            })
+
+    def sort_key(item: dict[str, Any]) -> tuple[int, float, str]:
+        updated = item.get("updatedAt")
+        if isinstance(updated, (int, float)):
+            timestamp = float(updated)
+        else:
+            parsed = _parse_datetime(updated)
+            timestamp = parsed.timestamp() if parsed else 0.0
+        return (-int(item.get("score") or 0), -timestamp, str(item.get("title") or "").casefold())
+
+    results.sort(key=sort_key)
+    truncated = len(results) > limit
+    return {
+        "query": query,
+        "kind": kind,
+        "deep": bool(deep and query),
+        "items": results[:limit],
+        "truncated": truncated,
+    }
+
+
+def _available_knowledge_ids() -> set[str]:
+    if not OUTPUT_ROOT.exists():
+        return set()
+    knowledge_ids: set[str] = set()
+    for directory in OUTPUT_ROOT.iterdir():
+        if not _is_knowledge_package(directory):
+            continue
+        manifest = _load_json_file(directory / "manifest.json")
+        knowledge_ids.add(str(manifest.get("knowledge_id") or directory.name))
+    return knowledge_ids
+
+
+def _public_projects(valid_ids: set[str] | None = None) -> list[dict[str, Any]]:
+    available_ids = valid_ids if valid_ids is not None else _available_knowledge_ids()
+    return [record.to_public(valid_knowledge_ids=available_ids) for record in PROJECT_GROUP_STORE.list()]
+
+
+def resolve_knowledge_by_source_url(source_url: str) -> dict[str, Any]:
+    """Resolve a normalized HTTP source URL to sanitized local knowledge IDs.
+
+    The Bridge uses this only as a local index lookup; it never fetches the
+    supplied URL. Multiple package revisions may exist for one source, so the
+    newest library item is returned first while preserving all matching IDs.
+    """
+    normalized = normalize_source_url(str(source_url or ""))
+    matches: list[dict[str, Any]] = []
+    for item in list_library_items():
+        knowledge_id = str(item.get("id") or "").strip()
+        if not knowledge_id:
+            continue
+        try:
+            knowledge = load_knowledge_package(knowledge_id)
+        except (FileNotFoundError, ValueError, OSError):
+            continue
+        source = knowledge.get("source") if isinstance(knowledge.get("source"), dict) else {}
+        candidate = str(source.get("canonical_url") or source.get("source_url") or "")
+        try:
+            candidate_normalized = normalize_source_url(candidate)
+        except ValueError:
+            continue
+        if not source_urls_equivalent(candidate_normalized, normalized):
+            continue
+        source_type = str(source.get("source_type") or "online_video")
+        matches.append(
+            {
+                "knowledge_id": knowledge_id,
+                "title": str(source.get("title") or knowledge.get("title") or knowledge_id),
+                "source": {
+                    "kind": "web_page" if source_type == "web_page" else "video",
+                    "url": candidate_normalized,
+                },
+                "transcript_available": bool(knowledge.get("transcriptReady")),
+                "analysis_available": bool(knowledge.get("analysisReady")),
+            }
+        )
+    if not matches:
+        raise FileNotFoundError(normalized)
+    return {"source_url": normalized, "matches": matches}
 
 
 def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
@@ -1369,11 +1829,13 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
         ]
     media_path = Path(local_path) if local_path else None
     media_available = bool(media_path and media_path.is_file() and media_path.suffix.lower() in MEDIA_EXTENSIONS)
-    media_kind = "external"
+    declared_source_type = str(source.get("source_type") or "")
+    is_page = declared_source_type == "web_page"
+    media_kind = "page" if is_page else "external"
     if media_available:
         media_kind = "audio" if media_path.suffix.lower() in {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"} else "video"
     external_url = source.get("canonical_url") or source.get("source_url") or metadata.get("source_url") or ""
-    embed = _external_player_descriptor(str(external_url))
+    embed = None if is_page else _external_player_descriptor(str(external_url))
     platform = str(source.get("platform") or metadata.get("platform") or "local").lower()
     normalized_platform = "bilibili" if platform in {"bili", "bilibili"} else platform
     if normalized_platform not in {"local", "youtube", "bilibili"}:
@@ -1383,7 +1845,7 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
         "id": public_knowledge_id,
         "knowledge_id": public_knowledge_id,
         "legacy_id": directory.name if public_knowledge_id != directory.name else "",
-        "source_type": "online_video" if external_url and not media_available else "local",
+        "source_type": declared_source_type or ("online_video" if external_url and not media_available else "local"),
         "platform": normalized_platform,
         "source_url": external_url,
         "source_id": video_id,
@@ -1415,6 +1877,9 @@ def load_knowledge_package(knowledge_id: str) -> dict[str, Any]:
             "thumbnail": source.get("thumbnail") or metadata.get("thumbnail") or "",
             "embed": embed,
             "previewStatus": (
+                "page_source"
+                if is_page
+                else
                 "external_only"
                 if external_url and not media_available and not embed
                 else "available" if media_available or embed else "unavailable"
@@ -1490,11 +1955,32 @@ def _external_player_descriptor(source_url: str) -> dict[str, str] | None:
 
 def load_transcript_groups(knowledge_id: str) -> list[dict[str, Any]]:
     directory = resolve_library_dir(knowledge_id)
+    manifest = _load_json_file(directory / "manifest.json")
+    metadata = _load_json_file(directory / "metadata.json")
+    source = manifest.get("source") if isinstance(manifest.get("source"), dict) else metadata
+    if str(source.get("source_type") or "") == "web_page":
+        page = _load_json_file(directory / "page_content.json")
+        blocks = page.get("blocks") if isinstance(page.get("blocks"), list) else []
+        return [
+            {
+                "index": int(item.get("index", index)),
+                "start": None,
+                "end": None,
+                "title": str(item.get("heading") or f"页面片段 {index + 1}"),
+                "text": str(item.get("text") or ""),
+                "keywords": [],
+                "sourceLink": str(source.get("canonical_url") or source.get("source_url") or ""),
+                "contentKind": "web_page",
+                "position": index + 1,
+            }
+            for index, item in enumerate(blocks)
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
     grouped_path = directory / "transcript.grouped.md"
     if grouped_path.exists():
         groups = _parse_grouped_markdown(grouped_path.read_text(encoding="utf-8"))
         if groups:
-            return groups
+            return [{**group, "contentKind": "video_subtitle"} for group in groups]
     timeline = _load_json_file(directory / "timeline.json").get("items", [])
     if isinstance(timeline, list) and timeline:
         return [
@@ -1506,6 +1992,7 @@ def load_transcript_groups(knowledge_id: str) -> list[dict[str, Any]]:
                 "text": item.get("summary") or "",
                 "keywords": item.get("keywords") or [],
                 "sourceLink": item.get("source_link") or "",
+                "contentKind": "video_subtitle",
             }
             for index, item in enumerate(timeline)
             if isinstance(item, dict)
@@ -1532,6 +2019,7 @@ def load_transcript_groups(knowledge_id: str) -> list[dict[str, Any]]:
                     "text": " ".join(str(item.get("text") or "").strip() for item in chunk),
                     "keywords": [],
                     "sourceLink": "",
+                    "contentKind": "video_subtitle",
                 }
             )
         return groups
@@ -1543,6 +2031,13 @@ def chat_with_knowledge(payload: dict[str, Any]) -> dict[str, Any]:
     if not knowledge_id:
         raise ValueError("knowledge_id 不能为空。")
     knowledge = load_knowledge_package(knowledge_id)
+    source_manifest = knowledge.get("manifest") if isinstance(knowledge.get("manifest"), dict) else {}
+    source_payload = knowledge.get("source") if isinstance(knowledge.get("source"), dict) else {}
+    if (
+        str(source_payload.get("source_type") or "") == "web_page"
+        and not bool(source_manifest.get("content_upload_allowed"))
+    ):
+        raise ValueError("该网页捕获未授权上传正文，不能运行云端问答。")
     groups = load_transcript_groups(knowledge_id)
     client_history = payload.get("history") or []
     if not isinstance(client_history, list):
@@ -1973,6 +2468,40 @@ def _intake_task_payload(item: Any) -> dict[str, Any]:
     }
 
 
+def _start_page_intake(item: Any) -> None:
+    thread = threading.Thread(
+        target=_run_page_intake,
+        args=(str(item.intake_id),),
+        daemon=True,
+        name=f"page-intake-{str(item.intake_id)[-8:]}",
+    )
+    thread.start()
+
+
+def _run_page_intake(intake_id: str) -> None:
+    item = INTAKE_STORE.get(intake_id)
+    if item is None:
+        return
+    try:
+        provider = (
+            ProviderConfigResolver(WEB_PROVIDER_CONFIG).provider("deepseek")
+            if item.content_upload_allowed
+            else None
+        )
+        package = ingest_page_capture(item, OUTPUT_ROOT, provider=provider)
+        INTAKE_STORE.reconcile_job(
+            intake_id,
+            state="ready",
+            knowledge_id=package.manifest.knowledge_id,
+        )
+    except Exception as exc:
+        LOGGER.warning("page_intake_failed intake_id=%s error=%s", intake_id, _safe_process_log(str(exc)))
+        INTAKE_STORE.fail_action(
+            intake_id,
+            "网页内容处理失败，请检查捕获内容和 API 配置后重试。",
+        )
+
+
 def _knowledge_set_item_state_from_job(job: Job) -> str:
     status = str(job.status or "").strip().lower()
     if status in {"success", "completed"}:
@@ -1982,53 +2511,208 @@ def _knowledge_set_item_state_from_job(job: Job) -> str:
     return "processing"
 
 
+def _knowledge_package_state_index() -> dict[str, str]:
+    result: dict[str, str] = {}
+    if not OUTPUT_ROOT.exists():
+        return result
+    for directory in OUTPUT_ROOT.iterdir():
+        if not _is_knowledge_package(directory):
+            continue
+        manifest = _load_json_file(directory / "manifest.json")
+        status = str(manifest.get("status") or "unknown").strip().lower()
+        result[directory.name] = status
+        knowledge_id = str(manifest.get("knowledge_id") or "").strip()
+        if knowledge_id:
+            result[knowledge_id] = status
+    return result
+
+
+def _record_reconciliation_is_stale(record: Any, grace_seconds: float = 60.0) -> bool:
+    updated_at = _parse_datetime(getattr(record, "updated_at", ""))
+    if updated_at is None:
+        return True
+    return (datetime.now(timezone.utc) - updated_at).total_seconds() >= grace_seconds
+
+
 def _reconcile_knowledge_set(record: Any) -> Any:
     if record is None:
         return None
-    changed = record
+    job_ids = {item.local_job_id for item in record.items if item.local_job_id}
+    with JOBS_LOCK:
+        snapshots = {
+            job_id: _snapshot_job(JOBS[job_id])
+            for job_id in job_ids
+            if job_id in JOBS
+        }
+    package_states: dict[str, str] | None = None
+    updates: list[dict[str, str]] = []
     for item in list(record.items):
         if not item.local_job_id:
             continue
-        with JOBS_LOCK:
-            job = JOBS.get(item.local_job_id)
-            snapshot = _snapshot_job(job) if job else None
-        if snapshot is None:
+        snapshot = snapshots.get(item.local_job_id)
+        if snapshot is not None:
+            state = _knowledge_set_item_state_from_job(snapshot)
+            updates.append(
+                {
+                    "item_id": item.item_id,
+                    "state": state,
+                    "knowledge_id": str(snapshot.knowledge_id or ""),
+                    "error": "单个视频处理失败，请检查配置后重试。" if state == "failed" else "",
+                }
+            )
             continue
-        error = "单个视频处理失败，请检查配置后重试。" if _knowledge_set_item_state_from_job(snapshot) == "failed" else ""
-        changed = KNOWLEDGE_SET_STORE.reconcile_item(
-            record.set_id,
-            item.item_id,
-            state=_knowledge_set_item_state_from_job(snapshot),
-            knowledge_id=str(snapshot.knowledge_id or ""),
-            error=error,
-        ) or changed
-    return changed
+        if item.knowledge_id:
+            if package_states is None:
+                package_states = _knowledge_package_state_index()
+            package_status = package_states.get(item.knowledge_id, "")
+            if package_status in {"completed", "completed_with_warnings", "success"}:
+                updates.append({"item_id": item.item_id, "state": "ready", "knowledge_id": item.knowledge_id, "error": ""})
+                continue
+            if package_status in {"failed", "interrupted", "timeout"}:
+                updates.append({"item_id": item.item_id, "state": "failed", "knowledge_id": item.knowledge_id, "error": "单个视频处理失败，请重试。"})
+                continue
+        if item.state == "processing" and _record_reconciliation_is_stale(record):
+            updates.append({"item_id": item.item_id, "state": "needs_attention", "knowledge_id": item.knowledge_id or "", "error": "原任务记录不可用，请重新开始该条目。"})
+    return KNOWLEDGE_SET_STORE.reconcile_items(record.set_id, updates) or record
 
 
-def _knowledge_set_task_payload(item: Any, payload: dict[str, Any]) -> dict[str, Any]:
+def _knowledge_set_task_payload(item: Any, payload: dict[str, Any], record: Any | None = None) -> dict[str, Any]:
+    record = record or {}
     return {
         "sourceType": "url",
         "source": item.source_url,
         "backend": "deepseek",
-        "mode": str(payload.get("mode") or "tutorial"),
-        "processingProfile": str(payload.get("processingProfile") or "complete"),
+        "mode": str(payload.get("mode") or getattr(record, "analysis_profile", "tutorial")),
+        "processingProfile": str(payload.get("processingProfile") or getattr(record, "processing_profile", "complete")),
         "lang": str(payload.get("lang") or ""),
         "export": str(payload.get("export") or "none"),
         "asr_route": str(payload.get("asr_route") or "cloud"),
         "asr_fallback_enabled": bool(payload.get("asr_fallback_enabled", True)),
-        "transcriptGroupSeconds": int(payload.get("transcriptGroupSeconds") or 30),
+        "transcriptGroupSeconds": int(payload.get("transcriptGroupSeconds") or getattr(record, "transcript_group_seconds", 30)),
         "comments": bool(payload.get("comments", False)),
         "noFrames": bool(payload.get("noFrames", False)),
+    }
+
+
+def _folder_set_item_state_from_job(job: Job) -> str:
+    status = str(job.status or "").lower()
+    if status in {"success", "completed"}:
+        return "ready"
+    if status in {"failed", "interrupted", "timeout"}:
+        return "failed"
+    return "processing"
+
+
+def _reconcile_folder_set(record: Any) -> Any:
+    if record is None:
+        return None
+    job_ids = {item.local_job_id for item in record.items if item.local_job_id}
+    with JOBS_LOCK:
+        snapshots = {
+            job_id: _snapshot_job(JOBS[job_id])
+            for job_id in job_ids
+            if job_id in JOBS
+        }
+    package_states: dict[str, str] | None = None
+    updates: list[dict[str, str]] = []
+    for item in list(record.items):
+        if not item.local_job_id:
+            continue
+        snapshot = snapshots.get(item.local_job_id)
+        if snapshot is not None:
+            state = _folder_set_item_state_from_job(snapshot)
+            updates.append({"item_id": item.item_id, "state": state, "knowledge_id": str(snapshot.knowledge_id or ""), "error": "本地视频处理失败，请检查配置后重试。" if state == "failed" else ""})
+            continue
+        if item.knowledge_id:
+            if package_states is None:
+                package_states = _knowledge_package_state_index()
+            package_status = package_states.get(item.knowledge_id, "")
+            if package_status in {"completed", "completed_with_warnings", "success"}:
+                updates.append({"item_id": item.item_id, "state": "ready", "knowledge_id": item.knowledge_id, "error": ""})
+                continue
+        if item.state == "processing" and _record_reconciliation_is_stale(record):
+            updates.append({"item_id": item.item_id, "state": "needs_attention", "knowledge_id": item.knowledge_id or "", "error": "原任务记录不可用，请重新开始该条目。"})
+    return FOLDER_SET_STORE.reconcile_items(record.set_id, updates) or record
+
+
+def _folder_task_payload(item: Any, payload: dict[str, Any], record: Any | None = None) -> dict[str, Any]:
+    record = record or {}
+    saved_mode = getattr(record, "analysis_profile", "tutorial")
+    saved_processing = getattr(record, "processing_profile", "complete")
+    saved_group_seconds = getattr(record, "transcript_group_seconds", 30)
+    return {
+        "sourceType": "file", "source": item.source_path, "backend": "deepseek",
+        "mode": str(payload.get("mode") or saved_mode), "processingProfile": str(payload.get("processingProfile") or saved_processing),
+        "lang": str(payload.get("lang") or ""), "export": str(payload.get("export") or "none"),
+        "asr_route": str(payload.get("asr_route") or "cloud"), "asr_fallback_enabled": bool(payload.get("asr_fallback_enabled", True)),
+        "transcriptGroupSeconds": int(payload.get("transcriptGroupSeconds") or saved_group_seconds),
+        "comments": bool(payload.get("comments", False)), "noFrames": bool(payload.get("noFrames", False)),
     }
 
 
 class VideoSummaryHandler(BaseHTTPRequestHandler):
     server_version = f"VideoSummaryWeb/{__version__}"
 
+    def _set_bridge_cors_headers(self) -> None:
+        """Reflect only a user-explicitly configured extension origin."""
+        allowed = str(os.environ.get("VIEWLEDGE_BRIDGE_EXTENSION_ORIGIN") or "").strip()
+        origin = str(self.headers.get("Origin") or "").strip()
+        if allowed and origin == allowed and origin.startswith("chrome-extension://"):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+
+    def do_OPTIONS(self) -> None:
+        parsed = urlparse(self.path)
+        if not parsed.path.startswith("/v1/"):
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.end_headers()
+            return
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self._set_bridge_cors_headers()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key")
+        self.send_header("Access-Control-Max-Age", "300")
+        self.end_headers()
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/source/inspect":
             self._send_json({"error": "该接口只接受 POST。"}, HTTPStatus.METHOD_NOT_ALLOWED)
+            return
+        if parsed.path == "/api/search":
+            try:
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                search_query = str((query.get("q") or [""])[0])
+                kind = str((query.get("kind") or ["all"])[0])
+                deep = str((query.get("deep") or ["0"])[0]).lower() in {"1", "true", "yes"}
+                limit = int((query.get("limit") or ["50"])[0])
+                self._send_json(search_local_knowledge(search_query, kind=kind, deep=deep, limit=limit))
+            except (TypeError, ValueError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/api/projects":
+            self._send_json({"projects": _public_projects()})
+            return
+        if parsed.path.startswith("/api/projects/"):
+            project_id = unquote(parsed.path[len("/api/projects/") :].strip("/"))
+            record = PROJECT_GROUP_STORE.get(project_id)
+            if record is None:
+                self._send_json({"error": "项目不存在。"}, HTTPStatus.NOT_FOUND)
+            else:
+                valid_ids = _available_knowledge_ids()
+                self._send_json({"project": record.to_public(valid_knowledge_ids=valid_ids)})
+            return
+        if parsed.path == "/api/folder-sets":
+            records = [_reconcile_folder_set(record) for record in FOLDER_SET_STORE.list()]
+            self._send_json({"sets": [record.to_public() for record in records]})
+            return
+        if parsed.path.startswith("/api/folder-sets/"):
+            set_id = unquote(parsed.path[len("/api/folder-sets/") :].strip("/"))
+            record = _reconcile_folder_set(FOLDER_SET_STORE.get(set_id))
+            if record is None:
+                self._send_json({"error": "local folder set not found"}, HTTPStatus.NOT_FOUND)
+            else:
+                self._send_json({"set": record.to_public()})
             return
         if parsed.path == "/api/knowledge-sets":
             records = [_reconcile_knowledge_set(record) for record in KNOWLEDGE_SET_STORE.list()]
@@ -2062,6 +2746,53 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(_bridge_data(item.to_public()))
             return
+        if parsed.path == "/v1/knowledge/resolve":
+            try:
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                source_url = str((query.get("source_url") or query.get("url") or [""])[0]).strip()
+                if not source_url:
+                    raise ValueError("source_url is required")
+                self._send_json(_bridge_data(resolve_knowledge_by_source_url(source_url)))
+            except FileNotFoundError:
+                self._send_json(_bridge_error("knowledge_not_found", "未找到匹配的知识记录。", retryable=False), HTTPStatus.NOT_FOUND)
+            except ValueError as exc:
+                self._send_json(_bridge_error("invalid_request", str(exc), retryable=False), HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path.startswith("/v1/knowledge/") and parsed.path.endswith("/transcript"):
+            knowledge_id = unquote(parsed.path[len("/v1/knowledge/") : -len("/transcript")].strip("/"))
+            try:
+                knowledge = load_knowledge_package(knowledge_id)
+                manifest = knowledge.get("manifest") if isinstance(knowledge.get("manifest"), dict) else {}
+                source = manifest.get("source") if isinstance(manifest.get("source"), dict) else {}
+                source_type = str(source.get("source_type") or "unknown")
+                source_url = str(source.get("canonical_url") or source.get("source_url") or "")
+                if not source_url.startswith(("http://", "https://")):
+                    source_url = ""
+                self._send_json(_bridge_data({
+                    "knowledge_id": knowledge_id,
+                    "title": str(source.get("title") or knowledge.get("title") or knowledge_id),
+                    "source": {"kind": "web_page" if source_type == "web_page" else "video", "url": source_url or None},
+                    "groups": load_transcript_groups(knowledge_id),
+                }))
+            except FileNotFoundError:
+                self._send_json(_bridge_error("knowledge_not_found", "知识记录不存在。", retryable=False), HTTPStatus.NOT_FOUND)
+            except ValueError as exc:
+                self._send_json(_bridge_error("invalid_request", str(exc), retryable=False), HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/v1/clips":
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            knowledge_id = str((query.get("knowledge_id") or [""])[0]).strip()
+            intake_id = str((query.get("intake_id") or [""])[0]).strip()
+            self._send_json(_bridge_data({"clips": [item.to_public() for item in CLIP_STORE.list(knowledge_id=knowledge_id, intake_id=intake_id)]}))
+            return
+        if parsed.path.startswith("/v1/clips/"):
+            clip_id = unquote(parsed.path[len("/v1/clips/") :].strip("/"))
+            item = CLIP_STORE.get(clip_id)
+            if item is None:
+                self._send_json(_bridge_error("clip_not_found", "剪藏不存在。", retryable=False), HTTPStatus.NOT_FOUND)
+            else:
+                self._send_json(_bridge_data(item.to_public()))
+            return
         if parsed.path.startswith("/api/knowledge/") and parsed.path.endswith("/export/preview"):
             knowledge_id = unquote(parsed.path[len("/api/knowledge/") : -len("/export/preview")].strip("/"))
             try:
@@ -2077,7 +2808,7 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
         elif parsed.path.startswith("/static/"):
             self._send_static(parsed.path[len("/static/") :])
         elif parsed.path == "/api/library":
-            self._send_json({"items": list_library_items()})
+            self._send_json({"items": library_items_with_membership()})
         elif parsed.path == "/api/runtime":
             self._send_json(runtime_status_payload())
         elif parsed.path == "/api/capabilities":
@@ -2113,11 +2844,122 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/projects":
+            try:
+                payload = self._read_json_body()
+                record, replayed = PROJECT_GROUP_STORE.create(
+                    str(payload.get("title") or ""),
+                    self.headers.get("Idempotency-Key", ""),
+                )
+                valid_ids = _available_knowledge_ids()
+                self._send_json(
+                    {"project": record.to_public(valid_knowledge_ids=valid_ids), "idempotencyReplayed": replayed},
+                    HTTPStatus.OK if replayed else HTTPStatus.CREATED,
+                )
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except OSError:
+                self._send_json({"error": "项目保存失败，请检查共享知识目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/folder-sets":
+            try:
+                payload = self._read_json_body()
+                source = str(payload.get("source") or payload.get("path") or "").strip()
+                record, replayed = FOLDER_SET_STORE.create(
+                    source,
+                    str(payload.get("title") or ""),
+                    self.headers.get("Idempotency-Key", ""),
+                    analysis_profile=str(payload.get("analysisProfile") or payload.get("mode") or "tutorial"),
+                    processing_profile=str(payload.get("processingProfile") or "complete"),
+                    transcript_group_seconds=int(payload.get("transcriptGroupSeconds") or 30),
+                )
+                self._send_json({"set": record.to_public(), "idempotencyReplayed": replayed}, HTTPStatus.OK if replayed else HTTPStatus.CREATED)
+            except (ValueError, OSError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path.startswith("/api/folder-sets/"):
+            relative = parsed.path[len("/api/folder-sets/") :].strip("/")
+            parts = relative.split("/")
+            try:
+                payload = self._read_json_body()
+                set_id = parts[0]
+                record = _reconcile_folder_set(FOLDER_SET_STORE.get(set_id))
+                if record is None:
+                    self._send_json({"error": "local folder set not found"}, HTTPStatus.NOT_FOUND); return
+                if len(parts) == 2 and parts[1] == "children":
+                    child = FOLDER_SET_STORE.create_child(set_id, str(payload.get("title") or "new folder"))
+                    self._send_json({"set": child.to_public()}, HTTPStatus.CREATED); return
+                if len(parts) == 2 and parts[1] == "parent":
+                    parent = FOLDER_SET_STORE.create_parent(set_id, str(payload.get("title") or "parent folder"))
+                    self._send_json({"set": parent.to_public()}, HTTPStatus.CREATED); return
+                if len(parts) == 2 and parts[1] == "reorder":
+                    child_ids = payload.get("childSetIds")
+                    if not isinstance(child_ids, list): raise ValueError("childSetIds must be an array")
+                    updated = FOLDER_SET_STORE.reorder_children(set_id, [str(x) for x in child_ids])
+                    self._send_json({"set": updated.to_public()}); return
+                if len(parts) == 4 and parts[1] == "items" and parts[3] == "analyze":
+                    item_id = parts[2]
+                    record, item, replayed = FOLDER_SET_STORE.begin_item_action(set_id, item_id, self.headers.get("Idempotency-Key", ""))
+                    if not replayed:
+                        try:
+                            job = start_job(_folder_task_payload(item, payload, record))
+                        except DuplicateTaskError:
+                            FOLDER_SET_STORE.reconcile_item(set_id, item_id, "needs_attention", error="该视频已有重复任务，请先处理知识记录中的任务。")
+                            updated = _reconcile_folder_set(FOLDER_SET_STORE.get(set_id))
+                            self._send_json({"set": updated.to_public(), "error": "该视频已有重复任务，请先处理知识记录中的任务。"}, HTTPStatus.ACCEPTED)
+                            return
+                        except Exception:
+                            FOLDER_SET_STORE.reconcile_item(set_id, item_id, "failed", error="视频任务启动失败，请检查配置后重试。")
+                            updated = _reconcile_folder_set(FOLDER_SET_STORE.get(set_id))
+                            self._send_json({"set": updated.to_public(), "error": "视频任务启动失败，请检查配置后重试。"}, HTTPStatus.ACCEPTED)
+                            return
+                        FOLDER_SET_STORE.attach_job(set_id, item_id, job.id, job.knowledge_id)
+                    updated = _reconcile_folder_set(FOLDER_SET_STORE.get(set_id))
+                    self._send_json({"set": updated.to_public(), "idempotencyReplayed": replayed}, HTTPStatus.OK if replayed else HTTPStatus.ACCEPTED); return
+                if len(parts) == 2 and parts[1] == "analyze-all":
+                    started = 0
+                    for folder in FOLDER_SET_STORE.descendants(set_id, include_self=True):
+                        for item in list(folder.items):
+                            if item.state not in {"queued", "failed", "needs_attention"}: continue
+                            try:
+                                _, current, replayed = FOLDER_SET_STORE.begin_item_action(folder.set_id, item.item_id, f"batch-{uuid.uuid4().hex}")
+                                if replayed: continue
+                            except (KeyError, ValueError):
+                                continue
+                            try:
+                                job = start_job(_folder_task_payload(current, payload, folder))
+                            except DuplicateTaskError:
+                                FOLDER_SET_STORE.reconcile_item(folder.set_id, current.item_id, "needs_attention", error="该视频已有重复任务，请先处理知识记录中的任务。")
+                                continue
+                            except Exception:
+                                FOLDER_SET_STORE.reconcile_item(folder.set_id, current.item_id, "failed", error="视频任务启动失败，请检查配置后重试。")
+                                continue
+                            FOLDER_SET_STORE.attach_job(folder.set_id, current.item_id, job.id, job.knowledge_id)
+                            started += 1
+                    updated = _reconcile_folder_set(FOLDER_SET_STORE.get(set_id))
+                    self._send_json({"set": updated.to_public(), "started": started}, HTTPStatus.ACCEPTED); return
+                self._send_json({"error": "unsupported folder set action"}, HTTPStatus.BAD_REQUEST)
+            except KeyError:
+                self._send_json({"error": "local folder set or item not found"}, HTTPStatus.NOT_FOUND)
+            except (ValueError, UserFacingError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path == "/api/source/inspect":
             try:
                 payload = self._read_json_body()
                 source_type = str(payload.get("sourceType") or "url")
                 source = str(payload.get("source") or "").strip()
+                if source_type == "file":
+                    path = Path(normalize_local_path(source)).expanduser()
+                    if path.is_dir():
+                        self._send_json(inspect_folder(str(path)))
+                    elif path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
+                        self._send_json({"kind": "single", "isCollection": False, "title": path.stem, "sourceType": "file", "items": []})
+                    else:
+                        raise ValueError("本地路径不存在，或不是支持的视频文件/文件夹")
+                    return
                 if source_type != "url" or not source:
                     raise ValueError("系列识别只支持公开视频链接。")
                 if not is_bilibili_input(source):
@@ -2138,12 +2980,15 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                 record, replayed = KNOWLEDGE_SET_STORE.create(
                     inspection,
                     self.headers.get("Idempotency-Key", ""),
+                    analysis_profile=str(payload.get("analysisProfile") or payload.get("mode") or "tutorial"),
+                    processing_profile=str(payload.get("processingProfile") or "complete"),
+                    transcript_group_seconds=int(payload.get("transcriptGroupSeconds") or 30),
                 )
                 self._send_json({"set": record.to_public(), "idempotencyReplayed": replayed}, HTTPStatus.OK if replayed else HTTPStatus.CREATED)
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except OSError:
-                self._send_json({"error": "知识集保存失败，请检查本地状态目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                self._send_json({"error": "知识集保存失败，请检查共享知识包目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         if parsed.path.startswith("/api/knowledge-sets/") and parsed.path.endswith("/analyze"):
             relative = parsed.path[len("/api/knowledge-sets/") : -len("/analyze")].strip("/")
@@ -2165,7 +3010,7 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                 )
                 if not replayed:
                     try:
-                        job = start_job(_knowledge_set_task_payload(item, payload))
+                        job = start_job(_knowledge_set_task_payload(item, payload, record))
                         record = KNOWLEDGE_SET_STORE.attach_job(set_id, item_id, job.id, job.knowledge_id)
                     except DuplicateTaskError as exc:
                         KNOWLEDGE_SET_STORE.mark_duplicate(set_id, item_id, "该视频已有重复任务，请先处理重复任务。")
@@ -2185,6 +3030,16 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "知识集或条目不存在。"}, HTTPStatus.NOT_FOUND)
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/v1/clips":
+            try:
+                payload = self._read_json_body()
+                item, replayed = CLIP_STORE.create(payload, self.headers.get("Idempotency-Key", ""))
+                self._send_json(_bridge_data({**item.to_public(), "idempotency_replayed": replayed}), HTTPStatus.OK if replayed else HTTPStatus.CREATED)
+            except ValueError as exc:
+                self._send_json(_bridge_error("invalid_request", str(exc), retryable=False), HTTPStatus.BAD_REQUEST)
+            except OSError:
+                self._send_json(_bridge_error("storage_unavailable", "剪藏暂时无法保存，请稍后重试。", retryable=True), HTTPStatus.SERVICE_UNAVAILABLE)
             return
         if parsed.path == "/v1/intakes":
             try:
@@ -2234,14 +3089,41 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                     )
                     self._send_json(_bridge_data({**item.to_public(), "action": action, "idempotency_replayed": replayed}))
                     return
-                if item.source_kind != "video":
-                    self._send_json(_bridge_error("unsupported_source", "当前只支持视频 Intake 交接。", retryable=False), HTTPStatus.BAD_REQUEST)
-                    return
                 item, replayed = INTAKE_STORE.begin_action(
                     intake_id,
                     action,
                     self.headers.get("Idempotency-Key", ""),
                 )
+                if item.source_kind == "page":
+                    if not replayed:
+                        if item.content_upload_allowed and not ProviderConfigResolver(
+                            WEB_PROVIDER_CONFIG
+                        ).resolve("deepseek").configured:
+                            item = INTAKE_STORE.fail_action(
+                                intake_id,
+                                "文字分析服务尚未配置；完成 API 配置后可重试。",
+                            )
+                        else:
+                            _start_page_intake(item)
+                    item = INTAKE_STORE.get(intake_id) or item
+                    self._send_json(
+                        _bridge_data(
+                            {
+                                **item.to_public(),
+                                "action": action,
+                                "idempotency_replayed": replayed,
+                            }
+                        ),
+                        HTTPStatus.OK if replayed else HTTPStatus.ACCEPTED,
+                    )
+                    return
+                if item.source_kind != "video":
+                    item = INTAKE_STORE.fail_action(intake_id, "当前 Intake 来源类型暂不支持处理。")
+                    self._send_json(
+                        _bridge_data({**item.to_public(), "action": action, "idempotency_replayed": replayed}),
+                        HTTPStatus.ACCEPTED,
+                    )
+                    return
                 if not replayed:
                     try:
                         job = start_job(_intake_task_payload(item))
@@ -2397,6 +3279,26 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/projects/") and "/records/" in parsed.path:
+            relative = parsed.path[len("/api/projects/") :].strip("/")
+            project_id, marker, knowledge_id = relative.partition("/records/")
+            try:
+                if marker != "/records/" or not project_id or not knowledge_id:
+                    raise ValueError("项目成员路径无效。")
+                knowledge_id = unquote(knowledge_id)
+                resolve_library_dir(knowledge_id)
+                record = PROJECT_GROUP_STORE.move_knowledge(unquote(project_id), knowledge_id)
+                valid_ids = _available_knowledge_ids()
+                self._send_json({"project": record.to_public(valid_knowledge_ids=valid_ids)})
+            except KeyError:
+                self._send_json({"error": "项目不存在。"}, HTTPStatus.NOT_FOUND)
+            except FileNotFoundError:
+                self._send_json({"error": "知识记录不存在。"}, HTTPStatus.NOT_FOUND)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except OSError:
+                self._send_json({"error": "项目保存失败，请检查共享知识目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if not (parsed.path.startswith("/api/library/") and parsed.path.endswith("/notes")):
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
             return
@@ -2435,6 +3337,28 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/projects/"):
+            relative = parsed.path[len("/api/projects/") :].strip("/")
+            project_id, marker, knowledge_id = relative.partition("/records/")
+            try:
+                if marker == "/records/":
+                    if not project_id or not knowledge_id:
+                        raise ValueError("项目成员路径无效。")
+                    record = PROJECT_GROUP_STORE.remove_knowledge(unquote(project_id), unquote(knowledge_id))
+                    valid_ids = _available_knowledge_ids()
+                    self._send_json({"project": record.to_public(valid_knowledge_ids=valid_ids)})
+                else:
+                    if not relative or "/" in relative:
+                        raise ValueError("项目路径无效。")
+                    deleted = PROJECT_GROUP_STORE.delete(unquote(relative))
+                    self._send_json({"deletedProjectId": deleted.project_id, "unlinkedCount": len(deleted.knowledge_ids)})
+            except KeyError:
+                self._send_json({"error": "项目不存在。"}, HTTPStatus.NOT_FOUND)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except OSError:
+                self._send_json({"error": "项目保存失败，请检查共享知识目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path.startswith("/api/provider-config/"):
             provider = unquote(parsed.path.rsplit("/", 1)[-1])
             try:
@@ -2477,6 +3401,27 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "知识包不存在。"}, HTTPStatus.NOT_FOUND)
             return
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+
+    def do_PATCH(self) -> None:
+        parsed = urlparse(self.path)
+        if not parsed.path.startswith("/api/projects/"):
+            self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+            return
+        project_id = unquote(parsed.path[len("/api/projects/") :].strip("/"))
+        if not project_id or "/" in project_id:
+            self._send_json({"error": "项目路径无效。"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            payload = self._read_json_body()
+            record = PROJECT_GROUP_STORE.rename(project_id, str(payload.get("title") or ""))
+            valid_ids = _available_knowledge_ids()
+            self._send_json({"project": record.to_public(valid_knowledge_ids=valid_ids)})
+        except KeyError:
+            self._send_json({"error": "项目不存在。"}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except OSError:
+            self._send_json({"error": "项目保存失败，请检查共享知识目录。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[web] {self.address_string()} - {fmt % args}")
@@ -2595,6 +3540,8 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if urlparse(self.path).path.startswith("/v1/"):
+            self._set_bridge_cors_headers()
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -2996,6 +3943,7 @@ def main() -> None:
     try:
         ensure_data_directory_writable()
         server = VideoSummaryServer((args.host, args.port), VideoSummaryHandler)
+        _restore_scheduler_jobs()
     except UserFacingError as exc:
         raise SystemExit(str(exc)) from exc
     except OSError as exc:

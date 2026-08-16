@@ -25,7 +25,23 @@ CACHE_ARTIFACT_TYPES = frozenset(
         "comments",
     }
 )
-DEFAULT_CACHE_ROOT = Path(__file__).resolve().parents[1] / ".local" / "cache" / "v1"
+def default_cache_root() -> Path:
+    """Return the writable cache root for the current local runtime.
+
+    Portable/read-only checkouts keep mutable state outside the project when
+    ``VIEWLEDGE_STATE_ROOT`` is configured.  ``VIEWLEDGE_CACHE_ROOT`` remains
+    an explicit override for operators that want a dedicated cache location.
+    """
+    explicit = os.environ.get("VIEWLEDGE_CACHE_ROOT", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    state_root = os.environ.get("VIEWLEDGE_STATE_ROOT", "").strip()
+    if state_root:
+        return Path(state_root).expanduser() / "cache" / "v1"
+    return Path(__file__).resolve().parents[1] / ".local" / "cache" / "v1"
+
+
+DEFAULT_CACHE_ROOT = default_cache_root()
 _CACHE_KEY_RE = re.compile(r"[0-9a-f]{64}")
 
 
@@ -74,8 +90,8 @@ def transcript_content_hash(segments: list[TranscriptSegment]) -> str:
 
 
 class CacheStore:
-    def __init__(self, root: Path = DEFAULT_CACHE_ROOT) -> None:
-        self.root = root
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = root or default_cache_root()
 
     def get(self, artifact_type: str, cache_key: str) -> Any | None:
         path = self._path_for(artifact_type, cache_key)

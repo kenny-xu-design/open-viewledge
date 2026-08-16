@@ -23,6 +23,7 @@ from ..transcription_router import PlatformSubtitleProvider, TranscriptionRouter
 from ..providers.asr import LocalWhisperProvider  # compatibility for existing mocks
 from ..providers.llm import DeepSeekProvider, GeminiProvider
 from ..processing_profiles import ProcessingProfile
+from ..resource_governor import resource_guard
 from ..knowledge_validation import inspect_knowledge_package
 from ..sources import LocalMediaSource, YtdlpSource
 from ..timeline import build_timeline, extract_frames
@@ -469,12 +470,19 @@ class PipelineOrchestrator:
                     context.mark_stage_skipped("extract_frames")
                     return
                 frame_source = Path(context.source.local_path)
-                context.timeline, errors = extract_frames(
-                    frame_source,
-                    context.timeline,
-                    context.output_dir / "frames",
-                    ffmpeg_path=self.config.ffmpeg_path,
-                )
+                with resource_guard(
+                    "ffmpeg",
+                    timeout_seconds=self.config.ffmpeg_timeout_seconds,
+                    profile=self.config.compute_profile,
+                    configured_threads=self.config.cpu_thread_limit,
+                ):
+                    context.timeline, errors = extract_frames(
+                        frame_source,
+                        context.timeline,
+                        context.output_dir / "frames",
+                        ffmpeg_path=self.config.ffmpeg_path,
+                        ffmpeg_threads=self.config.ffmpeg_threads,
+                    )
                 context.manifest.errors.extend(errors)
 
             def analyze() -> None:
@@ -688,13 +696,20 @@ class PipelineOrchestrator:
                 ):
                     context.mark_stage_skipped("highlight_snapshot")
                     return
-                result = generate_tutorial_step_snapshots(
-                    Path(context.source.local_path),
-                    context.analysis,
-                    context.timeline,
-                    context.output_dir,
-                    ffmpeg_path=self.config.ffmpeg_path,
-                )
+                with resource_guard(
+                    "ffmpeg",
+                    timeout_seconds=self.config.ffmpeg_timeout_seconds,
+                    profile=self.config.compute_profile,
+                    configured_threads=self.config.cpu_thread_limit,
+                ):
+                    result = generate_tutorial_step_snapshots(
+                        Path(context.source.local_path),
+                        context.analysis,
+                        context.timeline,
+                        context.output_dir,
+                        ffmpeg_path=self.config.ffmpeg_path,
+                        ffmpeg_threads=self.config.ffmpeg_threads,
+                    )
                 context.analysis = result.analysis
                 save_json(
                     context.output_dir / "analysis.json",

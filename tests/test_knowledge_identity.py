@@ -11,6 +11,7 @@ from src.knowledge_identity import (
     build_input_knowledge_identity,
     detect_duplicate,
     normalize_source_url,
+    source_urls_equivalent,
 )
 
 
@@ -129,6 +130,11 @@ class KnowledgeIdentityTests(unittest.TestCase):
 
         self.assertTrue(identity.knowledge_id.startswith("k1-youtube-"))
         self.assertTrue(identity.request_fingerprint)
+
+    def test_bilibili_default_part_url_matches_explicit_p1_only(self) -> None:
+        base = "https://www.bilibili.com/video/BV1wx5y6NEDv"
+        self.assertTrue(source_urls_equivalent(base, base + "?p=1"))
+        self.assertFalse(source_urls_equivalent(base, base + "?p=2"))
 
 
 class DuplicateDetectionTests(unittest.TestCase):

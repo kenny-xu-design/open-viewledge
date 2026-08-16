@@ -13,6 +13,8 @@ SCHEMA_VERSION = "1.0"
 MAX_SETS = 100
 MAX_ITEMS_PER_SET = 200
 ITEM_STATES = frozenset({"queued", "processing", "ready", "failed", "needs_attention", "duplicate", "cancelled"})
+KNOWLEDGE_SET_DIRECTORY = "knowledge_sets"
+KNOWLEDGE_SET_REGISTRY = "registry.json"
 
 
 def _utc_now() -> str:
@@ -58,6 +60,9 @@ class KnowledgeSetRecord:
     kind: str
     uploader: str
     idempotency_key: str
+    analysis_profile: str = "tutorial"
+    processing_profile: str = "complete"
+    transcript_group_seconds: int = 30
     items: list[KnowledgeSetItem] = field(default_factory=list)
     created_at: str = field(default_factory=_utc_now)
     updated_at: str = field(default_factory=_utc_now)
@@ -69,6 +74,9 @@ class KnowledgeSetRecord:
             "sourceUrl": self.source_url,
             "kind": self.kind,
             "uploader": self.uploader,
+            "analysisProfile": self.analysis_profile,
+            "processingProfile": self.processing_profile,
+            "transcriptGroupSeconds": self.transcript_group_seconds,
             "itemCount": len(self.items),
             "items": [item.to_public() for item in sorted(self.items, key=lambda value: value.sequence)],
             "createdAt": self.created_at,
@@ -103,6 +111,9 @@ class KnowledgeSetRecord:
             kind=str(value.get("kind") or "bilibili_parts"),
             uploader=str(value.get("uploader") or ""),
             idempotency_key=str(value.get("idempotency_key") or ""),
+            analysis_profile=str(value.get("analysis_profile") or "tutorial"),
+            processing_profile=str(value.get("processing_profile") or "complete"),
+            transcript_group_seconds=int(value.get("transcript_group_seconds") or 30),
             items=items,
             created_at=str(value.get("created_at") or _utc_now()),
             updated_at=str(value.get("updated_at") or value.get("created_at") or _utc_now()),
@@ -110,18 +121,33 @@ class KnowledgeSetRecord:
 
 
 class KnowledgeSetStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, legacy_paths: tuple[Path, ...] = ()) -> None:
         self.path = path
+        primary = path.resolve()
+        self.legacy_paths = tuple(
+            candidate
+            for candidate in dict.fromkeys(legacy_paths)
+            if candidate.resolve() != primary
+        )
         self._lock = threading.RLock()
         self._sets: dict[str, KnowledgeSetRecord] | None = None
 
-    def create(self, inspection: dict[str, Any], idempotency_key: str) -> tuple[KnowledgeSetRecord, bool]:
+    def create(self, inspection: dict[str, Any], idempotency_key: str, *, analysis_profile: str = "tutorial", processing_profile: str = "complete", transcript_group_seconds: int = 30) -> tuple[KnowledgeSetRecord, bool]:
         with self._lock:
             self._ensure_loaded()
             assert self._sets is not None
             key = str(idempotency_key or "").strip()
             if not key:
                 raise ValueError("缺少 Idempotency-Key。")
+            analysis_profile = str(analysis_profile or "tutorial").strip()
+            processing_profile = str(processing_profile or "complete").strip()
+            transcript_group_seconds = int(transcript_group_seconds)
+            if analysis_profile not in {"summary", "tutorial", "viral", "close-reading"}:
+                raise ValueError("analysisProfile is not supported")
+            if processing_profile not in {"fast", "complete"}:
+                raise ValueError("processingProfile is not supported")
+            if not 15 <= transcript_group_seconds <= 300:
+                raise ValueError("transcriptGroupSeconds must be between 15 and 300")
             existing = next((value for value in self._sets.values() if value.idempotency_key == key), None)
             if existing:
                 return existing, True
@@ -153,6 +179,9 @@ class KnowledgeSetStore:
                 kind=kind,
                 uploader=str(inspection.get("uploader") or ""),
                 idempotency_key=key,
+                analysis_profile=analysis_profile,
+                processing_profile=processing_profile,
+                transcript_group_seconds=transcript_group_seconds,
                 items=items,
                 created_at=now,
                 updated_at=now,
@@ -233,20 +262,35 @@ class KnowledgeSetStore:
             return record
 
     def reconcile_item(self, set_id: str, item_id: str, *, state: str, knowledge_id: str = "", error: str = "") -> KnowledgeSetRecord | None:
+        return self.reconcile_items(
+            set_id,
+            [{"item_id": item_id, "state": state, "knowledge_id": knowledge_id, "error": error}],
+        )
+
+    def reconcile_items(self, set_id: str, updates: list[dict[str, str]]) -> KnowledgeSetRecord | None:
         with self._lock:
             self._ensure_loaded()
             assert self._sets is not None
             record = self._sets.get(set_id)
             if record is None:
                 return None
-            item = next((value for value in record.items if value.item_id == item_id), None)
-            if item is None:
-                return record
-            if state in {"processing", "ready", "failed"}:
+            items_by_id = {item.item_id: item for item in record.items}
+            changed = False
+            for update in updates:
+                item = items_by_id.get(str(update.get("item_id") or ""))
+                state = str(update.get("state") or "")
+                if item is None or state not in {"processing", "ready", "failed", "needs_attention"}:
+                    continue
+                knowledge_id = str(update.get("knowledge_id") or "")
+                error = str(update.get("error") or "")[:500]
+                next_knowledge_id = knowledge_id or item.knowledge_id
+                if item.state == state and item.knowledge_id == next_knowledge_id and item.last_error == error:
+                    continue
                 item.state = state
-                if knowledge_id:
-                    item.knowledge_id = knowledge_id
-                item.last_error = str(error)[:500] if error else ""
+                item.knowledge_id = next_knowledge_id
+                item.last_error = error
+                changed = True
+            if changed:
                 record.updated_at = _utc_now()
                 self._write()
             return record
@@ -265,18 +309,34 @@ class KnowledgeSetStore:
     def _ensure_loaded(self) -> None:
         if self._sets is not None:
             return
+        values = self._read(self.path)
+        migrated = False
+        for legacy_path in self.legacy_paths:
+            for set_id, record in self._read(legacy_path).items():
+                current = values.get(set_id)
+                if current is None or record.updated_at > current.updated_at:
+                    values[set_id] = record
+                    migrated = True
+        ordered = sorted(values.values(), key=lambda value: value.created_at, reverse=True)[:MAX_SETS]
+        self._sets = {value.set_id: value for value in ordered}
+        if migrated:
+            self._write()
+
+    @staticmethod
+    def _read(path: Path) -> dict[str, KnowledgeSetRecord]:
         values: dict[str, KnowledgeSetRecord] = {}
-        if self.path.exists():
-            try:
-                payload = json.loads(self.path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                payload = {}
-            for raw in payload.get("sets", []) if isinstance(payload, dict) else []:
-                if isinstance(raw, dict):
-                    record = KnowledgeSetRecord.from_record(raw)
-                    if record.set_id:
-                        values[record.set_id] = record
-        self._sets = values
+        if not path.exists():
+            return values
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return values
+        for raw in payload.get("sets", []) if isinstance(payload, dict) else []:
+            if isinstance(raw, dict):
+                record = KnowledgeSetRecord.from_record(raw)
+                if record.set_id:
+                    values[record.set_id] = record
+        return values
 
     def _write(self) -> None:
         assert self._sets is not None
@@ -287,4 +347,15 @@ class KnowledgeSetStore:
         temporary.replace(self.path)
 
 
-__all__ = ["KnowledgeSetItem", "KnowledgeSetRecord", "KnowledgeSetStore"]
+def knowledge_set_registry_path(output_root: Path) -> Path:
+    return output_root / KNOWLEDGE_SET_DIRECTORY / KNOWLEDGE_SET_REGISTRY
+
+
+__all__ = [
+    "KNOWLEDGE_SET_DIRECTORY",
+    "KNOWLEDGE_SET_REGISTRY",
+    "KnowledgeSetItem",
+    "KnowledgeSetRecord",
+    "KnowledgeSetStore",
+    "knowledge_set_registry_path",
+]

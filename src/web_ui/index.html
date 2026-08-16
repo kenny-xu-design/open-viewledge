@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Video Summary Workspace</title>
-  <link rel="stylesheet" href="/static/app.workspace-19.css">
+  <link rel="stylesheet" href="/static/app.workspace-21.css">
 </head>
 <body data-ui-mode="product">
   <svg class="icon-sprite" aria-hidden="true">
@@ -47,7 +47,6 @@
     <header class="workspace-header">
       <div class="header-leading">
         <button type="button" class="icon-button" id="toggleSidebar" aria-label="隐藏知识库" aria-controls="sidebar" aria-expanded="true"><svg><use href="#i-menu"/></svg></button>
-        <button type="button" class="new-summary" id="newSummary" aria-label="新总结"><svg><use href="#i-plus"/></svg><span>新总结</span></button>
         <div class="workspace-heading">
           <small>视频知识工作台</small>
           <span class="workspace-title" id="workspaceTitle">选择一条知识记录</span>
@@ -69,50 +68,88 @@
     <aside class="sidebar" id="sidebar" aria-label="知识记录导航" tabindex="-1">
       <div class="sidebar-top">
         <strong>知识记录</strong>
-        <button class="icon-button sidebar-only-expanded" id="focusSearch" aria-label="搜索记录"><svg><use href="#i-search"/></svg></button>
+        <button type="button" class="new-summary sidebar-new-summary sidebar-only-expanded" id="newSummary" aria-label="新总结" title="新总结"><svg><use href="#i-plus"/></svg></button>
       </div>
-      <div class="search-wrap sidebar-only-expanded">
-        <svg><use href="#i-search"/></svg>
-        <input id="librarySearch" type="search" placeholder="搜索知识记录" aria-label="搜索知识记录">
+      <div class="sidebar-search-row sidebar-only-expanded">
+        <div class="search-wrap">
+          <svg><use href="#i-search"/></svg>
+          <input id="librarySearch" type="search" placeholder="搜索知识记录" aria-label="搜索知识记录">
+        </div>
+        <button type="button" class="icon-button global-search-trigger" id="openGlobalSearch" aria-label="全局搜索" title="全局搜索 · Ctrl+Shift+K"><svg><use href="#i-search"/></svg></button>
       </div>
       <nav class="nav-groups">
-        <details open>
-          <summary aria-expanded="true"><svg><use href="#i-library"/></svg><span>资源库</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
-          <div class="nav-items sidebar-only-expanded" id="resourceFilters">
-            <button type="button" class="active" data-filter="all" aria-current="page">全部记录 <span id="countAll">0</span></button>
-            <button type="button" data-filter="video">视频 <span id="countVideo">0</span></button>
-            <button type="button" data-filter="processing">待处理 <span id="countProcessing">0</span></button>
-            <button type="button" data-filter="completed">已完成 <span id="countCompleted">0</span></button>
-          </div>
-        </details>
-        <details>
+        <button type="button" class="nav-primary active" id="resourceOverviewNav" aria-current="page"><svg><use href="#i-library"/></svg><span>资源库</span><small id="countResourceNav">0</small></button>
+        <details id="outputNavGroup">
           <summary aria-expanded="false"><svg><use href="#i-box"/></svg><span>产出库</span><svg class="chevron"><use href="#i-chevron"/></svg></summary>
-          <div class="nav-items sidebar-only-expanded muted-nav">
-            <button disabled>行动建议 <span>0</span></button>
-            <button disabled>写作素材 <span>0</span></button>
-            <button disabled>项目关联 <span>0</span></button>
-          </div>
+          <div class="output-collection-list sidebar-only-expanded" id="outputCollectionList" aria-live="polite"></div>
         </details>
       </nav>
-      <section class="knowledge-set-region sidebar-only-expanded" aria-labelledby="knowledgeSetHeading">
-        <div class="record-heading"><span id="knowledgeSetHeading">知识集</span><button class="icon-button small" id="refreshKnowledgeSets" type="button" aria-label="刷新知识集"><svg><use href="#i-refresh"/></svg></button></div>
-        <div class="knowledge-set-list" id="knowledgeSetList" aria-live="polite"></div>
-      </section>
-      <div class="record-heading sidebar-only-expanded">
-        <span id="recordHeadingLabel">知识记录</span>
-        <div class="record-heading-actions">
-          <button class="icon-button small" id="toggleDeleteMode" type="button" title="选择要删除的记录" aria-label="选择要删除的记录"><svg><use id="deleteActionIcon" href="#i-trash"/></svg></button>
-          <button class="icon-button small" id="refreshLibrary" type="button" aria-label="刷新记录"><svg><use href="#i-refresh"/></svg></button>
+      <div class="sidebar-view sidebar-only-expanded" id="librarySidebarView">
+        <section class="project-region" aria-labelledby="projectHeading">
+          <div class="record-heading"><span id="projectHeading">项目</span><div class="record-heading-actions"><button class="icon-button small" id="createProject" type="button" aria-label="新建项目"><svg><use href="#i-plus"/></svg></button><button class="icon-button small" id="refreshProjects" type="button" aria-label="刷新项目"><svg><use href="#i-refresh"/></svg></button></div></div>
+          <div class="project-list" id="projectList" aria-live="polite"></div>
+        </section>
+        <div class="record-heading">
+          <span id="recordHeadingLabel">知识记录</span>
+          <div class="record-heading-actions">
+            <button class="icon-button small" id="toggleDeleteMode" type="button" title="选择要删除的记录" aria-label="选择要删除的记录"><svg><use id="deleteActionIcon" href="#i-trash"/></svg></button>
+            <button class="icon-button small" id="refreshLibrary" type="button" aria-label="刷新记录"><svg><use href="#i-refresh"/></svg></button>
+          </div>
         </div>
+        <div class="library-list" id="libraryList" aria-live="polite"></div>
       </div>
-      <div class="library-list" id="libraryList" aria-live="polite"></div>
       <div class="sidebar-footer">
         <div class="local-user"><span class="avatar">L</span><span class="sidebar-only-expanded"><strong>本地用户</strong><small>Private workspace</small></span></div>
         <button type="button" class="icon-button" id="collapseSidebar" aria-label="关闭知识库" aria-controls="sidebar"><svg><use href="#i-collapse"/></svg></button>
       </div>
     </aside>
 
+    <nav class="sidebar-rail" id="sidebarRail" aria-label="折叠的知识导航" aria-hidden="true">
+      <button type="button" class="rail-button rail-new-summary" data-rail-action="new" aria-label="新总结" title="新总结"><svg><use href="#i-plus"/></svg></button>
+      <button type="button" class="rail-button" data-rail-action="global-search" aria-label="全局搜索" title="全局搜索 · Ctrl+Shift+K"><svg><use href="#i-search"/></svg></button>
+      <button type="button" class="rail-button" data-rail-action="resource" aria-label="打开资源总览"><svg><use href="#i-library"/></svg></button>
+      <button type="button" class="rail-button" data-rail-panel="output" aria-label="产出库" aria-expanded="false" aria-controls="sidebarFlyout"><svg><use href="#i-box"/></svg></button>
+      <button type="button" class="rail-button" data-rail-panel="projects" aria-label="项目" aria-expanded="false" aria-controls="sidebarFlyout"><svg><use href="#i-folder"/></svg></button>
+      <button type="button" class="rail-button rail-user" data-rail-panel="user" aria-label="本地用户" aria-expanded="false" aria-controls="sidebarFlyout"><span class="avatar">L</span></button>
+    </nav>
+    <section class="sidebar-flyout" id="sidebarFlyout" role="dialog" aria-modal="false" aria-label="知识导航浮窗" tabindex="-1" hidden>
+      <header><strong id="sidebarFlyoutTitle">资源库</strong><button type="button" class="icon-button small" id="closeSidebarFlyout" aria-label="关闭浮窗"><svg><use href="#i-close"/></svg></button></header>
+      <div class="sidebar-flyout-body" id="sidebarFlyoutBody"></div>
+    </section>
+
     <div class="workspace-grid" id="workspaceGrid">
+    <section class="resource-overview" id="resourceOverviewPane" aria-labelledby="resourceOverviewTitle" hidden>
+      <header class="resource-overview-header">
+        <div><p>LOCAL KNOWLEDGE WORKSPACE</p><h1 id="resourceOverviewTitle">资源总览</h1><span>管理独立知识记录、采集队列与处理状态。</span></div>
+        <div class="resource-overview-header-actions">
+          <button type="button" class="quiet-button" id="refreshResourceOverview"><svg><use href="#i-refresh"/></svg><span>刷新</span></button>
+          <button type="button" class="quiet-button" id="overviewDeleteMode"><svg><use id="overviewDeleteActionIcon" href="#i-trash"/></svg><span>批量管理</span></button>
+        </div>
+      </header>
+      <nav class="resource-overview-tabs" role="tablist" aria-label="资源总览筛选">
+        <button type="button" class="active" role="tab" data-overview-tab="all" aria-selected="true">全部 <span id="overviewCountAll">0</span></button>
+        <button type="button" role="tab" data-overview-tab="inbox" aria-selected="false">收件箱 <span id="overviewCountInbox">0</span></button>
+        <button type="button" role="tab" data-overview-tab="processing" aria-selected="false">处理中 <span id="overviewCountProcessing">0</span></button>
+        <button type="button" role="tab" data-overview-tab="completed" aria-selected="false">已完成 <span id="overviewCountCompleted">0</span></button>
+      </nav>
+      <div class="resource-overview-toolbar">
+        <label class="overview-search"><svg><use href="#i-search"/></svg><input id="resourceOverviewSearch" type="search" placeholder="搜索标题、作者或来源" aria-label="搜索资源总览"></label>
+        <label>来源<select id="resourceSourceFilter" aria-label="筛选来源类型"><option value="all">全部来源</option><option value="video">视频</option><option value="web_page">网页</option><option value="local_video">本地视频</option><option value="online_video">在线视频</option></select></label>
+        <label>排序<select id="resourceSort" aria-label="资源排序"><option value="recent">最近更新</option><option value="title">标题</option><option value="duration">时长</option><option value="status">状态</option></select></label>
+        <span class="overview-selection" id="overviewSelection" role="status"></span>
+      </div>
+      <section class="resource-overview-records" id="resourceOverviewRecords" aria-live="polite"></section>
+      <section class="resource-overview-inbox" id="resourceOverviewInbox" hidden>
+        <div class="overview-inbox-toolbar">
+          <label class="inbox-filter" for="inboxStateFilter">队列状态
+            <select id="inboxStateFilter" aria-label="筛选收件箱状态"><option value="all">全部</option><option value="attention">需处理</option><option value="active">等待与处理中</option><option value="ready">已就绪</option></select>
+          </label>
+          <button class="quiet-button" id="refreshInbox" type="button"><svg><use href="#i-refresh"/></svg><span>刷新收件箱</span></button>
+        </div>
+        <div class="inbox-list" id="inboxList" aria-live="polite"></div>
+        <button type="button" class="quiet-button inbox-load-more hidden" id="loadMoreInbox">加载更多</button>
+      </section>
+    </section>
     <section class="result-pane workspace-module" id="resultPane" data-module="result">
       <header class="result-header">
         <div class="result-tabs" role="tablist">
@@ -136,7 +173,9 @@
         <div id="summaryView" class="result-view reading-surface"><div class="result-empty ui-empty-state"><h2 class="ui-empty-state__title">知识结果</h2><p class="ui-empty-state__description">处理完成后，摘要和章节会显示在这里。</p></div></div>
         <div id="transcriptView" class="result-view hidden">
           <div class="transcript-tools"><div class="search-wrap"><svg><use href="#i-search"/></svg><input id="transcriptSearch" type="search" placeholder="搜索分组字幕" aria-label="搜索分组字幕"></div><label class="switch-label"><input id="followPlayback" type="checkbox">跟随播放</label><button class="quiet-button" id="backToTop">回到顶部</button></div>
+          <div class="transcript-clip-toolbar"><label class="clip-note-field"><span>&#22791;&#27880;</span><input id="transcriptClipNote" type="text" maxlength="4000" placeholder="&#21487;&#36873;&#22791;&#27880;"></label><button class="quiet-button" id="toggleClips" type="button" aria-expanded="false">&#24050;&#21098;&#34255;</button></div>
           <div id="transcriptGroups"></div>
+          <div id="clipList" class="clip-list hidden" aria-live="polite"></div>
         </div>
       </div>
       <footer class="result-footer"><button class="quiet-button" id="readTranscript">阅读全文</button><label class="switch-label"><input id="footerFollow" type="checkbox">跟随播放</label><span class="data-layer-label">AI 结果 · 源数据</span></footer>
@@ -227,6 +266,35 @@
     </div>
   </div>
 
+  <dialog id="globalSearchDialog" class="global-search-dialog" aria-labelledby="globalSearchTitle">
+    <div class="global-search-panel">
+      <header><div><span class="dialog-kicker">LOCAL KNOWLEDGE</span><h2 id="globalSearchTitle">全局搜索</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="关闭全局搜索"><svg><use href="#i-close"/></svg></button></header>
+      <div class="global-search-query">
+        <svg><use href="#i-search"/></svg>
+        <input id="globalSearchInput" type="search" maxlength="200" autocomplete="off" placeholder="搜索知识记录、合集和项目" aria-label="全局搜索">
+        <kbd>Ctrl+Shift+K</kbd>
+      </div>
+      <div class="global-search-toolbar">
+        <div class="global-search-kinds" role="radiogroup" aria-label="搜索对象">
+          <button type="button" class="active" role="radio" aria-checked="true" data-global-search-kind="all">全部</button>
+          <button type="button" role="radio" aria-checked="false" data-global-search-kind="knowledge">知识记录</button>
+          <button type="button" role="radio" aria-checked="false" data-global-search-kind="collection">合集</button>
+          <button type="button" role="radio" aria-checked="false" data-global-search-kind="project">项目</button>
+        </div>
+        <label class="global-search-deep"><input id="globalSearchDeep" type="checkbox"><span>深度搜索字幕与网页正文</span></label>
+      </div>
+      <div class="global-search-body">
+        <section class="global-search-results" aria-label="搜索结果">
+          <div class="global-search-state" id="globalSearchState" role="status" aria-live="polite">输入关键词，或查看最近更新的知识资产。</div>
+          <div class="global-search-list" id="globalSearchResults" role="listbox" aria-label="全局搜索结果"></div>
+        </section>
+        <aside class="global-search-preview" id="globalSearchPreview" aria-label="结果预览">
+          <div class="global-search-preview-empty">选择一项查看摘要和打开方式。</div>
+        </aside>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="newTaskDialog" class="task-dialog">
     <form id="newTaskForm" method="dialog">
       <header><div><span class="dialog-kicker">PROCESS</span><h2>新总结</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><svg><use href="#i-close"/></svg></button></header>
@@ -234,9 +302,10 @@
       <div class="field ui-field" id="taskSourceField" data-invalid="false">
         <label class="ui-field__label" for="taskSource"><span id="taskSourceLabel">视频链接</span><span class="ui-field__required" aria-hidden="true">*</span></label>
         <p class="ui-field__description" id="taskSourceDescription">输入公开媒体链接，或切换为本地文件路径。</p>
-        <input class="ui-text-field" id="taskSource" name="source" required aria-describedby="taskSourceDescription" aria-errormessage="taskSourceError" aria-invalid="false" placeholder="https://www.bilibili.com/video/BV…">
+        <div class="task-source-input-row"><input class="ui-text-field" id="taskSource" name="source" required aria-describedby="taskSourceDescription" aria-errormessage="taskSourceError" aria-invalid="false" placeholder="https://www.bilibili.com/video/BV…"><button type="button" class="quiet-button" id="validateTaskSource">验证路径/链接</button></div>
         <p class="ui-field__error" id="taskSourceError" role="alert" hidden>请输入视频链接。</p>
       </div>
+        <p class="task-source-validation" id="taskSourceValidation" role="status" aria-live="polite" hidden></p>
       <section class="series-decision hidden" id="seriesDecision" aria-live="polite">
         <strong id="seriesDecisionTitle">检测到 B站分批教程</strong>
         <p id="seriesDecisionMessage">可以先建立知识集，之后按顺序选择单个视频分析。</p>
@@ -249,6 +318,7 @@
       <div class="form-grid">
         <label class="field"><span>分析模式</span><select class="ui-select" id="taskMode"><option value="summary">标准摘要</option><option value="tutorial">教程提取</option><option value="viral">爆款分析</option><option value="close-reading">深度精读</option></select><small id="taskModeDescription">适合资讯、访谈、介绍和一般知识视频</small></label>
         <label class="field"><span>处理模式</span><select class="ui-select" id="taskProcessingProfile"><option value="complete">complete（完整兼容）</option><option value="fast">fast（优先文本）</option></select></label>
+        <label class="field"><span>计算资源</span><select class="ui-select" id="taskComputeProfile"><option value="responsive">流畅优先（推荐）</option><option value="balanced">平衡</option><option value="performance">全速</option></select><small>限制 CPU 线程并让本地 GPU/CPU 任务排队，避免影响桌面操作。</small></label>
         <label class="field"><span>AI 分析</span><input value="文字分析" disabled><input id="taskBackend" type="hidden" value="deepseek"></label>
         <label class="field"><span>字幕语言</span><select id="taskLanguage"><option value="">默认 zh</option><option value="zh">zh</option><option value="zh-Hans">zh-Hans</option><option value="en">en</option></select></label>
         <label class="field"><span>字幕转写方式</span><select id="taskAsrRoute"><option value="cloud">云端快速转写</option><option value="local_gpu">本地 GPU</option><option value="local_cpu">本地 CPU</option></select><small>仅在视频没有可用平台字幕时生效。云端模式会把提取后的音频发送至第三方转写服务。</small></label>
@@ -330,6 +400,6 @@
   <dialog id="imageDialog" class="image-dialog"><button class="icon-button image-close" data-close-dialog aria-label="关闭预览"><svg><use href="#i-close"/></svg></button><img id="imagePreview" alt="关键帧预览"></dialog>
   <div class="drawer-scrim" id="drawerScrim"></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.workspace-19.js" defer></script>
+  <script src="/static/app.workspace-21.js" defer></script>
 </body>
 </html>

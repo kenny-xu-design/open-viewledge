@@ -7,8 +7,15 @@ from ..domain.models import SourceRecord
 from ..utils import UserFacingError
 from .base import SourceAdapter
 
-VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts", ".mts", ".m2ts"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus"}
+
+
+def _normalize_local_path(value: str) -> str:
+    cleaned = str(value or "").strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {'"', "'"}:
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
 
 
 class LocalMediaSource(SourceAdapter):
@@ -18,10 +25,10 @@ class LocalMediaSource(SourceAdapter):
 
     @classmethod
     def supports(cls, input_value: str) -> bool:
-        return Path(input_value).suffix.lower() in VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+        return Path(_normalize_local_path(input_value)).suffix.lower() in VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 
     def resolve(self, input_value: str) -> SourceRecord:
-        path = Path(input_value).expanduser().resolve()
+        path = Path(_normalize_local_path(input_value)).expanduser().resolve()
         if not path.exists() or not path.is_file():
             raise UserFacingError(f"本地媒体文件不存在：{path}")
         suffix = path.suffix.lower()

@@ -58,14 +58,16 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("lastSidebarTrigger", self.js)
         self.assertIn("lastInspectorTrigger", self.js)
 
-    def test_sidebar_overlays_workspace_without_reserving_summary_column(self) -> None:
+    def test_desktop_sidebar_reserves_a_real_navigation_column(self) -> None:
         self.assertIn("grid-template-columns: minmax(0, 1fr);", self.css)
         self.assertIn("position: fixed;", self.css)
         self.assertIn("--ui-sidebar-overlay: rgba(246, 246, 248, .60);", self.css)
         self.assertIn("background: var(--ui-sidebar-overlay);", self.css)
         self.assertIn("transform: translateX(-103%);", self.css)
-        self.assertIn(".app-shell.sidebar-hidden > .sidebar { transform: translateX(-103%); }", self.css)
-        self.assertNotIn("grid-template-columns: var(--sidebar-width) minmax(0, 1fr);", self.css)
+        self.assertIn(".app-shell { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }", self.css)
+        self.assertIn(".app-shell.sidebar-hidden { grid-template-columns: 56px minmax(0, 1fr); }", self.css)
+        self.assertIn(".workspace-grid { grid-column: 2; }", self.css)
+        self.assertIn(".app-shell.sidebar-hidden > .sidebar { display: none; transform: none; }", self.css)
 
     def test_deepseek_model_field_explains_api_id_and_console_label(self) -> None:
         self.assertIn('id="deepseekModel"', self.html)
@@ -73,11 +75,83 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("DeepSeek-V4-Flash-0731", self.html)
 
     def test_sidebar_navigation_exposes_current_and_expanded_state(self) -> None:
-        self.assertIn('data-filter="all" aria-current="page"', self.html)
-        self.assertIn('<summary aria-expanded="true">', self.html)
+        self.assertIn('id="resourceOverviewNav" aria-current="page"', self.html)
+        self.assertIn('id="countResourceNav"', self.html)
         self.assertIn('<summary aria-expanded="false">', self.html)
-        self.assertIn('item.setAttribute("aria-current", "page")', self.js)
+        self.assertIn('$("#resourceOverviewNav").setAttribute("aria-current", "page")', self.js)
         self.assertIn('setAttribute("aria-expanded", String(details.open))', self.js)
+
+    def test_source_validation_and_folder_set_contracts_exist(self) -> None:
+        self.assertIn('id="validateTaskSource"', self.html)
+        self.assertIn("async function validateTaskSource()", self.js)
+        self.assertIn('id="taskSourceValidation"', self.html)
+        self.assertIn("function setTaskSourceValidation(kind, text)", self.js)
+        self.assertIn('setTaskSourceValidation("success"', self.js)
+        self.assertIn('验证成功：路径有效，可稍后从文件夹知识集启动分析。', self.js)
+        self.assertIn('setTaskSourceValidation("collection"', self.js)
+        self.assertIn('setTaskSourceValidation("", "")', self.js)
+        self.assertIn('setTaskSourceValidation("error", "验证失败', self.js)
+        self.assertIn('api("/api/source/inspect"', self.js)
+        self.assertIn('api("/api/folder-sets"', self.js)
+        self.assertIn('analysisProfile: $("#taskMode").value', self.js)
+        self.assertIn('processingProfile: $("#taskProcessingProfile").value', self.js)
+        self.assertIn('transcriptGroupSeconds: $("#taskTranscriptGroupSeconds").value', self.js)
+        self.assertIn('folderSet?.analysisProfile', self.js)
+        self.assertIn('body: JSON.stringify({ inspection, analysisProfile:', self.js)
+        self.assertIn('data-folder-item-id', self.js)
+        self.assertIn('draggable="false"', self.js)
+        self.assertIn("data.started || 0", self.js)
+        self.assertIn("function formatFolderSetItemMeta", self.js)
+        self.assertIn("formatFolderSetItemMeta(item, libraryItem)", self.js)
+        self.assertIn("/v1/knowledge/{knowledge_id}/transcript", (Path(__file__).resolve().parents[1] / "docs" / "API_CONTRACTS.md").read_text(encoding="utf-8"))
+
+    def test_transcript_groups_expose_clip_bridge_action(self) -> None:
+        self.assertIn("function renderTranscriptGroupsWithClips()", self.js)
+        self.assertIn("data-clip-group", self.js)
+        self.assertIn("data-highlight-group", self.js)
+        self.assertIn("data-intake-group", self.js)
+        self.assertIn("async function clipTranscriptGroup(groupIndex, article = null)", self.js)
+        self.assertIn("async function highlightTranscriptGroup(groupIndex, article = null)", self.js)
+        self.assertIn('kind,', self.js)
+        self.assertIn("async function intakeTranscriptGroup(groupIndex, article = null)", self.js)
+        self.assertIn("function transcriptSelectionForClip(group, article, previous, next)", self.js)
+        self.assertIn("function rememberTranscriptSelection()", self.js)
+        self.assertIn("state.transcriptSelection", self.js)
+        self.assertIn("transcriptActionMeta", self.js)
+        self.assertIn("function transcriptActionRequest(group, kind, fingerprint = \"\")", self.js)
+        self.assertIn("value.fingerprint !== fingerprint", self.js)
+        self.assertIn("state.transcriptActionMeta.clear()", self.js)
+        self.assertIn("const action = transcriptActionRequest(group, kind,", self.js)
+        self.assertIn('transcriptActionRequest(group, "intake",', self.js)
+        self.assertIn("captured_at: action.capturedAt", self.js)
+        self.assertIn('document.addEventListener("selectionchange", rememberTranscriptSelection)', self.js)
+        self.assertIn("window.getSelection", self.js)
+        self.assertIn("selection.toString()", self.js)
+        self.assertIn("media_start_seconds: pageSource ? null", self.js)
+        self.assertIn("media_end_seconds: pageSource ? null", self.js)
+        self.assertIn('api("/v1/clips"', self.js)
+        self.assertIn('api("/v1/intakes"', self.js)
+        self.assertIn('headers: { "Idempotency-Key": requestId }', self.js)
+        self.assertIn("transcript-actions .clip-group-button", self.css)
+        self.assertIn("transcript-actions .highlight-group-button", self.css)
+        self.assertIn("transcript-actions .intake-group-button", self.css)
+
+    def test_saved_clip_list_can_be_loaded_from_bridge(self) -> None:
+        self.assertIn('id="toggleClips"', self.html)
+        self.assertIn('id="clipList"', self.html)
+        self.assertIn('id="transcriptClipNote"', self.html)
+        self.assertIn("async function loadClipList()", self.js)
+        self.assertIn("/v1/clips?knowledge_id=", self.js)
+        self.assertIn("payload?.clips", self.js)
+        self.assertIn('if (path.startsWith("/v1/"))', self.js)
+        self.assertIn('data.schema_version !== "1.0"', self.js)
+        self.assertIn('Object.prototype.hasOwnProperty.call(data, "data")', self.js)
+        self.assertIn("return data.data", self.js)
+        self.assertNotIn("response?.data?.clips", self.js)
+        self.assertIn('note: $("#transcriptClipNote").value.trim()', self.js)
+        self.assertIn("clip.note", self.js)
+        self.assertIn("clip-card", self.css)
+        self.assertIn("clip-note-field", self.css)
 
     def test_split_view_dividers_support_pointer_keyboard_and_values(self) -> None:
         for divider_id in ("paneResizer", "rightPaneResizer"):
@@ -158,7 +232,8 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("<h2>摘要</h2>", body)
         self.assertIn("<h2>亮点</h2>", self.js)
         self.assertIn("<h2>思考</h2>", self.js)
-        self.assertIn("<h2>视频章节总结</h2>", self.js)
+        self.assertIn("视频章节总结", self.js)
+        self.assertIn("页面结构", self.js)
         self.assertIn("<h2>专业术语</h2>", self.js)
         self.assertIn("if (terms.length < 3) return", self.js)
         self.assertNotIn('"一句话"', profile_contract.group("body"))
@@ -437,6 +512,7 @@ class WebUiContractTests(unittest.TestCase):
                 "vs.moduleWidths",
                 "vs.activeResultTab",
                 "vs.activeInsightTab",
+                "vs.sidebarCollapsed",
                 "vs.transcriptFollowMode",
                 "vs.playbackRate",
                 "vs.videoAspectRatio",
@@ -556,9 +632,19 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('/api/source/inspect', self.js)
         self.assertIn('/api/knowledge-sets', self.js)
         self.assertIn("pendingSeriesInspection", self.js)
+        self.assertIn('activeSourceType === "url" && inspection.isCollection', self.js)
+        self.assertIn('$("#taskTranscriptGroupSeconds").value = "30"', self.js)
         self.assertIn("seriesCreateSet", self.js)
         self.assertIn("function analyzeKnowledgeSetItem", self.js)
+        self.assertIn('set?.analysisProfile || "tutorial"', self.js)
+        self.assertIn('set?.processingProfile || "complete"', self.js)
+        self.assertIn('set?.transcriptGroupSeconds || 30', self.js)
         self.assertIn("function isBilibiliUrl", self.js)
+        self.assertIn('data-output-kind="series"', self.js)
+        self.assertIn("function selectOutputCollection", self.js)
+        self.assertIn("function renderCollectionRecords", self.js)
+        self.assertIn("formatKnowledgeSetItemMeta", self.js)
+        self.assertIn("analysisAt", self.js)
         self.assertNotIn("(set.items || []).slice(0, 6)", self.js)
 
     def test_bilibili_timestamp_seek_reloads_the_embedded_player(self) -> None:
@@ -567,6 +653,118 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("请在 B站播放器内点击播放", self.js)
         self.assertIn("this.element.src = url.toString()", self.js)
         self.assertIn("function openOriginal()", self.js)
+
+    def test_knowledge_inbox_is_integrated_into_the_resource_overview(self) -> None:
+        for element_id in (
+            "resourceOverviewPane",
+            "resourceOverviewInbox",
+            "inboxList",
+            "refreshInbox",
+            "inboxStateFilter",
+            "loadMoreInbox",
+            "overviewCountInbox",
+        ):
+            self.assertIn(f'id="{element_id}"', self.html)
+        self.assertIn('data-overview-tab="inbox"', self.html)
+        self.assertNotIn('id="inboxSidebarView"', self.html)
+        self.assertIn("function refreshInbox", self.js)
+        self.assertIn("function performIntakeAction", self.js)
+        self.assertIn("data-inbox-retry", self.js)
+        self.assertIn("重试加载", self.js)
+        self.assertIn('data-intake-action="start"', self.js)
+        self.assertIn('data-intake-action="retry"', self.js)
+        self.assertIn('data-intake-action="cancel"', self.js)
+        self.assertIn("data-open-intake-record", self.js)
+        self.assertIn('headers: { "Idempotency-Key":', self.js)
+        self.assertIn('item.state === "processing"', self.js)
+        self.assertIn("function scheduleKnowledgeSetPoll()", self.js)
+        self.assertIn("knowledgeSetPoller", self.js)
+        self.assertIn("const libraryChanged = await refreshKnowledgeSets();", self.js)
+        self.assertIn("if (libraryChanged) await refreshLibrary();", self.js)
+        self.assertIn('.inbox-card.state-processing', self.css)
+        for label in ("等待处理", "处理中", "需要处理", "已就绪", "处理失败", "重复来源", "已取消"):
+            self.assertIn(label, self.js)
+
+    def test_folder_set_drag_rules_keep_videos_fixed_and_reorder_siblings_only(self) -> None:
+        self.assertIn("folder-set-card[draggable='true']", self.js)
+        self.assertIn('draggable="false"', self.js)
+        self.assertIn('data-folder-set-id=', self.js)
+        self.assertIn('sourceSet.parentSetId !== targetSet.parentSetId', self.js)
+        self.assertIn("/reorder", self.js)
+
+    def test_resource_output_project_and_collapsed_rail_contracts_exist(self) -> None:
+        self.assertIn('id="outputCollectionList"', self.html)
+        self.assertIn('id="projectList"', self.html)
+        self.assertIn('id="sidebarRail"', self.html)
+        self.assertIn('id="sidebarFlyout"', self.html)
+        self.assertIn('data-rail-action="resource"', self.html)
+        self.assertIn('data-rail-panel="output"', self.html)
+        self.assertIn('data-rail-panel="projects"', self.html)
+        self.assertIn('state.libraryItems.filter((item) => !item.inCollection)', self.js)
+        self.assertIn('api("/api/projects"', self.js)
+        self.assertIn('data-record-menu', self.js)
+        self.assertIn('data-project-action="move"', self.js)
+        self.assertIn('data-project-action="create"', self.js)
+        self.assertIn('data-project-action="remove"', self.js)
+        self.assertIn('localStorage.setItem(SETTINGS.sidebarCollapsed', self.js)
+        self.assertIn('.app-shell.sidebar-hidden > .sidebar-rail { display: flex; }', self.css)
+        self.assertIn('.app-shell.sidebar-hidden > .sidebar-flyout:not([hidden]) { display: grid; }', self.css)
+
+    def test_global_search_replaces_header_action_and_keeps_local_filter_separate(self) -> None:
+        self.assertNotIn('id="focusSearch"', self.html)
+        self.assertNotIn('class="new-summary" id="newSummary"', self.html)
+        self.assertIn('class="new-summary sidebar-new-summary sidebar-only-expanded" id="newSummary"', self.html)
+        self.assertIn('id="openGlobalSearch"', self.html)
+        self.assertIn('id="globalSearchDialog"', self.html)
+        self.assertIn('id="globalSearchInput"', self.html)
+        self.assertIn('id="globalSearchDeep"', self.html)
+        self.assertIn('data-global-search-kind="all"', self.html)
+        self.assertIn('data-global-search-kind="collection"', self.html)
+        self.assertIn('data-global-search-kind="project"', self.html)
+        self.assertIn('data-rail-action="global-search"', self.html)
+        self.assertIn("function openGlobalSearch", self.js)
+        self.assertIn("function runGlobalSearch", self.js)
+        self.assertIn('api(`/api/search?', self.js)
+        self.assertIn('event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "k"', self.js)
+        self.assertIn('event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "k"', self.js)
+        self.assertIn(".sidebar-search-row", self.css)
+        self.assertIn(".rail-button.rail-new-summary", self.css)
+        self.assertIn(".global-search-body", self.css)
+        self.assertIn("@media (max-width: 640px)", self.css)
+
+    def test_resource_overview_routes_filters_and_preserves_detail_deep_links(self) -> None:
+        for element_id in (
+            "resourceOverviewPane",
+            "resourceOverviewRecords",
+            "resourceOverviewSearch",
+            "resourceSourceFilter",
+            "resourceSort",
+            "overviewDeleteMode",
+        ):
+            self.assertIn(f'id="{element_id}"', self.html)
+        for tab in ("all", "inbox", "processing", "completed"):
+            self.assertIn(f'data-overview-tab="{tab}"', self.html)
+        self.assertIn('history.pushState(null, "", "#/resources")', self.js)
+        self.assertIn('history.replaceState(null, "", "#/resources")', self.js)
+        self.assertIn('`#/knowledge/${encodeURIComponent(id)}`', self.js)
+        self.assertIn("function renderResourceOverview()", self.js)
+        self.assertIn("function independentResourceItems()", self.js)
+        self.assertIn("state.libraryItems.filter((item) => !item.inCollection)", self.js)
+        self.assertIn('renderRecordMenu(item.id, "overview")', self.js)
+        self.assertIn("resource-overview-active .workspace-grid > .workspace-module", self.css)
+
+    def test_bridge_object_errors_are_rendered_as_messages(self) -> None:
+        self.assertIn("data?.error?.message || data?.error", self.js)
+        self.assertNotIn("new Error(data?.error ||", self.js)
+
+    def test_web_page_records_hide_media_timestamps_and_show_page_copy(self) -> None:
+        self.assertIn('media.kind === "page"', self.js)
+        self.assertIn("打开原网页", self.js)
+        self.assertIn("页面正文", self.js)
+        self.assertIn("function isActivePage()", self.js)
+        self.assertIn('page ? "页面结构" : "视频章节总结"', self.js)
+        self.assertIn('isActivePage() ? `<span class="page-position">', self.js)
+        self.assertIn(".page-position", self.css)
 
     def test_raw_transcript_is_only_loaded_on_explicit_action(self) -> None:
         self.assertNotIn("transcript.raw.jsonl", self.html)

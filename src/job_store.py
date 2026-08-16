@@ -65,6 +65,9 @@ class Job:
     output_dir: str = ""
     error: str = ""
     error_code: str = ""
+    compute_profile: str = "responsive"
+    queue_reason: str = ""
+    active_resource: str = ""
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -153,6 +156,9 @@ class Job:
             output_dir=str(value.get("output_dir") or ""),
             error=str(value.get("error") or ""),
             error_code=str(value.get("error_code") or ""),
+            compute_profile=str(value.get("compute_profile") or "responsive"),
+            queue_reason=str(value.get("queue_reason") or ""),
+            active_resource=str(value.get("active_resource") or ""),
         )
 
 

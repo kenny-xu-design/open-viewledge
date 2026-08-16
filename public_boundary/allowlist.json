@@ -15,6 +15,38 @@
     {
       "source": "public_boundary/schemas/README.md",
       "destination": "schemas/README.md"
+    },
+    {
+      "source": "public_boundary/schemas/side_panel_v1.schema.json",
+      "destination": "schemas/side_panel_v1.schema.json"
+    },
+    {
+      "source": "public_boundary/client/manifest.json",
+      "destination": "client/manifest.json"
+    },
+    {
+      "source": "public_boundary/client/service_worker.js",
+      "destination": "client/service_worker.js"
+    },
+    {
+      "source": "public_boundary/client/bridge_client.js",
+      "destination": "client/bridge_client.js"
+    },
+    {
+      "source": "public_boundary/client/side_panel.html",
+      "destination": "client/side_panel.html"
+    },
+    {
+      "source": "public_boundary/client/side_panel.css",
+      "destination": "client/side_panel.css"
+    },
+    {
+      "source": "public_boundary/client/side_panel.js",
+      "destination": "client/side_panel.js"
+    },
+    {
+      "source": "public_boundary/client/README.md",
+      "destination": "client/README.md"
     }
   ]
 }

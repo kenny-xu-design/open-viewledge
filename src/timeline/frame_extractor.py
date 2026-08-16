@@ -13,6 +13,7 @@ def extract_frames(
     frames_dir: Path,
     *,
     ffmpeg_path: str | Path | None = None,
+    ffmpeg_threads: int = 1,
 ) -> tuple[list[TimelineEntry], list[str]]:
     errors: list[str] = []
     try:
@@ -24,7 +25,7 @@ def extract_frames(
     for entry in entries:
         frame = frames_dir / f"frame_{entry.index + 1:04d}_{int(entry.representative_time or 0):06d}.jpg"
         try:
-            run_command([ffmpeg, "-y", "-ss", str(entry.representative_time or 0), "-i", str(media_path), "-frames:v", "1", "-q:v", "3", str(frame)])
+            run_command([ffmpeg, "-y", "-threads", str(max(1, ffmpeg_threads)), "-ss", str(entry.representative_time or 0), "-i", str(media_path), "-frames:v", "1", "-q:v", "3", str(frame)])
             relative = str(Path("frames") / frame.name).replace("\\", "/") if frame.exists() else ""
             result.append(entry.model_copy(update={"frame_path": relative}))
         except Exception as exc:

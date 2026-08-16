@@ -721,6 +721,9 @@ class ProcessingManifest(BaseModel):
     status: str = "created"
     current_stage: str = ""
     privacy_mode: bool = False
+    content_kind: Literal["media_transcript", "web_page_capture"] = "media_transcript"
+    capture_scope: Literal["", "selection", "visible"] = ""
+    content_upload_allowed: bool = False
     sample_seconds: int | None = None
     transcript_group_seconds: int = Field(default=30, ge=15, le=300)
     created_at: str = Field(default_factory=utc_now)

@@ -44,6 +44,9 @@ class AppConfig(BaseModel):
     asr_gpu_release_grace_seconds: float = Field(default=1, ge=0, le=30)
     asr_resource_wait_timeout_seconds: float = Field(default=300, gt=0, le=3600)
     asr_max_concurrency: int = Field(default=1, ge=1, le=1)
+    compute_profile: str = "responsive"
+    cpu_thread_limit: int = Field(default=0, ge=0, le=64)
+    ffmpeg_threads: int = Field(default=1, ge=1, le=16)
     ffmpeg_timeout_seconds: float = Field(default=600, gt=0, le=7200)
     cloud_asr_provider: str = "groq"
     cloud_asr_model: str = "whisper-large-v3-turbo"
@@ -89,6 +92,14 @@ class AppConfig(BaseModel):
             raise ValueError("asr_task 必须是 transcribe 或 translate。")
         return normalized
 
+    @field_validator("compute_profile")
+    @classmethod
+    def validate_compute_profile(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"responsive", "balanced", "performance"}:
+            raise ValueError("compute_profile 必须是 responsive、balanced 或 performance。")
+        return normalized
+
 
 def load_config(config_path: Path) -> AppConfig:
     data = load_json(config_path) if config_path.exists() else {}
@@ -120,6 +131,9 @@ def load_config(config_path: Path) -> AppConfig:
         "asr_gpu_release_grace_seconds": os.getenv("ASR_GPU_RELEASE_GRACE_SECONDS", ""),
         "asr_resource_wait_timeout_seconds": os.getenv("ASR_RESOURCE_WAIT_TIMEOUT_SECONDS", ""),
         "asr_max_concurrency": os.getenv("ASR_MAX_CONCURRENCY", ""),
+        "compute_profile": os.getenv("COMPUTE_PROFILE", ""),
+        "cpu_thread_limit": os.getenv("CPU_THREAD_LIMIT", ""),
+        "ffmpeg_threads": os.getenv("FFMPEG_THREADS", ""),
         "ffmpeg_timeout_seconds": os.getenv("FFMPEG_TIMEOUT_SECONDS", ""),
         "cloud_asr_provider": os.getenv("CLOUD_ASR_PROVIDER", ""),
         "cloud_asr_model": os.getenv("CLOUD_ASR_MODEL", ""),

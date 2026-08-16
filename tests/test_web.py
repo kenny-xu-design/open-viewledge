@@ -5,6 +5,8 @@ import json
 import os
 import stat
 import threading
+import time
+from types import SimpleNamespace
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from tempfile import TemporaryDirectory
@@ -15,7 +17,10 @@ from urllib.request import Request, urlopen
 
 from src import __version__
 from src.intake_store import IntakeStore
+from src.clip_store import ClipStore
+from src.folder_sets import FolderSetStore
 from src.knowledge_sets import KnowledgeSetStore
+from src.project_groups import ProjectGroupStore
 from src.knowledge_identity import KnowledgeRequestDimensions, build_input_knowledge_identity
 from src.job_store import Job
 from src.utils import UserFacingError
@@ -31,11 +36,13 @@ from src.web import (
     build_cli_command,
     delete_knowledge_packages,
     list_library_items,
+    library_items_with_membership,
     load_knowledge_package,
     load_transcript_groups,
     job_to_dict,
     resolve_library_file,
     runtime_status_payload,
+    search_local_knowledge,
     start_job,
     _timestamp_seconds,
     _external_player_descriptor,
@@ -701,6 +708,32 @@ class WebCommandTests(unittest.TestCase):
             self.assertNotIn(forbidden, serialized)
 
 
+    def test_scheduler_runs_fifo_with_a_persisted_queue_state(self) -> None:
+        import src.web as web_module
+
+        first = Job(id="first", command=[], created_at=1)
+        second = Job(id="second", command=[], created_at=2)
+        completed: list[str] = []
+
+        def fake_run(job: Job) -> None:
+            completed.append(job.id)
+            job.status = "success"
+
+        with (
+            patch.object(web_module, "JOBS", {first.id: first, second.id: second}),
+            patch.object(web_module, "_persist_job"),
+            patch.object(web_module, "_run_job", side_effect=fake_run),
+        ):
+            t1 = threading.Thread(target=web_module._run_scheduled_job, args=(first,))
+            t2 = threading.Thread(target=web_module._run_scheduled_job, args=(second,))
+            t1.start()
+            t2.start()
+            t1.join(2)
+            t2.join(2)
+
+        self.assertEqual(completed, ["first", "second"])
+
+
 class WebLibraryTests(unittest.TestCase):
     def _write_package(self, root: Path, name: str = "demo") -> Path:
         package = root / name
@@ -731,6 +764,64 @@ class WebLibraryTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in items], ["demo"])
         self.assertEqual(items[0]["status"], "partial")
         self.assertEqual(items[0]["processingProfile"], "complete")
+
+    def test_local_search_keeps_transcript_out_of_fast_results_until_deep_enabled(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            (package / "analysis.json").write_text(
+                json.dumps({"summary": "摘要中包含快速检索词", "tags": ["标签词"]}),
+                encoding="utf-8",
+            )
+            (package / "transcript.grouped.md").write_text(
+                "# 分组字幕\n\n只有深度字幕词会出现在正文中。\n",
+                encoding="utf-8",
+            )
+            with patch("src.web.OUTPUT_ROOT", root):
+                library = list_library_items()
+            with (
+                patch("src.web.OUTPUT_ROOT", root),
+                patch("src.web.library_items_with_membership", return_value=library),
+                patch("src.web.KNOWLEDGE_SET_STORE", Mock(list=Mock(return_value=[]))),
+                patch("src.web.FOLDER_SET_STORE", Mock(list=Mock(return_value=[]))),
+                patch("src.web.PROJECT_GROUP_STORE", Mock(list=Mock(return_value=[]))),
+            ):
+                fast = search_local_knowledge("深度字幕词")
+                deep = search_local_knowledge("深度字幕词", deep=True)
+                summary = search_local_knowledge("快速检索词")
+
+        self.assertEqual(fast["items"], [])
+        self.assertEqual(deep["items"][0]["matchField"], "字幕正文")
+        self.assertEqual(summary["items"][0]["matchField"], "knowledge")
+        self.assertNotIn("C:/private", json.dumps(deep, ensure_ascii=False))
+
+    def test_local_search_rejects_invalid_query_shape(self) -> None:
+        with self.assertRaises(ValueError):
+            search_local_knowledge("x", kind="unsupported")
+        with self.assertRaises(ValueError):
+            search_local_knowledge("x", limit=51)
+        with self.assertRaises(ValueError):
+            search_local_knowledge("x" * 201)
+
+    def test_library_item_exposes_video_duration_and_analysis_date(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            (package / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "completed_at": "2026-08-08T02:03:04+00:00",
+                        "source": {"title": "真实记录", "platform": "local", "duration": 125.5},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("src.web.OUTPUT_ROOT", root):
+                item = list_library_items()[0]
+
+        self.assertEqual(item["duration"], 125.5)
+        self.assertEqual(item["analysisAt"], "2026-08-08T02:03:04+00:00")
 
     def test_library_item_exposes_completed_processing_duration(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -870,6 +961,14 @@ class WebLibraryTests(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["title"], "开场")
         self.assertEqual(groups[0]["text"], "这是分组字幕。")
+
+    def test_grouped_transcript_marks_video_content_kind(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_package(root)
+            with patch("src.web.OUTPUT_ROOT", root):
+                groups = load_transcript_groups("demo")
+        self.assertEqual(groups[0]["contentKind"], "video_subtitle")
 
     def test_library_file_rejects_path_traversal_and_non_whitelisted_files(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -1045,6 +1144,35 @@ class WebLibraryTests(unittest.TestCase):
         self.assertEqual(detail["analysis"]["status"], "failed")
         self.assertEqual(items[0]["status"], "invalid")
 
+    def test_library_membership_marks_collection_items_and_project(self) -> None:
+        library = [
+            {"id": "series-item", "title": "系列视频"},
+            {"id": "folder-item", "title": "文件夹视频"},
+            {"id": "independent", "title": "独立记录"},
+        ]
+        knowledge_store = Mock()
+        knowledge_store.list.return_value = [SimpleNamespace(
+            set_id="series-1", title="系列一", items=[SimpleNamespace(knowledge_id="series-item")]
+        )]
+        folder_store = Mock()
+        folder_store.list.return_value = [SimpleNamespace(
+            set_id="folder-1", title="文件夹一", items=[SimpleNamespace(knowledge_id="folder-item")]
+        )]
+        project_store = Mock()
+        project_store.memberships.return_value = {"series-item": "project-1", "independent": "project-1"}
+        with patch("src.web.list_library_items", return_value=library), patch(
+            "src.web.KNOWLEDGE_SET_STORE", knowledge_store
+        ), patch("src.web.FOLDER_SET_STORE", folder_store), patch(
+            "src.web.PROJECT_GROUP_STORE", project_store
+        ):
+            items = library_items_with_membership()
+        by_id = {item["id"]: item for item in items}
+        self.assertTrue(by_id["series-item"]["inCollection"])
+        self.assertEqual(by_id["series-item"]["collectionMemberships"][0]["kind"], "series")
+        self.assertTrue(by_id["folder-item"]["inCollection"])
+        self.assertFalse(by_id["independent"]["inCollection"])
+        self.assertEqual(by_id["independent"]["projectId"], "project-1")
+
 
 class QuietVideoSummaryHandler(VideoSummaryHandler):
     def log_message(self, format: str, *args: object) -> None:
@@ -1069,6 +1197,250 @@ class WebApiTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as context:
             urlopen(f"{self.base_url}/api/library/definitely-missing", timeout=3)
         self.assertEqual(context.exception.code, 404)
+
+    def test_local_search_endpoint_validates_query_and_returns_private_shape(self) -> None:
+        payload = {
+            "query": "教程",
+            "kind": "all",
+            "deep": False,
+            "items": [{"kind": "knowledge", "id": "k1", "title": "教程", "snippet": "摘要"}],
+            "truncated": False,
+        }
+        with patch("src.web.search_local_knowledge", return_value=payload) as search:
+            with urlopen(f"{self.base_url}/api/search?q=%E6%95%99%E7%A8%8B", timeout=3) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(body["items"][0]["id"], "k1")
+        search.assert_called_once_with("教程", kind="all", deep=False, limit=50)
+
+        with self.assertRaises(HTTPError) as context:
+            urlopen(f"{self.base_url}/api/search?kind=unsupported", timeout=3)
+        self.assertEqual(context.exception.code, 400)
+
+    def test_project_crud_and_membership_endpoints_do_not_delete_knowledge(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = root / "knowledge-demo"
+            package.mkdir()
+            marker = package / "manifest.json"
+            marker.write_text('{"knowledge_id":"knowledge-demo"}', encoding="utf-8")
+            before = marker.read_bytes()
+            store = ProjectGroupStore(root / "projects" / "registry.json")
+            library = [{"id": "knowledge-demo", "title": "示例记录"}]
+            with patch("src.web.PROJECT_GROUP_STORE", store), patch(
+                "src.web.list_library_items", return_value=library
+            ), patch("src.web._available_knowledge_ids", return_value={"knowledge-demo"}), patch(
+                "src.web.resolve_library_dir", return_value=package
+            ):
+                create = Request(
+                    f"{self.base_url}/api/projects",
+                    data=json.dumps({"title": "设计项目"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "Idempotency-Key": "project-create-1"},
+                    method="POST",
+                )
+                with urlopen(create, timeout=3) as response:
+                    created = json.loads(response.read().decode("utf-8"))
+                project_id = created["project"]["projectId"]
+
+                move = Request(
+                    f"{self.base_url}/api/projects/{project_id}/records/knowledge-demo",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json"},
+                    method="PUT",
+                )
+                with urlopen(move, timeout=3) as response:
+                    moved = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(moved["project"]["knowledgeIds"], ["knowledge-demo"])
+
+                rename = Request(
+                    f"{self.base_url}/api/projects/{project_id}",
+                    data=json.dumps({"title": "更新名称"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="PATCH",
+                )
+                with urlopen(rename, timeout=3) as response:
+                    renamed = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(renamed["project"]["title"], "更新名称")
+
+                with urlopen(f"{self.base_url}/api/projects", timeout=3) as response:
+                    projects = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(projects["projects"][0]["itemCount"], 1)
+
+                delete = Request(f"{self.base_url}/api/projects/{project_id}", method="DELETE")
+                with urlopen(delete, timeout=3) as response:
+                    deleted = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(deleted["unlinkedCount"], 1)
+            self.assertTrue(package.is_dir())
+            self.assertEqual(marker.read_bytes(), before)
+
+    def test_bridge_transcript_read_returns_sanitized_side_panel_payload(self) -> None:
+        knowledge = {
+            "manifest": {
+                "source": {
+                    "source_type": "online_video",
+                    "title": "Demo",
+                    "source_url": "https://example.com/video",
+                    "local_path": "C:/private/video.mp4",
+                }
+            }
+        }
+        groups = [{"index": 0, "start": 1.5, "end": 4.0, "title": "片段 1", "text": "字幕正文", "sourceLink": "https://example.com/video"}]
+        with patch("src.web.load_knowledge_package", return_value=knowledge), patch("src.web.load_transcript_groups", return_value=groups):
+            with urlopen(f"{self.base_url}/v1/knowledge/demo/transcript", timeout=3) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(payload["schema_version"], "1.0")
+        self.assertEqual(payload["data"]["knowledge_id"], "demo")
+        self.assertEqual(payload["data"]["source"], {"kind": "video", "url": "https://example.com/video"})
+        self.assertEqual(payload["data"]["groups"], groups)
+        self.assertNotIn("local_path", json.dumps(payload, ensure_ascii=False))
+
+    def test_bridge_page_transcript_does_not_fabricate_media_timestamps(self) -> None:
+        knowledge = {
+            "manifest": {
+                "source": {
+                    "source_type": "web_page",
+                    "title": "Page",
+                    "canonical_url": "https://example.com/article",
+                }
+            }
+        }
+        with TemporaryDirectory() as temp_dir, patch("src.web.OUTPUT_ROOT", Path(temp_dir)), patch(
+            "src.web.load_knowledge_package", return_value=knowledge
+        ), patch("src.web.load_transcript_groups", return_value=[{
+            "index": 0,
+            "start": None,
+            "end": None,
+            "title": "Block 1",
+            "text": "Page text",
+            "contentKind": "web_page",
+            "position": 1,
+        }]):
+            with urlopen(f"{self.base_url}/v1/knowledge/page/transcript", timeout=3) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        group = payload["data"]["groups"][0]
+        self.assertIsNone(group["start"])
+        self.assertIsNone(group["end"])
+        self.assertEqual(group["contentKind"], "web_page")
+        self.assertEqual(group["position"], 1)
+
+    def test_bridge_source_url_resolves_to_sanitized_knowledge_matches(self) -> None:
+        library = [{"id": "demo", "updatedAt": 2}, {"id": "older", "updatedAt": 1}]
+
+        def package_for(knowledge_id: str) -> dict[str, object]:
+            return {
+                "title": knowledge_id,
+                "source": {
+                    "source_type": "online_video",
+                    "title": "Demo",
+                    "canonical_url": "https://example.com/video/?utm_source=test",
+                    "local_path": "C:/private/video.mp4",
+                },
+                "transcriptReady": True,
+                "analysisReady": knowledge_id == "demo",
+            }
+
+        with patch("src.web.list_library_items", return_value=library), patch("src.web.load_knowledge_package", side_effect=package_for):
+            with urlopen(
+                f"{self.base_url}/v1/knowledge/resolve?source_url=https%3A%2F%2Fexample.com%2Fvideo%3Futm_source%3Dclient",
+                timeout=3,
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(payload["data"]["source_url"], "https://example.com/video")
+        self.assertEqual([item["knowledge_id"] for item in payload["data"]["matches"]], ["demo", "older"])
+        self.assertEqual(payload["data"]["matches"][0]["source"], {"kind": "video", "url": "https://example.com/video"})
+        self.assertNotIn("local_path", json.dumps(payload, ensure_ascii=False))
+
+    def test_bridge_source_url_resolves_bilibili_default_url_to_p1(self) -> None:
+        library = [{"id": "part-one", "updatedAt": 2}]
+
+        def package_for(knowledge_id: str) -> dict[str, object]:
+            return {
+                "title": "Part one",
+                "source": {
+                    "source_type": "online_video",
+                    "title": "Part one",
+                    "canonical_url": "https://www.bilibili.com/video/BV1wx5y6NEDv?p=1",
+                },
+                "transcriptReady": True,
+                "analysisReady": True,
+            }
+
+        with patch("src.web.list_library_items", return_value=library), patch("src.web.load_knowledge_package", side_effect=package_for):
+            with urlopen(
+                f"{self.base_url}/v1/knowledge/resolve?source_url=https%3A%2F%2Fwww.bilibili.com%2Fvideo%2FBV1wx5y6NEDv%3Fspm_id_from%3D333",
+                timeout=3,
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        self.assertEqual([item["knowledge_id"] for item in payload["data"]["matches"]], ["part-one"])
+
+    def test_bridge_source_url_resolve_rejects_missing_or_unknown_urls(self) -> None:
+        with self.assertRaises(HTTPError) as missing:
+            urlopen(f"{self.base_url}/v1/knowledge/resolve", timeout=3)
+        self.assertEqual(missing.exception.code, 400)
+        with patch("src.web.list_library_items", return_value=[]):
+            with self.assertRaises(HTTPError) as unknown:
+                urlopen(f"{self.base_url}/v1/knowledge/resolve?source_url=https%3A%2F%2Fexample.com%2Fmissing", timeout=3)
+        self.assertEqual(unknown.exception.code, 404)
+
+    def test_bridge_clip_create_and_replay(self) -> None:
+        body = {
+            "schema_version": "1.0",
+            "client_request_id": "client-clip",
+            "kind": "highlight",
+            "target": {"knowledge_id": "demo"},
+            "source": {"url": "https://example.com/video", "title": "Demo"},
+            "selection": {"text": "用户选择的字幕", "media_start_seconds": 2, "media_end_seconds": 5},
+            "note": "稍后复习",
+        }
+        with TemporaryDirectory() as temp_dir, patch("src.web.CLIP_STORE", ClipStore(Path(temp_dir) / "clips.json")):
+            request = Request(f"{self.base_url}/v1/clips", data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json", "Idempotency-Key": "clip-web-key"}, method="POST")
+            with urlopen(request, timeout=3) as response:
+                first = json.loads(response.read().decode("utf-8"))
+            with urlopen(request, timeout=3) as response:
+                second = json.loads(response.read().decode("utf-8"))
+            with urlopen(f"{self.base_url}/v1/clips?knowledge_id=demo", timeout=3) as response:
+                listing = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(first["data"]["clip_id"], second["data"]["clip_id"])
+        self.assertEqual(first["data"]["kind"], "highlight")
+        self.assertFalse(first["data"]["idempotency_replayed"])
+        self.assertTrue(second["data"]["idempotency_replayed"])
+        self.assertTrue(any(item["clip_id"] == first["data"]["clip_id"] for item in listing["data"]["clips"]))
+
+    def test_bridge_cors_requires_explicit_extension_origin(self) -> None:
+        origin = "chrome-extension://abcdefghijklmnop"
+        with patch.dict("os.environ", {"VIEWLEDGE_BRIDGE_EXTENSION_ORIGIN": origin}, clear=False):
+            request = Request(f"{self.base_url}/v1/inbox", headers={"Origin": origin})
+            with urlopen(request, timeout=3) as response:
+                self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), origin)
+                self.assertEqual(response.headers.get("Vary"), "Origin")
+
+            options = Request(
+                f"{self.base_url}/v1/clips",
+                headers={"Origin": origin, "Access-Control-Request-Method": "POST", "Content-Length": "0"},
+                method="OPTIONS",
+            )
+            with urlopen(options, timeout=3) as response:
+                self.assertEqual(response.status, 204)
+                self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), origin)
+                self.assertEqual(response.headers.get("Access-Control-Allow-Methods"), "GET, POST, OPTIONS")
+                self.assertIn("Idempotency-Key", response.headers.get("Access-Control-Allow-Headers", ""))
+
+        request = Request(f"{self.base_url}/v1/inbox", headers={"Origin": "https://evil.example"})
+        with urlopen(request, timeout=3) as response:
+            self.assertIsNone(response.headers.get("Access-Control-Allow-Origin"))
+
+        blocked_options = Request(
+            f"{self.base_url}/v1/clips",
+            headers={
+                "Origin": "chrome-extension://other",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type,idempotency-key",
+                "Content-Length": "0",
+            },
+            method="OPTIONS",
+        )
+        with urlopen(blocked_options, timeout=3) as response:
+            self.assertEqual(response.status, 204)
+            self.assertIsNone(response.headers.get("Access-Control-Allow-Origin"))
 
     def test_web_ui_assets_require_cache_revalidation(self) -> None:
         with urlopen(f"{self.base_url}/", timeout=3) as response:
@@ -1294,6 +1666,57 @@ class WebApiTests(unittest.TestCase):
             self.assertTrue(replayed["data"]["idempotency_replayed"])
             self.assertEqual(start.call_count, 1)
 
+    def test_page_intake_runs_local_only_to_ready_knowledge_record(self) -> None:
+        intake_payload = {
+            "schema_version": "1.0",
+            "client_request_id": "browser-page-1",
+            "source": {"kind": "page", "url": "https://example.com/guide?utm_source=test"},
+            "capture": {
+                "title": "Captured Guide",
+                "selected_text": "第一部分说明。\n\n第二部分说明。",
+                "visible_text": "不应保留的更大页面快照",
+            },
+            "preferences": {"analysis_profile": "summary", "processing_profile": "fast", "output_languages": ["source"]},
+            "consent": {"user_initiated": True, "content_upload_allowed": False},
+        }
+        with TemporaryDirectory() as temp_dir, patch(
+            "src.web.INTAKE_STORE",
+            IntakeStore(Path(temp_dir) / "intakes.json"),
+        ), patch("src.web.OUTPUT_ROOT", Path(temp_dir) / "knowledge"):
+            create_request = Request(
+                f"{self.base_url}/v1/intakes",
+                data=json.dumps(intake_payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Idempotency-Key": "page-create-1"},
+                method="POST",
+            )
+            with urlopen(create_request, timeout=3) as response:
+                intake_id = json.loads(response.read().decode("utf-8"))["data"]["intake_id"]
+
+            start_request = Request(
+                f"{self.base_url}/v1/intakes/{intake_id}/actions",
+                data=b'{"action":"start"}',
+                headers={"Content-Type": "application/json", "Idempotency-Key": "page-start-1"},
+                method="POST",
+            )
+            with urlopen(start_request, timeout=3) as response:
+                started = json.loads(response.read().decode("utf-8"))
+            self.assertIn(started["data"]["state"], {"processing", "ready"})
+
+            detail = started
+            for _ in range(40):
+                with urlopen(f"{self.base_url}/v1/intakes/{intake_id}", timeout=3) as response:
+                    detail = json.loads(response.read().decode("utf-8"))
+                if detail["data"]["state"] != "processing":
+                    break
+                time.sleep(0.025)
+
+            self.assertEqual(detail["data"]["state"], "ready")
+            self.assertNotIn("第一部分说明", json.dumps(detail, ensure_ascii=False))
+            with urlopen(f"{self.base_url}/api/library", timeout=3) as response:
+                library = json.loads(response.read().decode("utf-8"))
+            page_item = next(item for item in library["items"] if item["id"] == detail["data"]["knowledge_id"])
+            self.assertEqual(page_item["sourceType"], "web_page")
+
     def test_bridge_intake_action_failure_enters_attention_and_retry_can_recover(self) -> None:
         intake_payload = {
             "schema_version": "1.0",
@@ -1425,7 +1848,7 @@ class WebApiTests(unittest.TestCase):
 
             create_request = Request(
                 f"{self.base_url}/api/knowledge-sets",
-                data=json.dumps({"inspection": inspection}).encode("utf-8"),
+                data=json.dumps({"inspection": inspection, "analysisProfile": "close-reading", "processingProfile": "fast", "transcriptGroupSeconds": 60}).encode("utf-8"),
                 headers={"Content-Type": "application/json", "Idempotency-Key": "set-create-1"},
                 method="POST",
             )
@@ -1434,10 +1857,13 @@ class WebApiTests(unittest.TestCase):
             set_id = created["set"]["setId"]
             item_id = created["set"]["items"][0]["itemId"]
             self.assertEqual(created["set"]["itemCount"], 2)
+            self.assertEqual(created["set"]["analysisProfile"], "close-reading")
+            self.assertEqual(created["set"]["processingProfile"], "fast")
+            self.assertEqual(created["set"]["transcriptGroupSeconds"], 60)
 
             analyze_request = Request(
                 f"{self.base_url}/api/knowledge-sets/{set_id}/items/{item_id}/analyze",
-                data=b'{"mode":"tutorial","processingProfile":"complete"}',
+                data=b"{}",
                 headers={"Content-Type": "application/json", "Idempotency-Key": "set-item-1"},
                 method="POST",
             )
@@ -1445,10 +1871,152 @@ class WebApiTests(unittest.TestCase):
                 analyzed = json.loads(response.read().decode("utf-8"))
             self.assertEqual(analyzed["set"]["items"][0]["state"], "processing")
             self.assertEqual(start.call_args.args[0]["source"], inspection["items"][0]["sourceUrl"])
+            self.assertEqual(start.call_args.args[0]["mode"], "close-reading")
+            self.assertEqual(start.call_args.args[0]["processingProfile"], "fast")
+            self.assertEqual(start.call_args.args[0]["transcriptGroupSeconds"], 60)
+
+            with urlopen(analyze_request, timeout=3) as response:
+                replayed = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(replayed["idempotencyReplayed"])
+            self.assertEqual(start.call_count, 1)
+
+            conflict_request = Request(
+                f"{self.base_url}/api/knowledge-sets/{set_id}/items/{item_id}/analyze",
+                data=b'{"mode":"tutorial","processingProfile":"complete"}',
+                headers={"Content-Type": "application/json", "Idempotency-Key": "set-item-2"},
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as conflict:
+                urlopen(conflict_request, timeout=3)
+            self.assertEqual(conflict.exception.code, HTTPStatus.BAD_REQUEST)
+            self.assertEqual(start.call_count, 1)
 
             with urlopen(f"{self.base_url}/api/knowledge-sets/{set_id}", timeout=3) as response:
                 detail = json.loads(response.read().decode("utf-8"))
             self.assertEqual(detail["set"]["items"][0]["itemId"], item_id)
+
+    def test_folder_set_endpoint_accepts_quoted_windows_style_path(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "lesson.ts").write_bytes(b"video")
+            quoted = f'"{root}"'
+            with patch("src.web.FOLDER_SET_STORE", FolderSetStore(root / "state.json")):
+                request = Request(
+                    f"{self.base_url}/api/folder-sets",
+                    data=json.dumps({"source": quoted, "title": "Course"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "Idempotency-Key": "quoted-folder-1"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=3) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["set"]["itemCount"], 1)
+            self.assertNotIn(str(root), json.dumps(payload, ensure_ascii=False))
+
+    def test_source_inspect_accepts_single_quoted_folder_path(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "lesson.ts").write_bytes(b"video")
+            quoted = f"'{root}'"
+            with patch("src.web.FOLDER_SET_STORE", FolderSetStore(root / "state.json")):
+                request = Request(
+                    f"{self.base_url}/api/source/inspect",
+                    data=json.dumps({"sourceType": "file", "source": quoted}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=3) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["kind"], "local_folder")
+            self.assertEqual(payload["videoCount"], 1)
+            self.assertNotIn(str(root), json.dumps(payload, ensure_ascii=False))
+
+    def test_source_inspect_single_file_does_not_return_absolute_path(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "lesson.ts"
+            video.write_bytes(b"video")
+            request = Request(
+                f"{self.base_url}/api/source/inspect",
+                data=json.dumps({"sourceType": "file", "source": str(video)}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=3) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["kind"], "single")
+            self.assertEqual(payload["sourceType"], "file")
+            self.assertNotIn("source", payload)
+            self.assertNotIn(str(root), json.dumps(payload, ensure_ascii=False))
+
+    def test_folder_set_batch_analyze_recurses_into_child_sets(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "root.ts").write_bytes(b"root")
+            (root / "child").mkdir()
+            (root / "child" / "child.ts").write_bytes(b"child")
+            store = FolderSetStore(root / "state.json")
+            root_set, _ = store.create(str(root), "Course", "recursive-batch")
+            jobs = [
+                Job(id="folder-root-job", command=[], status="queued", knowledge_id="k-root"),
+                Job(id="folder-child-job", command=[], status="queued", knowledge_id="k-child"),
+            ]
+            with patch("src.web.FOLDER_SET_STORE", store), patch("src.web.start_job", side_effect=jobs) as start:
+                request = Request(
+                    f"{self.base_url}/api/folder-sets/{root_set.set_id}/analyze-all",
+                    data=b'{"mode":"tutorial","processingProfile":"complete"}',
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=3) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["started"], 2)
+            self.assertEqual(start.call_count, 2)
+            child = store.get(root_set.child_set_ids[0])
+            self.assertEqual(root_set.items[0].state, "processing")
+            self.assertEqual(child.items[0].state, "processing")
+
+    def test_folder_set_batch_analyze_uses_persisted_settings(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "lesson.ts").write_bytes(b"video")
+            store = FolderSetStore(root / "state.json")
+            root_set, _ = store.create(str(root), "Course", "settings-batch", analysis_profile="close-reading", processing_profile="fast", transcript_group_seconds=60)
+            captured = []
+            job = Job(id="folder-settings-job", command=[], status="queued", knowledge_id="k-settings")
+            def start(payload):
+                captured.append(payload)
+                return job
+            with patch("src.web.FOLDER_SET_STORE", store), patch("src.web.start_job", side_effect=start):
+                request = Request(
+                    f"{self.base_url}/api/folder-sets/{root_set.set_id}/analyze-all",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=3) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["started"], 1)
+            self.assertEqual(captured[0]["mode"], "close-reading")
+            self.assertEqual(captured[0]["processingProfile"], "fast")
+            self.assertEqual(captured[0]["transcriptGroupSeconds"], 60)
+
+    def test_folder_set_item_start_failure_is_recoverable(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "lesson.ts").write_bytes(b"video")
+            store = FolderSetStore(root / "state.json")
+            root_set, _ = store.create(str(root), "Course", "failure-recovery")
+            with patch("src.web.FOLDER_SET_STORE", store), patch("src.web.start_job", side_effect=ValueError("private provider detail")):
+                request = Request(
+                    f"{self.base_url}/api/folder-sets/{root_set.set_id}/items/{root_set.items[0].item_id}/analyze",
+                    data=b'{"mode":"tutorial","processingProfile":"complete"}',
+                    headers={"Content-Type": "application/json", "Idempotency-Key": "folder-failure-1"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=3) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["set"]["items"][0]["state"], "failed")
+            self.assertNotIn("private provider detail", json.dumps(payload, ensure_ascii=False))
 
     @patch("src.web.load_knowledge_package")
     @patch("src.web.reanalyze_knowledge_package")

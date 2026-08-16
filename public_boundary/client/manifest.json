@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Viewledge Side Panel",
+  "version": "0.1.0",
+  "minimum_chrome_version": "114",
+  "description": "Read matched subtitles and save user-triggered clips.",
+  "permissions": ["activeTab", "tabs", "sidePanel", "storage"],
+  "host_permissions": ["http://127.0.0.1:5188/*", "http://localhost:5188/*", "http://[::1]:5188/*"],
+  "action": { "default_title": "Open Viewledge Side Panel" },
+  "background": { "service_worker": "service_worker.js", "type": "module" },
+  "side_panel": { "default_path": "side_panel.html" }
+}

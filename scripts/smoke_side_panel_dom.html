@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Viewledge Side Panel DOM smoke</title>
+    <style>
+      #smoke-result { position: sticky; top: 0; z-index: 20; margin: 0; padding: 12px; background: #111827; color: #f9fafb; white-space: pre-wrap; }
+      #smoke-result.pass { background: #166534; }
+      #smoke-result.fail { background: #991b1b; }
+    </style>
+  </head>
+  <body>
+    <pre id="smoke-result">RUNNING</pre>
+    <script type="module">
+      const nativeFetch = globalThis.fetch.bind(globalThis);
+      const markup = await nativeFetch("../public_boundary/client/side_panel.html").then((response) => response.text());
+      const parsed = new DOMParser().parseFromString(markup, "text/html");
+      const result = document.querySelector("#smoke-result");
+      document.body.append(...parsed.body.children);
+      const stylesheet = document.createElement("link");
+      stylesheet.rel = "stylesheet";
+      stylesheet.href = "../public_boundary/client/side_panel.css";
+      document.head.append(stylesheet);
+
+      const updatedListeners = [];
+      const stored = new Map();
+      const updates = [];
+      const clipKeys = [];
+      let clipAttempts = 0;
+      let activeTab = { id: 7, url: "https://example.com/video-one#private-state" };
+
+      globalThis.chrome = {
+        storage: {
+          local: {
+            async get(defaults) { return { ...defaults, ...Object.fromEntries(stored) }; },
+            async set(values) { for (const [key, value] of Object.entries(values)) stored.set(key, value); },
+          },
+        },
+        tabs: {
+          async query() { return [activeTab]; },
+          async update(change) { updates.push(change); activeTab = { ...activeTab, ...change }; return activeTab; },
+          onActivated: { addListener() {} },
+          onUpdated: { addListener(listener) { updatedListeners.push(listener); } },
+        },
+      };
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { async writeText(text) { stored.set("clipboard", String(text)); } } });
+
+      function envelope(data, status = 200) {
+        return new Response(JSON.stringify({ schema_version: "1.0", request_id: "smoke", data }), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      globalThis.fetch = async (url, options = {}) => {
+        const requestUrl = new URL(String(url));
+        if (requestUrl.pathname === "/v1/knowledge/resolve") {
+          const sourceUrl = requestUrl.searchParams.get("source_url") || "";
+          const second = sourceUrl.includes("video-two");
+          return envelope({ source_url: sourceUrl, matches: [{ knowledge_id: second ? "demo-two" : "demo-one", title: second ? "Second lesson" : "First lesson" }] });
+        }
+        if (requestUrl.pathname.endsWith("/transcript")) {
+          const second = requestUrl.pathname.includes("demo-two");
+          return envelope({
+            knowledge_id: second ? "demo-two" : "demo-one",
+            title: second ? "Second lesson" : "First lesson",
+            source: { kind: "video", url: second ? "https://example.com/video-two" : "https://example.com/video-one" },
+            groups: second
+              ? [{ index: 0, position: 1, start: 42, end: 51, title: "Second", text: "Second lesson subtitle." }]
+              : [
+                  { index: 0, position: 1, start: 5, end: 12, title: "Intro", text: "First lesson introduction." },
+                  { index: 1, position: 2, start: 13, end: 21, title: "Detail", text: "Detailed subtitle group." },
+                ],
+          });
+        }
+        if (requestUrl.pathname === "/v1/clips") {
+          clipAttempts += 1;
+          clipKeys.push(new Headers(options.headers || {}).get("idempotency-key"));
+          if (clipAttempts === 1) throw new TypeError("simulated lost response");
+          return envelope({ clip_id: "clip-one", idempotency_replayed: true });
+        }
+        throw new Error(`Unexpected smoke request: ${requestUrl.pathname}`);
+      };
+
+      const waitFor = async (predicate, label, timeout = 3000) => {
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+          if (predicate()) return;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        throw new Error(`Timed out waiting for ${label}`);
+      };
+      const assert = (condition, label) => { if (!condition) throw new Error(label); };
+
+      try {
+        await import(`../public_boundary/client/side_panel.js?smoke=${Date.now()}`);
+        await waitFor(() => document.querySelector("#status")?.textContent.includes("Loaded 2"), "initial transcript");
+        assert(document.querySelector("#source-url").textContent === "https://example.com/video-one", "page fragment leaked into displayed lookup URL");
+
+        const search = document.querySelector("#search");
+        search.value = "detailed";
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+        assert(document.querySelectorAll("#groups .group").length === 1, "subtitle filtering did not update the rendered groups");
+        search.value = "";
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+
+        document.querySelector("#readingMode").click();
+        await waitFor(() => document.body.classList.contains("focus-reading"), "focus reading mode");
+        assert(stored.get("readingMode") === true, "focus reading preference was not persisted");
+
+        const firstClip = document.querySelector("#groups .group .clip");
+        firstClip.click();
+        await waitFor(() => document.querySelector("#status").textContent === "Clip failed.", "lost-response error");
+        firstClip.click();
+        await waitFor(() => document.querySelector("#status").textContent === "Clip saved.", "idempotent retry");
+        assert(clipKeys.length === 2 && clipKeys[0] && clipKeys[0] === clipKeys[1], "clip retry changed its idempotency key");
+
+        document.querySelector("#note").value = "note from first record";
+        search.value = "first";
+        activeTab = { id: 7, url: "https://example.com/video-two#another-private-state" };
+        for (const listener of updatedListeners) listener(7, { url: activeTab.url });
+        await waitFor(() => document.querySelector("#source-title").textContent === "Second lesson", "tab navigation reload");
+        assert(document.querySelector("#note").value === "", "note leaked across knowledge records");
+        assert(search.value === "", "search text leaked across knowledge records");
+        assert(document.querySelector("#source-url").textContent === "https://example.com/video-two", "second page fragment leaked into lookup URL");
+
+        document.querySelector("#groups .group .seek").click();
+        await waitFor(() => updates.length === 1, "timestamp seek");
+        assert(new URL(updates[0].url).searchParams.get("t") === "42", "seek did not add the expected timestamp");
+
+        activeTab = { id: 7, url: "chrome://extensions" };
+        for (const listener of updatedListeners) listener(7, { url: activeTab.url });
+        await waitFor(() => document.querySelector("#status").textContent === "The current page is not a readable HTTP(S) page.", "unsupported page error");
+        assert(!document.querySelector("#retry").classList.contains("hidden"), "retry action was not exposed after a sanitized error");
+
+        result.textContent = `PASS\nloaded groups, search, focus reading, idempotent clip retry, record-state reset, seek, and sanitized error verified\nclip attempts: ${clipAttempts}`;
+        result.className = "pass";
+        globalThis.__sidePanelSmoke = { passed: true, clipAttempts, clipKeys, updates, stored: Object.fromEntries(stored) };
+      } catch (error) {
+        result.textContent = `FAIL\n${error?.stack || error}`;
+        result.className = "fail";
+        globalThis.__sidePanelSmoke = { passed: false, error: String(error?.stack || error), clipAttempts, clipKeys, updates };
+      }
+    </script>
+  </body>
+</html>

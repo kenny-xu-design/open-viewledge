@@ -1,6 +1,6 @@
 # Viewledge API Contracts
 
-Last updated: 2026-08-07
+Last updated: 2026-08-14
 
 This document separates implemented local contracts from future public Bridge
 contracts. The v1.5.0 first slice implements the local loopback Bridge Intake
@@ -181,8 +181,27 @@ Endpoint groups:
 - local job create/list/detail;
 - analysis retry using existing package artifacts;
 - chat and user-note persistence;
+- local global search over knowledge records, collections, and projects;
 - Markdown/Obsidian-ready export preview and generation;
 - confirmed knowledge-package deletion.
+
+The private global search endpoint is:
+
+```text
+GET /api/search?q=<0-200 chars>&kind=all|knowledge|collection|project&deep=0|1&limit=1..50
+```
+
+It is a loopback-only, read-only endpoint used by the bundled Web UI. Empty
+`q` returns recently updated assets without scanning transcript or page-body
+content. Fast searches cover record metadata, analysis summary/highlights,
+tags, notes, collection titles, and project titles. `deep=1` additionally
+searches local subtitle or captured-page text and returns only a bounded
+sanitized snippet. Results use one shape with `kind`, opaque `id`, `title`,
+`subtitle`, `status`, `updatedAt`, `duration`, `itemCount`, `collectionKind`,
+`matchField`, `snippet`, `preview`, and `score`. The endpoint never returns
+absolute paths, credentials, prompts, raw Provider output, or complete
+transcripts. Search indexing is process-local and invalidated by package file
+modification signatures; it is not a public Bridge contract.
 
 The current private Web UI also uses these local-only Bilibili knowledge-set
 routes:
@@ -191,12 +210,20 @@ routes:
   metadata-only `yt-dlp` inspection. A multi-P or playlist result returns
   `kind`, `isCollection`, `totalCount`, and ordered `items`; it never downloads
   media.
+  The Web validation flow initializes tutorial/complete/30-second settings for
+  a detected collection before either knowledge-set creation or current-item
+  analysis.
 - `GET /api/knowledge-sets` and `GET /api/knowledge-sets/{set_id}` return the
   local ordered set registry. Each item carries its sequence, partition, title,
   source URL, and state (`queued`, `processing`, `ready`, `failed`, or
-  `needs_attention`).
+  `needs_attention`). The linked `/api/library` record exposes optional video
+  `duration` and analysis completion timestamp `analysisAt` for the UI metadata
+  column.
 - `POST /api/knowledge-sets` creates an ordered set from an inspection payload;
   it requires `Idempotency-Key` and does not start analysis.
+  It also accepts `analysisProfile`, `processingProfile`, and
+  `transcriptGroupSeconds`; these are returned in the set envelope and reused
+  for item analysis. Legacy sets default to tutorial/complete/30 seconds.
 - `POST /api/knowledge-sets/{set_id}/items/{item_id}/analyze` starts the
   existing local task pipeline for exactly one selected item and reconciles its
   state. Duplicate-task decisions remain private and are returned only as
@@ -336,13 +363,12 @@ Request:
 {"action": "start"}
 ```
 
-`start` is allowed for a queued video Intake. `retry` is allowed after a
+`start` is allowed for a queued video or page Intake. `retry` is allowed after a
 failed or needs-attention handoff. `cancel` is allowed before a task is
-started. The local core converts the Intake into the existing task request,
-stores only an opaque local association, and returns the sanitized Intake
-state. Repeating the same action key returns the same result without creating
-a second task. Page captures remain queued until a page ingestion adapter is
-implemented.
+started. The local core converts video Intake into the existing task request,
+and page Intake into the local page-ingestion path, stores only an opaque local
+association, and returns the sanitized Intake state. Repeating the same action
+key returns the same result without creating a second task.
 
 ### Read Intake and inbox
 
@@ -361,6 +387,59 @@ duplicate state, plus processing/ready/failed/needs-attention after an explicit
 action. Internal job IDs, subprocess logs, Provider/model routes, and local
 paths remain private.
 
+### Resolve a source URL to local knowledge records
+
+```text
+GET /v1/knowledge/resolve?source_url={url}
+```
+
+The loopback Bridge normalizes the supplied HTTP(S) URL using the same
+tracking-parameter and host/path rules as knowledge identity, then performs a
+local package-index lookup. It never fetches the URL. The response contains
+ordered matching opaque `knowledge_id` values, sanitized title/source data,
+and transcript/analysis availability flags. Local paths, Provider details,
+prompts, and process metadata are never returned. Multiple matches represent
+historical revisions of the same normalized source; the newest library item
+is first.
+
+### Read a knowledge-package transcript
+
+```text
+GET /v1/knowledge/{knowledge_id}/transcript
+```
+
+The loopback Bridge returns an opaque knowledge ID, sanitized source kind and
+URL, title, and ordered transcript/page groups. It never returns local package
+paths, Provider/model details, prompts, or raw process logs. This read contract
+is the server-side foundation for the future public Side Panel; the Side Panel
+itself remains in `viewledge-clipper` and is not part of this private core.
+
+For video records, group `start` and `end` are media seconds. For captured web
+pages, groups use `contentKind: "web_page"`, a one-based `position`, and
+`start`/`end: null`; the Bridge never fabricates `00:00` media timestamps for
+page text.
+
+The local server does not enable cross-origin Bridge access by default. For a
+locally installed, reviewed extension build, the operator may explicitly set
+`VIEWLEDGE_BRIDGE_EXTENSION_ORIGIN` to that exact `chrome-extension://...`
+origin. Only that exact origin receives CORS response headers; requests never
+include credentials. This opt-in is a local integration setting, not a public
+authentication or cloud authorization mechanism.
+
+The reviewed Side Panel client separately restricts its configurable Bridge
+base to the local loopback hosts `localhost`, `127.0.0.1`, and `[::1]`. A remote
+HTTP(S) base is rejected before any transcript, clip, or Intake request is sent.
+Active-page HTTP(S) URLs containing embedded username/password credentials are
+also rejected, and URL fragments are removed before local source resolution.
+The client also validates the `schema_version: "1.0"` envelope and requires
+exactly one of `data` or `error`; malformed or unsupported responses become a
+sanitized client error rather than being rendered as product data.
+
+The local Web process may be pointed at an operator-selected writable state
+directory with `VIEWLEDGE_STATE_ROOT`; when unset, the existing `.local`
+directory remains the default. The official Windows launchers set this to
+`%LOCALAPPDATA%\Viewledge\state` when no override is supplied.
+
 ### Create clip
 
 ```text
@@ -373,6 +452,7 @@ Request:
 {
   "schema_version": "1.0",
   "client_request_id": "client-generated-opaque-id",
+  "kind": "clip",
   "target": {
     "intake_id": "opaque-intake-id",
     "knowledge_id": null
@@ -393,9 +473,46 @@ Request:
 }
 ```
 
-The response returns an opaque `clip_id`, resolved target identifiers, and
+`kind` is optional and defaults to `clip`; `highlight` stores the same bounded
+selection and provenance as a visually distinguished user highlight. The
+response returns an opaque `clip_id`, resolved target identifiers, and
 provenance status. Every clip must preserve its original URL and, when
 available, media time range or page selection context.
+
+For page captures, `selection.media_start_seconds` and
+`selection.media_end_seconds` are `null`; page character positions are not
+represented as fake media timestamps. Video subtitle clips may carry the
+actual non-negative media range.
+
+The current local loopback implementation supports `POST /v1/clips`,
+`GET /v1/clips/{clip_id}`, and filtered `GET /v1/clips`. The private Web
+transcript reader uses the same create contract for its per-group “clip”
+action, sending bounded neighboring context and the group's media range when
+available. Creation is
+idempotent, requires user-provided selected text and an HTTP(S) source URL, and
+stores only the bounded clip payload in private local state. It never fetches
+the page or accepts cookies, headers, filesystem paths, or Provider details.
+The stored source URL uses the same tracking-parameter, host, path, and
+fragment normalization as the knowledge-identity contract.
+
+The private transcript reader also exposes a user-triggered receive action for a
+group or an in-group text selection. It creates a `page` Intake through
+`POST /v1/intakes`, carries only the selected text and HTTP(S) source URL,
+sets `content_upload_allowed=false`, and refreshes the local knowledge inbox.
+The reader does not auto-start that Intake; the user starts or cancels it from
+the inbox, preserving the explicit-consent and idempotency contract.
+
+The candidate MV3 Side Panel uses the same contract without private imports. It
+offers separate user actions for `kind=clip` and `kind=highlight`, keeps the
+most recent in-group selection in memory until submission, and assigns an
+independent idempotency key to each action. This client behavior is validated
+by private boundary tests and the allowlist staging verifier; it is not a
+public repository or a cloud-authenticated client.
+The page Intake action is limited to web-page groups; video subtitle groups
+remain subtitle/media records and expose timestamp seeking instead.
+The boundary client enforces this source-type check inside the action handler as
+well as hiding the button, so a future UI refactor cannot turn a video subtitle
+into a page capture by accident.
 
 ## Cloud account and Usage Ledger design
 
@@ -420,6 +537,35 @@ balances are derived from an append-only ledger, not accepted from clients.
 
 ## Privacy and logging
 
+## Local folder collections (v1.5.0 working slice)
+
+```text
+POST /api/source/inspect {"sourceType":"file","source":"<local path>"}
+POST /api/folder-sets
+GET  /api/folder-sets
+POST /api/folder-sets/{set_id}/items/{item_id}/analyze
+POST /api/folder-sets/{set_id}/analyze-all
+POST /api/folder-sets/{set_id}/children
+POST /api/folder-sets/{set_id}/parent
+POST /api/folder-sets/{set_id}/reorder
+```
+
+Folder-set creation accepts optional `analysisProfile`, `processingProfile`,
+and `transcriptGroupSeconds` fields. The path-validation UI supplies the
+current validated values (tutorial/complete/30 by default); the returned set
+envelope exposes the same fields, and item or subtree analysis reuses them when
+the action does not override a setting. Legacy state without these fields is
+read as tutorial/complete/30 for compatibility.
+
+Folder inspection accepts a local directory or single supported video file and recognizes common video
+extensions including `.ts`. The tree is limited to three levels (depth 0-2).
+Only child folder sets are reorderable; video/package items are explicitly
+non-draggable and retain their scan sequence. Public responses return relative
+names and opaque IDs only; single-file inspection also omits the absolute path;
+absolute paths remain private. `analyze-all` starts
+the existing file-processing jobs and inherits their provider, ASR fallback,
+duplicate, and idempotency contracts.
+
 - Capture only data required for a user-triggered action.
 - Do not include complete page content by default when selected text or a URL is
   sufficient.
@@ -439,3 +585,29 @@ balances are derived from an append-only ledger, not accepted from clients.
 4. Generate the public Schema/client allowlist output.
 5. Verify an older client against the new server.
 6. Increment the major version only for an intentionally incompatible change.
+
+## Local project grouping and collection membership
+
+The local Web sidebar uses these private, loopback-only endpoints:
+
+```text
+GET    /api/projects
+POST   /api/projects
+GET    /api/projects/{project_id}
+PATCH  /api/projects/{project_id}
+DELETE /api/projects/{project_id}
+PUT    /api/projects/{project_id}/records/{knowledge_id}
+DELETE /api/projects/{project_id}/records/{knowledge_id}
+```
+
+Project creation requires `Idempotency-Key`. A knowledge record belongs to at
+most one user project; `PUT` moves it from any previous project. Deleting a
+project or removing a member only deletes grouping metadata and never deletes
+or rewrites a knowledge package. Project state lives in
+`<output-root>/projects/registry.json`; stale member IDs are ignored in public
+responses without rewriting the registry during reads.
+
+`GET /api/library` additionally exposes `inCollection`,
+`collectionMemberships`, and `projectId`. Collection membership is derived
+from the existing video-series and local-folder registries. It does not change
+either registry or the knowledge-package format.

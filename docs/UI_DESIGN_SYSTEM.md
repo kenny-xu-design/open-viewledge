@@ -36,8 +36,8 @@ There is no Material, shadcn, Radix, Tailwind, Bootstrap, or other frontend comp
 | Layer | Current structure | Intended role |
 | --- | --- | --- |
 | App chrome | `workspace-header` | Unified Toolbar with navigation, current workspace title, and contextual actions |
-| Navigation | fixed `sidebar` drawer | Knowledge library Sidebar; persistent at wide desktop sizes, Sheet/drawer when space is limited |
-| Primary workspace | reorderable `result`, `media`, and `collaboration` modules | macOS split-view workbench |
+| Navigation | reserved desktop `sidebar`/rail; compact drawer | Context navigation that never sits beneath the desktop workbench |
+| Primary workspace | Resource Overview or reorderable `result`, `media`, and `collaboration` modules | Collection management followed by focused knowledge reading |
 | Result module | tabs, action toolbar, status, summary/transcript reader, footer | primary solid reading surface |
 | Media module | media toolbar, player, source information, highlights | media canvas plus timeline/detail content |
 | Collaboration module | chat over notes | right-side Inspector on desktop; a full pane on compact layouts |
@@ -60,7 +60,7 @@ There is no Material, shadcn, Radix, Tailwind, Bootstrap, or other frontend comp
 ### Structural and visual debt
 
 1. `app.css` contains two layout generations. Early rules define a Sidebar/center/result grid and `979px`/`620px` breakpoints; later rules redefine the shell as a header plus reorderable three-column workbench with `1179px`/`680px` breakpoints. The cascade, rather than a single architecture, decides the result.
-2. Sidebar behavior is conceptually split. Stale `sidebar-collapsed` rules describe a persistent compact Sidebar, while the later rules make the Sidebar an overlay drawer at every width.
+2. Sidebar behavior is now explicit by breakpoint: desktop reserves 264px or 56px, while compact widths use the fixed overlay drawer. Future layout work must preserve this contract instead of reintroducing overlapping desktop panes.
 3. The UI is light-only: both HTML and CSS declare `color-scheme: light`, with no dark semantic tokens or dark media query.
 4. Color is only partly tokenized. The stylesheet contains many one-off grays, indigos, status colors, and overlay alphas outside `:root`.
 5. `--surface` and `--text-muted` are referenced but not defined. Browsers therefore fall back to inherited or initial values in affected chat states.

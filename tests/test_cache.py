@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from src.cache import CACHE_ARTIFACT_TYPES, CacheStore, build_cache_key, source_cache_dimensions
+from src.cache import CACHE_ARTIFACT_TYPES, CacheStore, build_cache_key, default_cache_root, source_cache_dimensions
 from src.domain.models import SourceRecord
 
 
@@ -63,6 +65,12 @@ class CacheContractTests(unittest.TestCase):
                 store.get("transcript", "../escape")
             with self.assertRaises(ValueError):
                 build_cache_key("secret", source_id="demo")
+
+    def test_default_cache_follows_external_state_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            with patch.dict(os.environ, {"VIEWLEDGE_STATE_ROOT": temp}, clear=False), patch.dict(os.environ, {"VIEWLEDGE_CACHE_ROOT": ""}, clear=False):
+                self.assertEqual(default_cache_root(), Path(temp) / "cache" / "v1")
+                self.assertEqual(CacheStore().root, Path(temp) / "cache" / "v1")
 
 
 if __name__ == "__main__":

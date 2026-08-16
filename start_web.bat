@@ -8,6 +8,7 @@ if not defined VIEWLEDGE_UI_MODE set "VIEWLEDGE_UI_MODE=product"
 if not defined SHOW_TECH_DETAILS set "SHOW_TECH_DETAILS=0"
 if not defined SHOW_RAW_PROCESS_LOGS set "SHOW_RAW_PROCESS_LOGS=0"
 if not defined VIEWLEDGE_OUTPUT_ROOT set "VIEWLEDGE_OUTPUT_ROOT=%LOCALAPPDATA%\Viewledge\knowledge"
+if not defined VIEWLEDGE_STATE_ROOT set "VIEWLEDGE_STATE_ROOT=%LOCALAPPDATA%\Viewledge\state"
 set "VIEWLEDGE_VERSION_CHECK=%TEMP%\viewledge-python-version-%RANDOM%.txt"
 
 echo.

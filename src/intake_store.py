@@ -8,12 +8,14 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from .domain.models import SourceRecord
 from .knowledge_identity import (
     DuplicateDecision,
     KnowledgeIdentity,
     KnowledgeRequestDimensions,
     TaskIdentityRecord,
     build_input_knowledge_identity,
+    build_knowledge_identity,
     detect_duplicate,
     normalize_source_url,
 )
@@ -49,7 +51,13 @@ class IntakeRecord:
     source_kind: str
     source_url: str
     canonical_url: str
+    creation_fingerprint: str = ""
     title: str = ""
+    selected_text: str = ""
+    visible_text: str = ""
+    content_sha256: str = ""
+    capture_scope: str = ""
+    capture_ref: str = ""
     captured_at: str = field(default_factory=_utc_now)
     user_initiated: bool = True
     content_upload_allowed: bool = False
@@ -57,6 +65,7 @@ class IntakeRecord:
     processing_profile: str = "fast"
     output_languages: list[str] = field(default_factory=lambda: ["source"])
     knowledge_id: str | None = None
+    source_fingerprint: str = ""
     request_fingerprint: str = ""
     state: str = "queued"
     duplicate_kind: str = "none"
@@ -70,7 +79,10 @@ class IntakeRecord:
     updated_at: str = field(default_factory=_utc_now)
 
     def to_record(self) -> dict[str, Any]:
-        return asdict(self)
+        value = asdict(self)
+        value.pop("selected_text", None)
+        value.pop("visible_text", None)
+        return value
 
     def to_public(self) -> dict[str, Any]:
         return {
@@ -83,7 +95,11 @@ class IntakeRecord:
                 "canonical_url": self.canonical_url,
                 "title": self.title,
             },
-            "capture": {"captured_at": self.captured_at, "user_initiated": self.user_initiated},
+            "capture": {
+                "captured_at": self.captured_at,
+                "user_initiated": self.user_initiated,
+                "scope": self.capture_scope,
+            },
             "preferences": {
                 "analysis_profile": self.analysis_profile,
                 "processing_profile": self.processing_profile,
@@ -108,10 +124,16 @@ class IntakeRecord:
             intake_id=str(value.get("intake_id") or ""),
             client_request_id=str(value.get("client_request_id") or ""),
             idempotency_key=str(value.get("idempotency_key") or ""),
+            creation_fingerprint=str(value.get("creation_fingerprint") or ""),
             source_kind=str(value.get("source_kind") or "video"),
             source_url=str(value.get("source_url") or ""),
             canonical_url=str(value.get("canonical_url") or ""),
             title=str(value.get("title") or ""),
+            selected_text=str(value.get("selected_text") or ""),
+            visible_text=str(value.get("visible_text") or ""),
+            content_sha256=str(value.get("content_sha256") or ""),
+            capture_scope=str(value.get("capture_scope") or ""),
+            capture_ref=str(value.get("capture_ref") or ""),
             captured_at=str(value.get("captured_at") or _utc_now()),
             user_initiated=bool(value.get("user_initiated", True)),
             content_upload_allowed=bool(value.get("content_upload_allowed", False)),
@@ -119,6 +141,7 @@ class IntakeRecord:
             processing_profile=str(value.get("processing_profile") or "fast"),
             output_languages=[str(item) for item in value.get("output_languages", ["source"]) if isinstance(item, str)] or ["source"],
             knowledge_id=str(value.get("knowledge_id")) if value.get("knowledge_id") else None,
+            source_fingerprint=str(value.get("source_fingerprint") or ""),
             request_fingerprint=str(value.get("request_fingerprint") or ""),
             state=str(value.get("state") or "failed"),
             duplicate_kind=str(value.get("duplicate_kind") or "none"),
@@ -136,8 +159,8 @@ class IntakeRecord:
 class IntakeStore:
     """Durable local Bridge intake registry.
 
-    This first v1.5.0 slice records user-triggered captures and exposes their
-    inbox state. A separate worker will attach processing in a later slice.
+    Captured page text is private local state. Public responses intentionally
+    expose only source metadata, consent-safe capture metadata, and inbox state.
     """
 
     def __init__(self, path: Path) -> None:
@@ -152,17 +175,27 @@ class IntakeStore:
             idem = _text(idempotency_key, field_name="Idempotency-Key", max_length=200)
             if not idem:
                 raise ValueError("缺少 Idempotency-Key。")
+            creation_fingerprint = _payload_fingerprint(payload)
             existing = next((item for item in self._items.values() if item.idempotency_key == idem), None)
             if existing:
                 if existing.client_request_id != str(payload.get("client_request_id") or ""):
                     raise ValueError("Idempotency-Key 已用于其他请求。")
+                if existing.creation_fingerprint and existing.creation_fingerprint != creation_fingerprint:
+                    raise ValueError("Idempotency-Key 的请求内容与首次创建不一致。")
                 return existing, True
 
-            item = self._build_item(payload, idem)
+            item = self._build_item(payload, idem, creation_fingerprint)
+            item.capture_ref = f"{item.intake_id}.json" if (item.selected_text or item.visible_text) else ""
+            if item.capture_ref:
+                self._write_capture(item)
             self._items[item.intake_id] = item
             ordered = sorted(self._items.values(), key=lambda value: value.created_at, reverse=True)[:MAX_ITEMS]
+            retained_ids = {value.intake_id for value in ordered}
+            evicted = [value for value in self._items.values() if value.intake_id not in retained_ids]
             self._items = {value.intake_id: value for value in ordered}
             self._write()
+            for value in evicted:
+                self._remove_capture(value)
             return item, False
 
     def get(self, intake_id: str) -> IntakeRecord | None:
@@ -285,7 +318,12 @@ class IntakeStore:
             next_cursor = page[-1].intake_id if start + bounded_limit < len(items) else None
             return page, next_cursor
 
-    def _build_item(self, payload: dict[str, Any], idempotency_key: str) -> IntakeRecord:
+    def _build_item(
+        self,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        creation_fingerprint: str,
+    ) -> IntakeRecord:
         if str(payload.get("schema_version") or "") != SCHEMA_VERSION:
             raise ValueError("schema_version 必须是 1.0。")
         client_request_id = _text(payload.get("client_request_id"), field_name="client_request_id", max_length=200)
@@ -308,6 +346,24 @@ class IntakeStore:
         if hint and normalize_source_url(hint) != canonical_url:
             raise ValueError("canonical_url_hint 与 source.url 不一致。")
         title = _text(capture.get("title"), field_name="capture.title", max_length=500)
+        selected_text = _text(
+            capture.get("selected_text"),
+            field_name="capture.selected_text",
+            max_length=50_000,
+        )
+        visible_text = _text(
+            capture.get("visible_text"),
+            field_name="capture.visible_text",
+            max_length=200_000,
+        )
+        if selected_text:
+            # A user selection is the complete capture scope. Do not retain a
+            # second, broader page snapshot that the user did not choose to use.
+            visible_text = ""
+        if source_kind == "page" and not (selected_text or visible_text):
+            raise ValueError("网页 Intake 必须包含用户选择文本或当前页面可见正文。")
+        capture_scope = "selection" if selected_text else "visible" if visible_text else ""
+        content_sha256 = _capture_content_hash(selected_text or visible_text, capture_scope)
         captured_at = _text(capture.get("captured_at"), field_name="capture.captured_at", max_length=80) or _utc_now()
         if consent.get("user_initiated") is not True:
             raise ValueError("只接受用户主动发起的 Intake。")
@@ -322,7 +378,12 @@ class IntakeStore:
             raise ValueError("preferences.output_languages 必须是非空字符串数组。")
         languages = list(dict.fromkeys(item.strip().lower() for item in languages))
         dimensions = KnowledgeRequestDimensions(analysis_profile=analysis_profile, processing_profile=processing_profile)
-        identity = _build_identity(canonical_url, source_kind, dimensions)
+        identity = _build_identity(
+            canonical_url,
+            source_kind,
+            dimensions,
+            content_sha256=content_sha256 if source_kind == "page" else "",
+        )
         records = [
             TaskIdentityRecord(
                 task_id=existing.intake_id,
@@ -339,10 +400,15 @@ class IntakeStore:
             intake_id=f"in_{uuid.uuid4().hex}",
             client_request_id=client_request_id,
             idempotency_key=idempotency_key,
+            creation_fingerprint=creation_fingerprint,
             source_kind=source_kind,
             source_url=source_url,
             canonical_url=canonical_url,
             title=title,
+            selected_text=selected_text,
+            visible_text=visible_text,
+            content_sha256=content_sha256,
+            capture_scope=capture_scope,
             captured_at=captured_at,
             user_initiated=True,
             content_upload_allowed=bool(consent.get("content_upload_allowed", False)),
@@ -350,6 +416,7 @@ class IntakeStore:
             processing_profile=processing_profile,
             output_languages=languages,
             knowledge_id=identity.knowledge_id,
+            source_fingerprint=identity.source_fingerprint,
             request_fingerprint=identity.request_fingerprint,
             state="duplicate" if duplicate.detected else "queued",
             duplicate_kind=duplicate.kind.value,
@@ -372,6 +439,7 @@ class IntakeStore:
                 if isinstance(value, dict):
                     item = IntakeRecord.from_record(value)
                     if item.intake_id and item.state in SUPPORTED_STATES:
+                        self._read_capture(item)
                         values[item.intake_id] = item
         self._items = values
 
@@ -383,15 +451,108 @@ class IntakeStore:
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self.path)
 
+    @property
+    def _capture_root(self) -> Path:
+        return self.path.parent / "intakes"
 
-def _build_identity(canonical_url: str, source_kind: str, dimensions: KnowledgeRequestDimensions) -> KnowledgeIdentity:
+    def _write_capture(self, item: IntakeRecord) -> None:
+        if not item.capture_ref or Path(item.capture_ref).name != item.capture_ref:
+            raise ValueError("Intake capture reference is invalid.")
+        self._capture_root.mkdir(parents=True, exist_ok=True)
+        target = self._capture_root / item.capture_ref
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            "intake_id": item.intake_id,
+            "capture_scope": item.capture_scope,
+            "selected_text": item.selected_text,
+            "visible_text": item.visible_text,
+        }
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(target)
+
+    def _read_capture(self, item: IntakeRecord) -> None:
+        if not item.capture_ref or Path(item.capture_ref).name != item.capture_ref:
+            return
+        try:
+            payload = json.loads((self._capture_root / item.capture_ref).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict) or str(payload.get("intake_id") or "") != item.intake_id:
+            return
+        item.capture_scope = str(payload.get("capture_scope") or item.capture_scope)
+        item.selected_text = str(payload.get("selected_text") or "")
+        item.visible_text = str(payload.get("visible_text") or "")
+
+    def _remove_capture(self, item: IntakeRecord) -> None:
+        if not item.capture_ref or Path(item.capture_ref).name != item.capture_ref:
+            return
+        try:
+            (self._capture_root / item.capture_ref).unlink()
+        except FileNotFoundError:
+            return
+
+
+def _build_identity(
+    canonical_url: str,
+    source_kind: str,
+    dimensions: KnowledgeRequestDimensions,
+    *,
+    content_sha256: str = "",
+) -> KnowledgeIdentity:
     if source_kind == "video":
         return build_input_knowledge_identity(canonical_url, is_url=True, dimensions=dimensions)
-    digest = hashlib.sha256(f"web_page|{canonical_url}".encode("utf-8")).hexdigest()
-    knowledge_id = f"k1-web-{digest[:20]}"
-    request_payload = {"schema_version": "1.0", "knowledge_id": knowledge_id, "dimensions": dimensions.normalized()}
+    source_id = hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()[:20]
+    base = build_knowledge_identity(
+        SourceRecord(
+            source_type="web_page",
+            platform="web",
+            source_url=canonical_url,
+            canonical_url=canonical_url,
+            source_id=source_id,
+        ),
+        dimensions,
+        input_value=canonical_url,
+    )
+    request_payload = {
+        "schema_version": "1.0",
+        "knowledge_id": base.knowledge_id,
+        "dimensions": dimensions.normalized(),
+        "content_sha256": content_sha256,
+    }
     request_fingerprint = hashlib.sha256(json.dumps(request_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-    return KnowledgeIdentity("1.0", knowledge_id, digest, request_fingerprint)
+    return KnowledgeIdentity(
+        base.schema_version,
+        base.knowledge_id,
+        base.source_fingerprint,
+        request_fingerprint,
+    )
+
+
+def _capture_content_hash(content: str, scope: str) -> str:
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return ""
+    payload = json.dumps(
+        {"scope": scope, "content": normalized},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _payload_fingerprint(payload: dict[str, Any]) -> str:
+    try:
+        serialized = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Intake 请求必须是可序列化的 JSON 对象。") from exc
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _identity_status(state: str) -> str:

@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.viewledge.example/side-panel/1.0/contract.json",
+  "title": "Viewledge Side Panel contract 1.0",
+  "description": "Implementation-independent data shapes for subtitle reading and user-triggered clipping.",
+  "type": "object",
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "knowledge_id": { "type": "string", "minLength": 1 },
+    "title": { "type": "string" },
+    "source_url": { "type": "string", "format": "uri" },
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["knowledge_id", "title", "source"],
+        "properties": {
+          "knowledge_id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "source": { "$ref": "#/$defs/source" },
+          "transcript_available": { "type": "boolean" },
+          "analysis_available": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["video", "web_page"] },
+        "url": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "text", "start", "end", "contentKind"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 0 },
+          "start": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "Video media seconds; null for web-page blocks."
+          },
+          "end": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "Video media seconds; null for web-page blocks."
+          },
+          "title": { "type": "string" },
+          "text": { "type": "string" },
+          "sourceLink": { "type": "string" },
+          "contentKind": { "enum": ["video_subtitle", "web_page"] },
+          "position": { "type": "integer", "minimum": 1 }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "contentKind": { "const": "video_subtitle" },
+              "start": { "type": "number", "minimum": 0 },
+              "end": { "type": "number", "minimum": 0 }
+            }
+          },
+          {
+            "required": ["position"],
+            "properties": {
+              "contentKind": { "const": "web_page" },
+              "start": { "type": "null" },
+              "end": { "type": "null" },
+              "position": { "type": "integer", "minimum": 1 }
+            }
+          }
+        ],
+        "additionalProperties": false
+      }
+    },
+    "clip_id": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["clip", "highlight"] },
+    "client_request_id": { "type": "string" },
+    "target": { "type": "object", "additionalProperties": true },
+    "selection": { "type": "object", "additionalProperties": true },
+    "note": { "type": "string" },
+    "provenance": { "type": "object", "additionalProperties": true }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["kind", "url"],
+      "properties": {
+        "kind": { "enum": ["video", "web_page"] },
+        "url": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

@@ -21,6 +21,7 @@ REQUIRED_PACKAGE_FILES = (
     "transcript.grouped.md",
     "transcript.md",
 )
+PAGE_REQUIRED_PACKAGE_FILES = ("page_content.json", "page.md")
 
 
 @dataclass(frozen=True)
@@ -71,12 +72,20 @@ def inspect_knowledge_package(package_path: Path) -> KnowledgePackageInspection:
     manifest_data = _load_json_object(root / "manifest.json", report, required=True)
     analysis_data = _load_json_object(root / "analysis.json", report, required=True)
     timeline_data = _load_json_object(root / "timeline.json", report, required=True)
+    source_data = manifest_data.get("source") if isinstance(manifest_data.get("source"), dict) else metadata
+    is_page = str(source_data.get("source_type") or "") == "web_page" if isinstance(source_data, dict) else False
+    if is_page:
+        for name in PAGE_REQUIRED_PACKAGE_FILES:
+            if not (root / name).is_file():
+                report.add("error", "required_file_missing", f"缺少网页知识包文件：{name}", name)
 
     manifest = _validate_manifest(manifest_data, report)
     report.manifest_status = str(manifest_data.get("status") or "")
-    _validate_source(manifest_data.get("source") or metadata, report)
+    _validate_source(source_data, report)
     _validate_transcript(root, report)
-    _validate_timeline(timeline_data, report)
+    _validate_timeline(timeline_data, report, allow_empty=is_page)
+    if is_page:
+        _validate_page_content(root / "page_content.json", report)
     _validate_analysis(analysis_data, manifest_data, report)
     _validate_markdown(root, report)
     _validate_declared_outputs(root, manifest, report)
@@ -176,14 +185,37 @@ def _validate_transcript(root: Path, report: KnowledgePackageInspection) -> None
         report.add("error", "transcript_empty", "逐句字幕没有有效文本。", path.name)
 
 
-def _validate_timeline(data: dict[str, Any], report: KnowledgePackageInspection) -> None:
+def _validate_timeline(
+    data: dict[str, Any],
+    report: KnowledgePackageInspection,
+    *,
+    allow_empty: bool = False,
+) -> None:
     if not data:
         return
     items = data.get("items")
     if not isinstance(items, list):
         report.add("error", "timeline_items_invalid", "timeline.json 的 items 必须是数组。", "timeline.json")
-    elif not items:
+    elif not items and not allow_empty:
         report.add("error", "timeline_empty", "timeline.json 没有有效时间轴条目。", "timeline.json")
+
+
+def _validate_page_content(path: Path, report: KnowledgePackageInspection) -> None:
+    data = _load_json_object(path, report, required=True)
+    if not data:
+        return
+    if str(data.get("schema_version") or "") != "1.0":
+        report.add("error", "page_schema_invalid", "page_content.json schema_version 必须是 1.0。", path.name)
+    if str(data.get("capture_scope") or "") not in {"selection", "visible"}:
+        report.add("error", "page_scope_invalid", "page_content.json 缺少有效捕获范围。", path.name)
+    blocks = data.get("blocks")
+    if not isinstance(blocks, list) or not blocks:
+        report.add("error", "page_blocks_empty", "page_content.json 没有有效正文分块。", path.name)
+        return
+    for index, block in enumerate(blocks):
+        if not isinstance(block, dict) or not str(block.get("text") or "").strip():
+            report.add("error", "page_block_invalid", f"页面正文分块 {index + 1} 无效。", path.name)
+            break
 
 
 def _validate_analysis(

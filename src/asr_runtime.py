@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from .domain.models import TranscriptSegment
+from .resource_governor import cpu_thread_limit, resource_guard
 from .utils import ConfigRequiredError, UserFacingError
 
 
@@ -106,6 +107,8 @@ class ASRSettings:
     gpu_first_batch_timeout_seconds: float = DEFAULT_GPU_FIRST_BATCH_TIMEOUT_SECONDS
     transcribe_stall_timeout_seconds: float = DEFAULT_TRANSCRIBE_STALL_TIMEOUT_SECONDS
     resource_wait_timeout_seconds: float = DEFAULT_RESOURCE_WAIT_TIMEOUT_SECONDS
+    compute_profile: str = "responsive"
+    cpu_thread_limit: int = 0
 
     @classmethod
     def from_config(cls, config: object | None) -> "ASRSettings":
@@ -148,7 +151,13 @@ class ASRSettings:
             resource_wait_timeout_seconds=float(
                 getattr(config, "asr_resource_wait_timeout_seconds", DEFAULT_RESOURCE_WAIT_TIMEOUT_SECONDS)
             ),
+            compute_profile=str(getattr(config, "compute_profile", "responsive") or "responsive"),
+            cpu_thread_limit=int(getattr(config, "cpu_thread_limit", 0) or 0),
         )
+
+    @property
+    def cpu_threads(self) -> int:
+        return cpu_thread_limit(self.compute_profile, self.cpu_thread_limit)
 
 
 @dataclass(frozen=True)
@@ -537,19 +546,15 @@ class LocalASREngine:
         if not self._concurrency.acquire(timeout=settings.resource_wait_timeout_seconds):
             raise TimeoutError("等待本地转写资源超时。")
         try:
-            with _cross_process_asr_lock(
-                self.project_root,
-                timeout_seconds=settings.resource_wait_timeout_seconds,
-            ):
-                return self._transcribe_locked(
-                    audio_path,
-                    candidates=candidates,
-                    settings=settings,
-                    language=language,
-                    source=source,
-                    duration=duration,
-                    log_callback=log_callback,
-                )
+            return self._transcribe_locked(
+                audio_path,
+                candidates=candidates,
+                settings=settings,
+                language=language,
+                source=source,
+                duration=duration,
+                log_callback=log_callback,
+            )
         finally:
             self._concurrency.release()
 
@@ -571,15 +576,22 @@ class LocalASREngine:
                 if candidate.device == "cuda" and cuda_disabled_reason:
                     continue
                 try:
-                    outcome = self._run_candidate(
-                        audio_path,
-                        candidate,
-                        settings=settings,
-                        language=language,
-                        source=source,
-                        duration=duration,
-                        log_callback=log_callback,
-                    )
+                    resource = "gpu" if candidate.device == "cuda" else "cpu"
+                    with resource_guard(
+                        resource,
+                        timeout_seconds=settings.resource_wait_timeout_seconds,
+                        profile=settings.compute_profile,
+                        configured_threads=settings.cpu_thread_limit,
+                    ):
+                        outcome = self._run_candidate(
+                            audio_path,
+                            candidate,
+                            settings=settings,
+                            language=language,
+                            source=source,
+                            duration=duration,
+                            log_callback=log_callback,
+                        )
                     outcome.telemetry.fallback_messages.extend(errors)
                     return outcome
                 except Exception as exc:
@@ -635,7 +647,7 @@ class LocalASREngine:
                     f"{initial_batch_size}",
                 )
         _activity(activity_callback, "model_loading", device=candidate.device)
-        model, load_seconds, reused = self._load_model(candidate)
+        model, load_seconds, reused = self._load_model(candidate, cpu_threads=settings.cpu_threads)
         _activity(
             activity_callback,
             "model_loaded",
@@ -829,7 +841,7 @@ class LocalASREngine:
         results.join_thread()
         return str(status), str(message)
 
-    def _load_model(self, candidate: ASRCandidate) -> tuple[Any, float, bool]:
+    def _load_model(self, candidate: ASRCandidate, *, cpu_threads: int = 0) -> tuple[Any, float, bool]:
         key = (
             _model_reference(candidate.model, self.project_root),
             candidate.device,
@@ -847,13 +859,15 @@ class LocalASREngine:
                     "未安装 faster-whisper。请先运行 pip install -r requirements.txt。"
                 ) from exc
             started = time.perf_counter()
-            model = WhisperModel(
-                key[0],
-                device=candidate.device,
-                device_index=candidate.device_index,
-                compute_type=candidate.compute_type,
-                local_files_only=True,
-            )
+            model_kwargs: dict[str, Any] = {
+                "device": candidate.device,
+                "device_index": candidate.device_index,
+                "compute_type": candidate.compute_type,
+                "local_files_only": True,
+            }
+            if candidate.device == "cpu":
+                model_kwargs["cpu_threads"] = max(1, int(cpu_threads))
+            model = WhisperModel(key[0], **model_kwargs)
             elapsed = time.perf_counter() - started
             self._model = model
             self._model_key = key

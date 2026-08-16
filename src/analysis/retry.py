@@ -37,6 +37,8 @@ def reanalyze_knowledge_package(
     metadata = load_json(root / "metadata.json")
     manifest = ProcessingManifest.model_validate(load_json(root / "manifest.json"))
     source = manifest.source or SourceRecord.model_validate(metadata)
+    if source.source_type == "web_page" and not manifest.content_upload_allowed:
+        raise UserFacingError("该网页捕获未授权上传正文，不能运行云端 AI 分析。")
     segments = read_jsonl(root / "transcript.raw.jsonl")
     if not segments:
         raise UserFacingError("知识包没有可用于重新分析的逐句字幕。")
