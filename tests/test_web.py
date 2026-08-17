@@ -41,6 +41,7 @@ from src.web import (
     load_transcript_groups,
     job_to_dict,
     resolve_library_file,
+    resolve_browser_media_path,
     runtime_status_payload,
     search_local_knowledge,
     start_job,
@@ -995,6 +996,47 @@ class WebLibraryTests(unittest.TestCase):
                 )
                 with self.assertRaises(ValueError):
                     resolve_library_file("demo", "assets/highlights/script.html")
+
+    def test_library_file_allows_only_webp_tutorial_assets(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = self._write_package(root)
+            assets = package / "assets" / "tutorial"
+            assets.mkdir(parents=True)
+            image = assets / "tutorial_step_001.webp"
+            image.write_bytes(b"webp")
+            with patch("src.web.OUTPUT_ROOT", root):
+                self.assertEqual(
+                    resolve_library_file("demo", "assets/tutorial/tutorial_step_001.webp"),
+                    image,
+                )
+                with self.assertRaises(ValueError):
+                    resolve_library_file("demo", "assets/tutorial/script.html")
+
+    def test_ts_media_uses_private_cached_browser_preview(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "recording.ts"
+            source.write_bytes(b"transport-stream")
+            cache_root = root / "private-state" / "media_previews"
+
+            def fake_run(args, *, timeout=None, cwd=None):
+                Path(args[-1]).write_bytes(b"fragmented-mp4")
+                return SimpleNamespace(stdout="", stderr="")
+
+            with patch("src.web.resolve_media_path", return_value=source), patch(
+                "src.web.MEDIA_PREVIEW_ROOT", cache_root
+            ), patch("src.web.resolve_executable", return_value="ffmpeg"), patch(
+                "src.web.run_command", side_effect=fake_run
+            ) as run:
+                preview = resolve_browser_media_path("demo")
+                second = resolve_browser_media_path("demo")
+
+            self.assertEqual(preview, second)
+            self.assertEqual(preview.suffix, ".mp4")
+            self.assertEqual(preview.read_bytes(), b"fragmented-mp4")
+            run.assert_called_once()
+            self.assertNotEqual(preview.parent, source.parent)
 
     def test_library_batch_delete_validates_all_targets_before_removal(self) -> None:
         with TemporaryDirectory() as temp_dir:

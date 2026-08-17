@@ -1,12 +1,12 @@
 # Test Baseline
 
-Last verified: 2026-08-16
+Last verified: 2026-08-17
 
-This baseline applies to committed v1.4.6 identity, duplicate, API-config,
-package-claim, recovery, and task-level transcript grouping work plus the
-v1.4.7 public-boundary tranche and the uncommitted v1.5.0 local Intake and
-Bilibili knowledge-set slices on
-`feat/v1.4.7-private-public-boundary`.
+This baseline applies to the committed private source baseline `3854828` and
+the v1.5.0 release-freeze edits on `release/v1.5.0`. It consolidates v1.4.6
+identity/recovery, the v1.4.7 public boundary, and the v1.5.0 Intake,
+collections, projects, resource overview, global search, page ingestion, and
+resource-governance slices.
 
 ## Environment
 
@@ -40,6 +40,11 @@ Latest verification:
 |---|---|
 | Full unit suite (latest complete run) | PASS, 483 tests |
 | Current discovered test cases | PASS, 483 cases discovered |
+| Package and release-builder version | `1.5.0` |
+| v1.5.0 runtime smoke | PASS, `/api/runtime` reports `1.5.0`; local global search returns the shared collection index |
+| v1.5.0 private page/Bridge smoke | PASS, `scripts/smoke_v15.py` |
+| Public boundary staging | PASS, allowlist build and verify with fresh-history requirement |
+| v1.5.0 Windows base ZIP | PASS, `scripts/verify_release.py`; SHA-256 `6b3cac06edb409154da54d2baa02080957434c2e17e9805a03f74427a5b9568` |
 | v1.4.6 affected suite | PASS, 196 tests |
 | v1.4.7 boundary suite | PASS, 10 tests |
 | v1.5.0 Intake/inbox suite | PASS, 11 tests |
@@ -132,7 +137,7 @@ Full-suite command:
 .\.venv\Scripts\python.exe -m unittest discover
 ```
 
-Result: PASS, 461 tests in 13.774 seconds, with temporary external state and
+Historical result: PASS, 461 tests in 13.774 seconds, with temporary external state and
 cache roots. The cache-root fix prevents repository-permission stalls in
 portable/read-only executions.
 
@@ -288,8 +293,9 @@ environment constraint, not a Python syntax failure.
 
 ## Release artifact verification
 
-Release ZIPs belong to the v1.4.5 beta line. Rebuilding or redistributing them
-is a separate task and must be done only from the intended stable source state.
+Historical ZIPs belong to the v1.4.5 beta line. The v1.5.0 internal ZIP must be
+rebuilt from `release/v1.5.0`, pass `scripts/verify_release.py`, and remain a
+private trusted-tester artifact; verification does not authorize publication.
 
 ## Failure handling
 

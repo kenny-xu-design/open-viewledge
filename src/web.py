@@ -62,8 +62,8 @@ from .provider_config import (
     test_provider_connection,
 )
 from .providers.llm import GeminiProvider, ProviderRegistry
-from .runtime_tools import runtime_tool_statuses
-from .utils import UserFacingError, is_timeout_error
+from .runtime_tools import resolve_executable, runtime_tool_statuses
+from .utils import UserFacingError, ensure_dir, is_timeout_error, run_command
 from .video_chat import GeminiVideoChatRouter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -103,6 +103,7 @@ LIBRARY_FILES = {
     "comment_insights.md",
 }
 MEDIA_EXTENSIONS = set(FOLDER_VIDEO_EXTENSIONS) | {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus"}
+TS_MEDIA_EXTENSIONS = {".ts", ".mts", ".m2ts"}
 
 JOB_STORE = JobStore(LOCAL_STATE_ROOT / "web_jobs.json")
 JOBS: dict[str, Job] = {job.id: job for job in JOB_STORE.load_jobs()}
@@ -129,6 +130,8 @@ CAPABILITY_CACHE: dict[str, Any] = {}
 CAPABILITY_LOCK = threading.RLock()
 SEARCH_DOCUMENT_CACHE: dict[str, dict[str, Any]] = {}
 SEARCH_DOCUMENT_CACHE_LOCK = threading.RLock()
+MEDIA_PREVIEW_ROOT = LOCAL_STATE_ROOT / "media_previews"
+MEDIA_PREVIEW_LOCK = threading.RLock()
 SEARCH_FILE_LIMIT = 2_000_000
 PRODUCT_SENSITIVE_KEYS = {
     "analysis_model",
@@ -2347,6 +2350,13 @@ def resolve_library_file(knowledge_id: str, relative_name: str) -> Path:
         and Path(parts[2]).suffix.lower() == ".webp"
     ):
         pass
+    elif (
+        len(parts) == 3
+        and parts[0] == "assets"
+        and parts[1] == "tutorial"
+        and Path(parts[2]).suffix.lower() == ".webp"
+    ):
+        pass
     elif len(parts) != 1:
         raise ValueError("不允许访问该文件。")
     candidate = (directory / Path(*parts)).resolve()
@@ -2409,6 +2419,65 @@ def resolve_media_path(knowledge_id: str) -> Path:
     if not raw_path or not path.is_file() or path.suffix.lower() not in MEDIA_EXTENSIONS:
         raise FileNotFoundError("media")
     return path
+
+
+def resolve_browser_media_path(knowledge_id: str) -> Path:
+    """Return a browser-compatible media path without touching the source file.
+
+    Chromium does not provide a native HTML5 MPEG-TS demuxer. Local ``.ts``
+    recordings are therefore remuxed to an MP4 preview in the private Web UI
+    state directory on first access. The original recording and knowledge
+    package remain read-only.
+    """
+    source_path = resolve_media_path(knowledge_id)
+    if source_path.suffix.lower() not in TS_MEDIA_EXTENSIONS:
+        return source_path
+
+    stat_result = source_path.stat()
+    fingerprint = hashlib.sha256(
+        f"{source_path.resolve()}:{stat_result.st_size}:{stat_result.st_mtime_ns}".encode("utf-8")
+    ).hexdigest()
+    preview_path = MEDIA_PREVIEW_ROOT / f"{fingerprint}.mp4"
+    if preview_path.is_file() and preview_path.stat().st_size > 0:
+        return preview_path
+
+    with MEDIA_PREVIEW_LOCK:
+        if preview_path.is_file() and preview_path.stat().st_size > 0:
+            return preview_path
+        ensure_dir(MEDIA_PREVIEW_ROOT)
+        temporary_path = preview_path.with_suffix(".tmp.mp4")
+        try:
+            ffmpeg = resolve_executable("ffmpeg", getattr(WEB_CONFIG, "ffmpeg_path", ""))
+            run_command(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(source_path),
+                    "-map",
+                    "0:v:0?",
+                    "-map",
+                    "0:a:0?",
+                    "-c",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                    str(temporary_path),
+                ],
+                timeout=float(getattr(WEB_CONFIG, "ffmpeg_timeout_seconds", 600)),
+            )
+            if not temporary_path.is_file() or temporary_path.stat().st_size <= 0:
+                raise UserFacingError("TS 视频预览转换未生成有效文件。")
+            temporary_path.replace(preview_path)
+        finally:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return preview_path
 
 
 def _bridge_request_id() -> str:
@@ -3463,13 +3532,19 @@ class VideoSummaryHandler(BaseHTTPRequestHandler):
                 self._send_json({"note": NoteStore(resolve_library_dir).load(knowledge_id)})
                 return
             if action == "media" and len(parts) == 2:
-                self._send_path(resolve_media_path(knowledge_id), allow_range=True)
+                self._send_path(resolve_browser_media_path(knowledge_id), allow_range=True)
                 return
             if action == "file" and len(parts) >= 3:
                 self._send_path(resolve_library_file(knowledge_id, "/".join(parts[2:])))
                 return
         except ValueError as exc:
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        except (UserFacingError, TimeoutError) as exc:
+            self._send_json(
+                {"error": str(exc), "code": "media_preview_unavailable"},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
             return
         except FileNotFoundError:
             self._send_json({"error": "知识包或文件不存在。"}, HTTPStatus.NOT_FOUND)

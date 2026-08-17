@@ -1,6 +1,6 @@
 # Viewledge Project State
 
-Last verified: 2026-08-16
+Last verified: 2026-08-17
 
 This is the canonical current-state document. Git state, current code, and
 reproducible commands take precedence over older notes.
@@ -8,16 +8,18 @@ reproducible commands take precedence over older notes.
 ## Repository baseline
 
 - Repository role: private Viewledge core.
-- Current branch: `feat/v1.4.7-private-public-boundary`.
-- Current HEAD: `bfa91a7 new`.
-- The branch tracks `origin/feat/v1.4.7-private-public-boundary`; the current
-  v1.5.0 slice is intentionally uncommitted for user review.
-- Package version: `1.4.5`, defined by `src/__init__.py`.
+- Current release branch: `release/v1.5.0`.
+- Source baseline: `3854828 chore: freeze v1.5.0-beta.1 private baseline`.
+- Package version: `1.5.0`, defined by `src/__init__.py` and enforced by the
+  release builder.
 - No release tag was created during this audit.
-- The working tree is intentionally uncommitted. No staging, commit, push,
-  merge, rebase, or tag action was performed.
+- v1.4.6 identity/recovery and v1.4.7 repository-boundary work is committed and
+  consolidated into this v1.5.0 baseline; neither remains a separate release
+  target.
+- The current release-freeze edits are not committed, pushed, merged, rebased,
+  or tagged.
 
-## v1.4.5 implemented baseline
+## Historical v1.4.5 implemented baseline
 
 The verified v1.4.5 candidate provides:
 
@@ -39,9 +41,9 @@ The current base ZIP contains runnable Python source and is therefore an
 internal or trusted-user beta artifact only. It is not eligible for a public
 release.
 
-## v1.4.6 identity, duplicate, and claim baseline
+## v1.4.6 identity, duplicate, and claim baseline absorbed into v1.5.0
 
-The current v1.4.6 working tree adds:
+The committed compatibility baseline provides:
 
 - a versioned opaque `knowledge_id` from normalized source identity;
 - a separate `request_fingerprint` for processing dimensions;
@@ -75,10 +77,9 @@ The current v1.4.6 working tree adds:
 Historical package directories remain `<title>_<source-id>/`. Stable
 `knowledge_id` is the manifest/API identifier, not the physical directory name.
 
-## v1.4.7 boundary milestone
+## v1.4.7 boundary milestone absorbed into v1.5.0
 
-The branch is based exactly on the committed v1.4.6 baseline. The initial
-boundary tranche adds:
+The committed boundary tranche provides:
 
 - `public_boundary/allowlist.json` with explicit source-to-destination entries;
 - an implementation-independent Bridge API 1.0 Schema fixture and public note;
@@ -149,7 +150,7 @@ sidebar and hand only that item to the existing task pipeline. Playlist/P-part
 inspection is capped at 200 items and keeps the extractor behind the private
 core boundary.
 
-### v1.5.0-beta.1 acceptance evidence
+### v1.5.0 release-candidate acceptance evidence
 
 - The real Bilibili series URL used for acceptance returns `bilibili_series`,
   97 ordered items, and `p=1`/`p=2` source URLs without media download.
@@ -159,11 +160,10 @@ core boundary.
 - Automated Web tests verify that replaying an item action with the same
   `Idempotency-Key` starts no second task, a different key is rejected while
   processing, and a failed item can be retried with a new key.
-- The local Web process was restarted/verified on 2026-08-14 at
-  `http://127.0.0.1:5188/`; `/api/runtime` returned version `1.4.5` with an
-  available data directory. The remaining manual gate is browser acceptance of
-  the duration/date column plus collapse/expand behavior and the real Chrome
-  unpacked-extension smoke.
+- The 2026-08-14 live check used the historical `1.4.5` package identity. The
+  release branch now reports `1.5.0`; a fresh-service runtime check and the
+  duration/date plus collapse/expand browser acceptance belong to the v1.5.0
+  freeze gate. Real Chrome unpacked-extension acceptance belongs to v1.5.1.
 - Browser acceptance also found and fixed the folder-path validation branch
   where declining immediate knowledge-set creation left the inline status stuck
   on "checking". It now reports successful validation while keeping the
@@ -189,13 +189,15 @@ an untracked file, and is absent from the audited release ZIP.
 
 ## Release artifacts
 
-The ignored `release/` directory currently contains:
+The ignored `release/` directory currently contains the historical v1.4.5
+artifacts and the rebuilt v1.5.0 base artifact:
 
+- `Viewledge-v1.5.0-windows.zip` and its SHA-256 sidecar;
 - `Viewledge-v1.4.5-windows.zip` and its SHA-256 sidecar;
 - `Viewledge-local-asr-small-model.zip` and its SHA-256 sidecar;
 - the older `Viewledge-v1.4.3-source.zip`.
 
-The v1.4.5 base ZIP and model extension:
+The v1.5.0 base ZIP:
 
 - pass their recorded SHA-256 checks;
 - pass `scripts/verify_release.py`;
@@ -203,35 +205,33 @@ The v1.4.5 base ZIP and model extension:
 - contain no `.env`, `.git`, or `start_dev.bat` entries;
 - execute the bundled FFmpeg and FFprobe version checks successfully.
 
-An earlier normalized comparison found 112 packaged files identical to the
-working tree at that time and one mismatch: `README.md` had changed after the
-ZIP was built. The current ZIP predates the committed v1.4.6 changes and the
-current v1.4.7 boundary tranche, so it is not a v1.4.6 or v1.4.7 artifact.
-Tests are not shipped in the base ZIP. A frozen beta artifact must therefore be
-rebuilt from the user-approved stable commit and verified again.
+The v1.5.0 base ZIP was rebuilt from `release/v1.5.0` after the version and
+documentation alignment. Its SHA-256 is
+`6b3cac06edb409154da54d2baa02080957434c2e17e9805a03f74427a5b9568`.
+Tests are not shipped in the base ZIP. The existing v1.4.5 ZIP remains a
+historical internal artifact and is not a v1.5.0 release.
 
 ## Test baseline
 
 The current project interpreter is Python 3.12.13. The latest complete
-working-tree run reports:
+release-freeze run reports:
 
 ```text
-Ran 460 tests
+Ran 483 tests
 OK
 ```
 
-The current working tree discovers 461 test cases. The complete run used
-temporary writable `VIEWLEDGE_STATE_ROOT`, `VIEWLEDGE_CACHE_ROOT`, and
-`VIEWLEDGE_OUTPUT_ROOT` directories and completed in 7.476 seconds. This is
-the authoritative baseline for the current dirty working tree; it supersedes
-the older 446/453-count historical note.
+The current discovery run finds 483 test cases. It used temporary writable
+`VIEWLEDGE_STATE_ROOT`, `VIEWLEDGE_CACHE_ROOT`, and `VIEWLEDGE_OUTPUT_ROOT`
+directories and completed successfully in 13.986 seconds. This is the
+authoritative v1.5.0 release-freeze baseline.
 
 See `docs/TEST_BASELINE.md` for the current command matrix.
 
 ## Documentation truth
 
-- `README.md` correctly identifies v1.4.5 as a private internal portable beta
-  and is broadly aligned with the implementation.
+- `README.md` identifies v1.5.0 as the private internal portable beta and is
+  aligned with `src/__init__.py`, the CLI/Web runtime, and the release builder.
 - The former `docs/CURRENT_STATE.md` described `main`, v1.4.3, and 312 tests.
   It was obsolete and now redirects here.
 - The former `docs/ROADMAP.md` used the older v1.2-v1.5 phase model. It was
@@ -245,23 +245,16 @@ See `docs/TEST_BASELINE.md` for the current command matrix.
 
 ## Freeze assessment
 
-v1.4.5 has a technically healthy beta candidate based on the latest complete
-461-test baseline: release verification passes, product-mode redaction is
-covered, and the portable artifacts exist.
+v1.5.0 is technically ready for the final internal freeze gate: the source
+baseline is committed, the visible version is aligned, 483 tests pass, the
+local Bridge/page smoke passes, the allowlisted public staging verifies, and
+the rebuilt base ZIP passes hash, file, secret, and FFmpeg checks.
 
-It is not yet a frozen `v1.4.5-beta.1` baseline because:
-
-- the working tree is dirty and the candidate fixes are not committed;
-- the current ZIP does not contain the latest README;
-- no user-approved stable commit or tag exists for the audited state;
-- a rebuilt artifact and final clean-Windows/manual product smoke check are
-  still required;
-- the direct CLI help succeeded but Chinese text rendered as mojibake in this
-  audit shell, so clean-Windows user-visible text still needs confirmation;
-- public licensing and no-source packaging are intentionally unresolved and do
-  not apply to this internal source beta.
-
-The freeze decision is therefore: **conditional candidate, not yet frozen**.
+The remaining freeze conditions are user-facing manual checks: clean-Windows
+launch, new-user API configuration, real Bilibili series and local-folder
+acceptance, page Intake/search/restart behavior, and confirmation that the
+internal ZIP is distributed only to trusted testers. No public release or tag
+is implied by these checks.
 
 ## Scope boundary
 
@@ -348,11 +341,11 @@ page capture.
 
 The v1.4.6 identity, duplicate, API-config, package-claim, explicit Web
 duplicate-action API/UI, task-level transcript grouping, and initial
-stage-aware repair units are in the working tree. The final audit has now
+stage-aware repair units are committed in the v1.5.0 baseline. The final audit has now
 verified CLI recovery against an incomplete package, Web active-duplicate
 decision handling, and the 15/30/60/120-second grouping selector. No browser
-extension, public repository, code split, cloud account system, or paid feature
-was created. User review and a stable commit are still pending.
+extension repository, public repository, history migration, cloud account
+system, or paid feature was created.
 
 Latest v1.5.1 boundary evidence: the allowlisted `public_boundary/client/`
 directory passes clean staging and verification. Its MV3 Manifest points to
@@ -401,7 +394,7 @@ parameters removed, so repeated seeks do not break subtitle lookup.
 The page-Intake action also checks the matched source kind at call time, not only
 at render time, preventing a video subtitle from becoming a page capture after a
 future UI change.
-The full discovery baseline is now green at 461 tests when the launcher/runtime
+The full discovery baseline is now green at 483 tests when the launcher/runtime
 uses external writable state, cache, and output roots; the previous
 repository-cache stall is no longer a product blocker.
 The repository now also includes `scripts/smoke_v15.py`, which runs the page

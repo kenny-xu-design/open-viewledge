@@ -1,6 +1,6 @@
 # Viewledge Master Roadmap
 
-Last updated: 2026-08-14
+Last updated: 2026-08-17
 
 This is the canonical forward roadmap. Version scopes are ordered dependencies,
 not promises of public release dates.
@@ -38,37 +38,34 @@ create an extra release number or justify starting v1.6 early.
 
 | Increment | Version | Current disposition |
 | --- | --- | --- |
-| Stable `knowledge_id`, duplicate decisions, package claims, interrupted-task recovery, analysis-only rerun | v1.4.6 | Implemented in the working tree; stable-commit audit remains |
-| 30-second subtitle grouping default with 15/30/60/120-second choices; saved API-config test reuse | v1.4.6 | Implemented and covered by focused tests |
-| Private/public repository boundary, allowlist staging, translucent overlay sidebar, DeepSeek V4 Flash console-label compatibility, malformed/truncated JSON retry | v1.4.7 | Boundary milestone implemented; review and freeze remain |
-| Bilibili P-part/series metadata inspection, ordered knowledge-set creation, item-scoped analysis, duplicate/failure reconciliation | v1.5.0 | First private slice implemented; acceptance audit remains |
-| Validated analysis settings persisted on Bilibili and local folder collections | v1.5.0 | Implemented; legacy state defaults remain compatible |
-| Knowledge-set collapse/expand, completed-item duration and analysis-date column, set-to-library record synchronization | v1.5.0 | UX increment implemented; requires a restarted service for the new metadata fields |
-| Collection progress polling and automatic library refresh after item completion | v1.5.0 | Implemented for Bilibili and local folder collections |
-| Browser capture client, page ingestion adapter, and public Bridge handoff | v1.5.0 | Local page adapter, Inbox UI, and loopback Bridge are implemented; public clipper remains future |
+| Stable `knowledge_id`, duplicate decisions, package claims, interrupted-task recovery, analysis-only rerun | v1.4.6 → v1.5.0 | Implemented, committed, and absorbed into the v1.5.0 baseline |
+| 30-second subtitle grouping default with 15/30/60/120-second choices; saved API-config test reuse | v1.4.6 → v1.5.0 | Implemented and covered by regression tests |
+| Private/public repository boundary, allowlist staging, translucent overlay sidebar, DeepSeek V4 Flash compatibility, malformed/truncated JSON retry | v1.4.7 → v1.5.0 | Implemented and absorbed into the v1.5.0 baseline; no public history was created |
+| Bilibili P-part/series metadata inspection, ordered knowledge-set creation, item-scoped analysis, duplicate/failure reconciliation | v1.5.0 | Implemented; formal release freeze and clean-Windows acceptance remain |
+| Local page Intake, three-level folder collections, projects, resource overview, global search, and resource governance | v1.5.0 | Implemented and committed at source baseline `3854828` |
+| Subtitle Side Panel, clipping, highlighting, focus reading, and public Bridge client | v1.5.1 | Private prototype implemented; real Chrome acceptance remains |
 
 ### Version progression gates
 
-1. **v1.4.7 boundary freeze** — review the allowlist and sensitive-data scan,
-   keep the repository private, and freeze only from a user-approved stable
-   commit.
-2. **v1.5.0-beta.1 knowledge-set acceptance** — use a real multi-P Bilibili
-   URL; verify metadata-only set creation, ordered items, one-item analysis,
-   duplicate protection, failure/retry reconciliation, collapse/expand UX,
-   and the appearance of completed items in the knowledge-record list.
-3. **v1.5.0 Intake completion** — add browser capture and page ingestion only
-   after the local knowledge-set contract is accepted; keep the public client
-   free of Provider, prompt, subprocess, and filesystem details.
-4. **v1.5.1 clipping** — add subtitle side-panel reading and web clipping with
-   provenance, without changing the v1.5.0 identity or intake contracts.
-5. **v1.5.2+ platform capabilities** — implement accounts/Usage Ledger,
-   bilingual packages, multi-source research, Creator Intelligence, and paid
-   beta in the order below; each remains gated by privacy, quota, and recovery
-   review.
+1. **v1.5.0 formal freeze** — align the visible version, documentation, test
+   baseline, and Windows artifact; pass real Bilibili-series, local-folder,
+   page-Intake, global-search, API-configuration, restart, and clean-Windows
+   acceptance without changing knowledge identity or package Schemas.
+2. **v1.5.1 Side Panel acceptance** — validate the allowlisted MV3 client in
+   real Chrome, including exact-Origin CORS, timestamp navigation, focus
+   reading, clip/highlight replay, unsupported pages, and service restarts.
+3. **v1.5.2 private cloud foundation** — create accounts, sessions, plans,
+   entitlements, quotas, and an idempotent append-only Usage Ledger in the
+   separate private `viewledge-cloud` repository.
+4. **v1.5.3+ knowledge and research value** — add bilingual packages,
+   multi-source research, Creator Intelligence, and paid beta in dependency
+   order, with all billable work authorized through the ledger.
 
 ## v1.4.5 — Portable internal beta freeze
 
-Status: candidate implemented; freeze audit pending user-approved stable commit.
+Status: historical internal portable baseline. Its stable processing and
+portable-runtime behavior is preserved in v1.5.0; it is no longer an active
+release target.
 
 Scope:
 
@@ -78,23 +75,20 @@ Scope:
 - backend product-detail redaction;
 - release scanning and verification.
 
-Exit criteria:
+Historical closure:
 
-- all candidate changes are reviewed and committed by the user;
-- a fresh `v1.4.5-beta.1` artifact is built from that exact commit;
-- automated verification and clean-Windows product smoke checks pass;
-- internal source ZIPs are not uploaded to a public release.
+- the portable launcher, FFmpeg runtime, product-mode redaction, and internal
+  source ZIP behavior are preserved as compatibility requirements in v1.5.0;
+- the historical v1.4.5 ZIP remains internal-only and is not rebuilt as a new
+  release line;
+- no v1.4.5 public repository, public artifact, or history transfer exists.
 
 ## v1.4.6 — Knowledge identity, duplicate tasks, and recovery
 
-Status: implementation complete and audit-verified in the uncommitted working
-tree. Identity/request-fingerprint, duplicate decisions, runtime persistence,
-Web task-entry integration, API-config session-test reuse, package-level
-claim/stale-claim recovery, task-level transcript grouping, and initial
-stage-aware package repair are implemented and tested. The final audit verified
-CLI recovery against an incomplete package, Web active-duplicate decision
-handling, and the 15/30/60/120-second grouping selector. User review and a
-stable commit remain pending.
+Status: implementation complete, committed, and consolidated into the v1.5.0
+release baseline. Identity/request-fingerprint, duplicate decisions, runtime
+persistence, API-config reuse, package claims, recovery, transcript grouping,
+and stage-aware repair remain compatibility requirements.
 
 Scope:
 
@@ -116,7 +110,9 @@ Exit criteria:
 
 ## v1.4.7 — Private/public architecture boundary
 
-Status: implementation in progress on `feat/v1.4.7-private-public-boundary`.
+Status: boundary milestone implemented and consolidated into v1.5.0. The
+private repository remains private; no public repository or history migration
+has been created.
 
 The first boundary milestone now has a reviewed allowlist, independent public
 Bridge Schema fixture, deterministic staging manifest, and secondary sensitive
@@ -143,9 +139,9 @@ Exit criteria:
 
 ## v1.5.0 — Browser Intake and knowledge inbox
 
-Status: in progress; local Bridge and Bilibili knowledge-set slices are
-implemented in the private core. Automated and live read-only acceptance checks
-pass; a fresh-service manual smoke gate remains.
+Status: formal freeze in progress on `release/v1.5.0`, based on committed source
+baseline `3854828`. Automated validation passes 483 tests; release-artifact and
+remaining clean-Windows/manual acceptance gates are tracked separately.
 
 Repository ownership:
 
@@ -189,6 +185,13 @@ Implemented first slice:
   compact metadata column;
 - completed set items resolve to the same knowledge record and package used by
   the main library, preventing a set-only phantom entry.
+- three-level local folder collections with explicit path validation, movable
+  child sets, fixed video-item order, and item/subtree analysis;
+- user-managed projects that group records without moving or rewriting their
+  knowledge packages;
+- a resource overview, output-collection navigation, responsive compute
+  governance, and unified local global search with opt-in transcript/page-body
+  matching.
 
 The local page ingestion adapter, Inbox UI, and loopback Bridge handoff are now
 implemented. The remaining public-client work is the future thin browser
@@ -199,13 +202,22 @@ Exit criteria:
 - a user can capture a supported page/video into the inbox without exposing
   private implementation details;
 - repeated capture is safely deduplicated through v1.4.6 identity;
-- the extension contains no production cloud key or private algorithm.
+- the extension contains no production cloud key or private algorithm;
+- the visible package and release-builder version is `1.5.0`;
+- the internal Windows ZIP is rebuilt from the release branch and passes the
+  release verifier and sensitive-data scan;
+- real series, folder, Intake, search, API-configuration, restart, and
+  clean-Windows acceptance are recorded against the exact release candidate.
 
 ## v1.5.1 — Subtitle side panel and web clipping
 
 Status: Bridge contract and private Web transcript clipping slice implemented;
 boundary-only MV3 client prototype implemented; public repository remains
 planned and unpublished.
+
+Development resumes from the final v1.5.0 freeze commit. v1.5.0 functionality
+such as projects, resource overview, global search, and folder collections is
+not re-scoped or reimplemented in this version.
 
 Current acceptance state: the allowlisted MV3 directory passes staging and
 verification, the Manifest references existing module/service-worker and Side
@@ -408,10 +420,7 @@ repository boundary.
 ## Dependency chain
 
 ```text
-v1.4.5 freeze
--> v1.4.6 identity and recovery
--> v1.4.7 repository and contract boundary
--> v1.5.0 Intake/inbox
+v1.5.0 local knowledge-workspace freeze
 -> v1.5.1 side panel/clipping
 -> v1.5.2 accounts/ledger
 -> v1.5.3 bilingual package

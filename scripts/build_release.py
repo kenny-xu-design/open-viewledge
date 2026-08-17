@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.4.5"
+VERSION = "1.5.0"
 PRODUCT_DIR = f"Viewledge-v{VERSION}"
 BASE_ZIP = f"Viewledge-v{VERSION}-windows.zip"
 MODEL_ZIP = "Viewledge-local-asr-small-model.zip"

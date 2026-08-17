@@ -654,6 +654,9 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("this.element.src = url.toString()", self.js)
         self.assertIn("function openOriginal()", self.js)
 
+    def test_local_media_playback_failure_is_explained(self) -> None:
+        self.assertIn("本地视频无法播放，请检查视频文件或 FFmpeg 配置", self.js)
+
     def test_knowledge_inbox_is_integrated_into_the_resource_overview(self) -> None:
         for element_id in (
             "resourceOverviewPane",

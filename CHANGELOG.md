@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.5.0] - 2026-08-17
+
+### Added
+
+- Added local Browser Intake and knowledge inbox flows with idempotent capture,
+  duplicate handling, explicit start/retry/cancel actions, and sanitized Bridge
+  responses.
+- Added metadata-first Bilibili series knowledge sets and three-level local
+  folder collections with item-scoped or bounded batch analysis.
+- Added projects, a resource overview, unified local global search, page
+  ingestion, and responsive compute-resource governance.
+- Added the private Bridge foundation and allowlisted candidate client assets
+  needed for the subsequent v1.5.1 Side Panel acceptance phase.
+
+### Changed
+
+- Consolidated the completed v1.4.6 identity/recovery and v1.4.7 repository
+  boundary work into the v1.5.0 local knowledge-workspace baseline.
+- Portable runtime state, cache, and knowledge outputs use user-writable roots
+  without changing the stable ASR Worker or GPU-to-CPU fallback contract.
+
+### Verification
+
+- The release-candidate source baseline passes 483 unit tests, Python compile,
+  CLI/Web help, JavaScript syntax, and Git whitespace checks.
+- A formal internal Windows ZIP is rebuilt and verified from the v1.5.0 release
+  branch; clean-Windows and real-browser acceptance remain explicit manual gates.
+
 ## [1.4.3] - 2026-07-28
 
 - Added local faster-whisper `fast`, `balanced`, and `quality` routing with

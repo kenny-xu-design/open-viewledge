@@ -415,3 +415,20 @@ toggle, is debounced and cached by package file modification signatures, and
 never calls a Provider. Search responses contain bounded sanitized snippets and
 never expose complete content, credentials, prompts, or absolute paths. `Ctrl+K`
 continues to focus the local sidebar filter for compatibility.
+
+## D046: v1.5.0 Is The Consolidated Local Knowledge-Workspace Baseline
+
+The committed v1.4.6 identity/recovery and v1.4.7 repository-boundary work is
+consolidated into v1.5.0 rather than released again as separate versions.
+v1.5.0 owns Browser Intake, the knowledge inbox, page ingestion, Bilibili and
+local-folder collections, projects, resource overview, global search, and
+responsive compute governance. The release freeze may align version metadata,
+documentation, tests, and private artifacts but must not change stable identity,
+duplicate, recovery, knowledge-package, ASR Worker, or GPU-to-CPU contracts.
+
+v1.5.1 starts from the final v1.5.0 freeze and contains only browser Side Panel
+and clipping acceptance work. v1.5.2 then starts the separate private cloud
+account, quota, and append-only Usage Ledger foundation before bilingual,
+research, Creator Intelligence, or paid-beta capabilities consume billable
+resources. Public repositories still require new histories and explicit
+allowlist generation; this decision does not authorize publication.

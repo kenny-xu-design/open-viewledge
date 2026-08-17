@@ -579,6 +579,16 @@ duplicate, and idempotency contracts.
 
 ## Contract change process
 
+The v1.5.0 release freeze does not change the knowledge identity, duplicate,
+recovery, knowledge-package, or Bridge `1.0` wire contracts. v1.5.1 continues
+to use Bridge `1.0`; additive optional fields require compatibility tests, and
+an incompatible change requires a separately versioned public Schema.
+
+Account, entitlement, quota, task-authorization, and Usage Ledger contracts
+start in the separate private `viewledge-cloud` v1.5.2 scope. The desktop and
+browser clients may receive only user credentials or opaque short-lived action
+authorizations, never formal Provider or infrastructure keys.
+
 1. Update public Schema fixtures first.
 2. Add compatibility tests independent of private classes.
 3. Implement the contract in private core/cloud.

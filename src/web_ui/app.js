@@ -2001,6 +2001,13 @@ function renderMedia(knowledge) {
     video.playsInline = true;
     video.addEventListener("timeupdate", throttle(handleTimeUpdate, 300));
     video.addEventListener("loadedmetadata", () => { updateTimeDisplay(); applyLocalVideoDisplay(); });
+    video.addEventListener("error", () => {
+      mediaController?.destroy();
+      surface.className = "media-surface empty-surface";
+      surface.innerHTML = '<div class="media-empty"><svg><use href="#i-video"/></svg><p>本地视频无法播放，请检查视频文件或 FFmpeg 配置</p></div>';
+      mediaController = new MediaController();
+      syncMediaControls();
+    });
     video.addEventListener("play", () => setPlayIcon(true));
     video.addEventListener("pause", () => setPlayIcon(false));
     surface.appendChild(video);
